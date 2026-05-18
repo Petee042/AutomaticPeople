@@ -1882,15 +1882,16 @@ function chooseAccessContextForUser(memberships, requestedClientAccountId) {
 
   const requested = Number(requestedClientAccountId);
   if (Number.isInteger(requested) && requested > 0) {
-    const exact = list.find((entry) => Number(entry.client_account_id) === requested);
+    const exact = list
+      .filter((entry) => Number(entry.client_account_id) === requested)
+      .sort((a, b) => (ACCESS_ROLE_PRIORITY[b.role] || 0) - (ACCESS_ROLE_PRIORITY[a.role] || 0))[0];
     if (exact) {
       return exact;
     }
   }
 
-  const rolePriority = { Client: 1, Manager: 2, Staff: 3, Guest: 4 };
   const sorted = list.slice().sort((a, b) => {
-    const roleDelta = (rolePriority[a.role] || 99) - (rolePriority[b.role] || 99);
+    const roleDelta = (ACCESS_ROLE_PRIORITY[b.role] || 0) - (ACCESS_ROLE_PRIORITY[a.role] || 0);
     if (roleDelta !== 0) return roleDelta;
     return Number(a.client_account_id) - Number(b.client_account_id);
   });
@@ -5030,6 +5031,79 @@ function requireAdminAuth(req, res, next) {
   res.status(401).json({ error: 'Admin unauthorised' });
 }
 
+const ACCESS_ROLE_PRIORITY = {
+  Guest: 1,
+  Staff: 2,
+  Manager: 3,
+  Client: 4
+};
+
+function hasRequiredRole(currentRole, minimumRole) {
+  const current = ACCESS_ROLE_PRIORITY[String(currentRole || '').trim()] || 0;
+  const required = ACCESS_ROLE_PRIORITY[String(minimumRole || '').trim()] || 0;
+  return current >= required;
+}
+
+async function getClientOwnerUserId(clientAccountId) {
+  const id = Number(clientAccountId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+
+  if (!usePostgres) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT user_id
+      FROM client_memberships
+      WHERE client_account_id = $1
+        AND role = 'Client'
+        AND status = 'active'
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  const ownerUserId = result.rows[0] ? Number(result.rows[0].user_id) : null;
+  return Number.isInteger(ownerUserId) && ownerUserId > 0 ? ownerUserId : null;
+}
+
+function requireScopedRole(minimumRole) {
+  return async (req, res, next) => {
+    if (!(req.session && req.session.userId)) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    try {
+      const context = await getOrCreateAccessContextForUser(req.session.userId, req.session.activeClientAccountId);
+      const active = context.active || null;
+      if (!active) {
+        return res.status(403).json({ error: 'No active client access context found.' });
+      }
+
+      if (!hasRequiredRole(active.role, minimumRole)) {
+        return res.status(403).json({ error: 'Insufficient role for this action.' });
+      }
+
+      req.session.activeClientAccountId = Number(active.client_account_id);
+      const ownerUserId = await getClientOwnerUserId(active.client_account_id);
+      req.accessContext = {
+        activeClientAccountId: Number(active.client_account_id),
+        activeRole: String(active.role || ''),
+        effectiveOwnerUserId: ownerUserId || Number(req.session.userId)
+      };
+
+      return next();
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to resolve access context.' });
+    }
+  };
+}
+
 function normaliseAdminQueryValue(value, type) {
   if (value === null || value === undefined) {
     return null;
@@ -5671,9 +5745,9 @@ app.post('/api/stripe/webhook', async (req, res) => {
 });
 
 // GET /api/cleaners — all cleaners for current user
-app.get('/api/cleaners', requireAuth, async (req, res) => {
+app.get('/api/cleaners', requireScopedRole('Manager'), async (req, res) => {
   try {
-    const cleaners = await getCleanersForUser(req.session.userId);
+    const cleaners = await getCleanersForUser(req.accessContext.effectiveOwnerUserId);
     return res.json({ cleaners });
   } catch (err) {
     console.error(err);
@@ -5682,9 +5756,9 @@ app.get('/api/cleaners', requireAuth, async (req, res) => {
 });
 
 // POST /api/cleaners — create cleaner for current user
-app.post('/api/cleaners', requireAuth, async (req, res) => {
+app.post('/api/cleaners', requireScopedRole('Manager'), async (req, res) => {
   try {
-    const { cleaner, error } = await createCleanerForUser(req.session.userId, {
+    const { cleaner, error } = await createCleanerForUser(req.accessContext.effectiveOwnerUserId, {
       firstName: req.body.firstName,
       lastName: req.body.lastName,
       email: req.body.email,
@@ -5702,14 +5776,14 @@ app.post('/api/cleaners', requireAuth, async (req, res) => {
 });
 
 // PUT /api/cleaners/:cleanerId — update cleaner for current user
-app.put('/api/cleaners/:cleanerId', requireAuth, async (req, res) => {
+app.put('/api/cleaners/:cleanerId', requireScopedRole('Manager'), async (req, res) => {
   const cleanerId = Number(req.params.cleanerId);
   if (!Number.isInteger(cleanerId) || cleanerId <= 0) {
     return res.status(400).json({ error: 'Invalid cleaner id.' });
   }
 
   try {
-    const { cleaner, error } = await updateCleanerForUser(cleanerId, req.session.userId, {
+    const { cleaner, error } = await updateCleanerForUser(cleanerId, req.accessContext.effectiveOwnerUserId, {
       firstName: req.body.firstName,
       lastName: req.body.lastName,
       email: req.body.email,
@@ -5730,11 +5804,11 @@ app.put('/api/cleaners/:cleanerId', requireAuth, async (req, res) => {
 });
 
 // POST /api/booked-in-changes/lookup — fetch booked-in changes for selected listings
-app.post('/api/booked-in-changes/lookup', requireAuth, async (req, res) => {
+app.post('/api/booked-in-changes/lookup', requireScopedRole('Staff'), async (req, res) => {
   const listingIds = Array.isArray(req.body.listingIds) ? req.body.listingIds : [];
 
   try {
-    const changes = await getBookedInChangesForUserByListings(req.session.userId, listingIds);
+    const changes = await getBookedInChangesForUserByListings(req.accessContext.effectiveOwnerUserId, listingIds);
     return res.json({ changes });
   } catch (err) {
     console.error(err);
@@ -5743,11 +5817,11 @@ app.post('/api/booked-in-changes/lookup', requireAuth, async (req, res) => {
 });
 
 // POST /api/booked-in-changes/upsert — persist changeover overrides for reservations
-app.post('/api/booked-in-changes/upsert', requireAuth, async (req, res) => {
+app.post('/api/booked-in-changes/upsert', requireScopedRole('Manager'), async (req, res) => {
   const changes = Array.isArray(req.body.changes) ? req.body.changes : [];
 
   try {
-    const result = await upsertBookedInChangesForUser(req.session.userId, changes);
+    const result = await upsertBookedInChangesForUser(req.accessContext.effectiveOwnerUserId, changes);
     return res.json({ saved: result.saved });
   } catch (err) {
     console.error(err);
@@ -5756,11 +5830,11 @@ app.post('/api/booked-in-changes/upsert', requireAuth, async (req, res) => {
 });
 
 // POST /api/booked-in-changes/delete — delete booked-in changes by reservation keys
-app.post('/api/booked-in-changes/delete', requireAuth, async (req, res) => {
+app.post('/api/booked-in-changes/delete', requireScopedRole('Manager'), async (req, res) => {
   const changes = Array.isArray(req.body.changes) ? req.body.changes : [];
 
   try {
-    const result = await deleteBookedInChangesForUser(req.session.userId, changes);
+    const result = await deleteBookedInChangesForUser(req.accessContext.effectiveOwnerUserId, changes);
     return res.json({ deleted: result.deleted });
   } catch (err) {
     console.error(err);
@@ -5769,7 +5843,7 @@ app.post('/api/booked-in-changes/delete', requireAuth, async (req, res) => {
 });
 
 // POST /api/schedules/email — email txt schedule to a recipient
-app.post('/api/schedules/email', requireAuth, async (req, res) => {
+app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) => {
   const to = normaliseOptionalEmail(req.body.email);
   const textContent = String(req.body.textContent || '');
   const subject = String(req.body.subject || 'Cleaning schedule').trim().slice(0, 160) || 'Cleaning schedule';
@@ -5811,9 +5885,9 @@ app.post('/api/schedules/email', requireAuth, async (req, res) => {
 });
 
 // GET /api/shared-resources — all shared resources for current user
-app.get('/api/shared-resources', requireAuth, async (req, res) => {
+app.get('/api/shared-resources', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const resources = await getSharedResourcesForUser(req.session.userId);
+    const resources = await getSharedResourcesForUser(req.accessContext.effectiveOwnerUserId);
     return res.json({ resources });
   } catch (err) {
     console.error(err);
@@ -5822,9 +5896,9 @@ app.get('/api/shared-resources', requireAuth, async (req, res) => {
 });
 
 // POST /api/shared-resources — create shared resource with short description
-app.post('/api/shared-resources', requireAuth, async (req, res) => {
+app.post('/api/shared-resources', requireScopedRole('Manager'), async (req, res) => {
   try {
-    const { resource, error } = await createSharedResourceForUser(req.session.userId, {
+    const { resource, error } = await createSharedResourceForUser(req.accessContext.effectiveOwnerUserId, {
       shortDescription: req.body.shortDescription,
       maxDaysAdvanceBooking: req.body.maxDaysAdvanceBooking,
       propertyId: req.body.propertyId,
@@ -5856,14 +5930,14 @@ app.post('/api/shared-resources', requireAuth, async (req, res) => {
 });
 
 // GET /api/shared-resources/:resourceId — one shared resource for current user
-app.get('/api/shared-resources/:resourceId', requireAuth, async (req, res) => {
+app.get('/api/shared-resources/:resourceId', requireScopedRole('Staff'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   if (!Number.isInteger(resourceId) || resourceId <= 0) {
     return res.status(400).json({ error: 'Invalid shared resource id.' });
   }
 
   try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.session.userId);
+    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
@@ -5919,13 +5993,17 @@ app.get('/api/public/shared-resources/:resourceId/reservations', async (req, res
 });
 
 // GET /api/shared-resources/:resourceId/reservations — authenticated reservation list
-app.get('/api/shared-resources/:resourceId/reservations', requireAuth, async (req, res) => {
+app.get('/api/shared-resources/:resourceId/reservations', requireScopedRole('Staff'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   if (!Number.isInteger(resourceId) || resourceId <= 0) {
     return res.status(400).json({ error: 'Invalid shared resource id.' });
   }
 
   try {
+    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
+    if (!resource) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
     const reservations = await getSharedResourceReservationsByResourceId(resourceId);
     return res.json({ reservations });
   } catch (err) {
@@ -6336,14 +6414,14 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
 });
 
 // PUT /api/shared-resources/:resourceId — update shared resource
-app.put('/api/shared-resources/:resourceId', requireAuth, async (req, res) => {
+app.put('/api/shared-resources/:resourceId', requireScopedRole('Manager'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   if (!Number.isInteger(resourceId) || resourceId <= 0) {
     return res.status(400).json({ error: 'Invalid shared resource id.' });
   }
 
   try {
-    const { resource, error } = await updateSharedResourceForUser(resourceId, req.session.userId, {
+    const { resource, error } = await updateSharedResourceForUser(resourceId, req.accessContext.effectiveOwnerUserId, {
       shortDescription: req.body.shortDescription,
       fullDescriptionHtml: req.body.fullDescriptionHtml,
       maxUnits: req.body.maxUnits,
@@ -6380,7 +6458,7 @@ app.put('/api/shared-resources/:resourceId', requireAuth, async (req, res) => {
 });
 
 // PUT /api/shared-resources/:resourceId/reservations/:reservationId/status — update payment/confirmation status
-app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', requireAuth, async (req, res) => {
+app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', requireScopedRole('Manager'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   const reservationId = Number(req.params.reservationId);
   if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
@@ -6388,7 +6466,7 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', 
   }
 
   try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.session.userId);
+    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
@@ -6396,7 +6474,7 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', 
     const result = await updateSharedResourceReservationStatusForUser(
       reservationId,
       resourceId,
-      req.session.userId,
+      req.accessContext.effectiveOwnerUserId,
       req.body.status
     );
 
@@ -6415,7 +6493,7 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', 
 });
 
 // GET /api/shared-resources/:resourceId/reservations/:reservationId — load one reservation for editing
-app.get('/api/shared-resources/:resourceId/reservations/:reservationId', requireAuth, async (req, res) => {
+app.get('/api/shared-resources/:resourceId/reservations/:reservationId', requireScopedRole('Staff'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   const reservationId = Number(req.params.reservationId);
   if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
@@ -6423,12 +6501,12 @@ app.get('/api/shared-resources/:resourceId/reservations/:reservationId', require
   }
 
   try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.session.userId);
+    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
 
-    const reservation = await getSharedResourceReservationByIdForUser(reservationId, resourceId, req.session.userId);
+    const reservation = await getSharedResourceReservationByIdForUser(reservationId, resourceId, req.accessContext.effectiveOwnerUserId);
     if (!reservation) {
       return res.status(404).json({ error: 'Reservation not found.' });
     }
@@ -6441,7 +6519,7 @@ app.get('/api/shared-resources/:resourceId/reservations/:reservationId', require
 });
 
 // PUT /api/shared-resources/:resourceId/reservations/:reservationId — edit reservation details
-app.put('/api/shared-resources/:resourceId/reservations/:reservationId', requireAuth, async (req, res) => {
+app.put('/api/shared-resources/:resourceId/reservations/:reservationId', requireScopedRole('Manager'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   const reservationId = Number(req.params.reservationId);
   if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
@@ -6473,7 +6551,7 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId', require
   }
 
   try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.session.userId);
+    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
@@ -6505,7 +6583,7 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId', require
     const result = await updateSharedResourceReservationForUser(
       reservationId,
       resourceId,
-      req.session.userId,
+      req.accessContext.effectiveOwnerUserId,
       {
         reservationCheckinDate: checkinDate,
         reservationCheckoutDate: checkoutDate,
@@ -6537,14 +6615,14 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId', require
 });
 
 // DELETE /api/shared-resources/:resourceId — delete shared resource
-app.delete('/api/shared-resources/:resourceId', requireAuth, async (req, res) => {
+app.delete('/api/shared-resources/:resourceId', requireScopedRole('Manager'), async (req, res) => {
   const resourceId = Number(req.params.resourceId);
   if (!Number.isInteger(resourceId) || resourceId <= 0) {
     return res.status(400).json({ error: 'Invalid shared resource id.' });
   }
 
   try {
-    const result = await deleteSharedResourceForUser(resourceId, req.session.userId);
+    const result = await deleteSharedResourceForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (result.error === 'Shared resource not found.') {
       return res.status(404).json({ error: result.error });
     }
@@ -6559,9 +6637,9 @@ app.delete('/api/shared-resources/:resourceId', requireAuth, async (req, res) =>
 });
 
 // GET /api/properties — all properties for current user
-app.get('/api/properties', requireAuth, async (req, res) => {
+app.get('/api/properties', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const properties = await getPropertiesForUser(req.session.userId);
+    const properties = await getPropertiesForUser(req.accessContext.effectiveOwnerUserId);
     return res.json({ properties });
   } catch (err) {
     console.error(err);
@@ -6570,14 +6648,14 @@ app.get('/api/properties', requireAuth, async (req, res) => {
 });
 
 // POST /api/properties — create property for current user
-app.post('/api/properties', requireAuth, async (req, res) => {
+app.post('/api/properties', requireScopedRole('Manager'), async (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) {
     return res.status(400).json({ error: 'Property name is required.' });
   }
 
   try {
-    const { property, error } = await createPropertyForUser(req.session.userId, name);
+    const { property, error } = await createPropertyForUser(req.accessContext.effectiveOwnerUserId, name);
     if (error) {
       return res.status(409).json({ error });
     }
@@ -6589,14 +6667,14 @@ app.post('/api/properties', requireAuth, async (req, res) => {
 });
 
 // GET /api/properties/:propertyId — get property details
-app.get('/api/properties/:propertyId', requireAuth, async (req, res) => {
+app.get('/api/properties/:propertyId', requireScopedRole('Staff'), async (req, res) => {
   const propertyId = Number(req.params.propertyId);
   if (!Number.isInteger(propertyId) || propertyId <= 0) {
     return res.status(400).json({ error: 'Invalid property id.' });
   }
 
   try {
-    const property = await getPropertyByIdForUser(propertyId, req.session.userId);
+    const property = await getPropertyByIdForUser(propertyId, req.accessContext.effectiveOwnerUserId);
     if (!property) {
       return res.status(404).json({ error: 'Property not found.' });
     }
@@ -6608,14 +6686,14 @@ app.get('/api/properties/:propertyId', requireAuth, async (req, res) => {
 });
 
 // PUT /api/properties/:propertyId — update property details
-app.put('/api/properties/:propertyId', requireAuth, async (req, res) => {
+app.put('/api/properties/:propertyId', requireScopedRole('Manager'), async (req, res) => {
   const propertyId = Number(req.params.propertyId);
   if (!Number.isInteger(propertyId) || propertyId <= 0) {
     return res.status(400).json({ error: 'Invalid property id.' });
   }
 
   try {
-    const { property, error } = await updatePropertyForUser(propertyId, req.session.userId, {
+    const { property, error } = await updatePropertyForUser(propertyId, req.accessContext.effectiveOwnerUserId, {
       name: req.body.name,
       postalAddress: req.body.postalAddress,
       managerName: req.body.managerName,
@@ -6635,14 +6713,14 @@ app.put('/api/properties/:propertyId', requireAuth, async (req, res) => {
 });
 
 // DELETE /api/properties/:propertyId — delete property if safe
-app.delete('/api/properties/:propertyId', requireAuth, async (req, res) => {
+app.delete('/api/properties/:propertyId', requireScopedRole('Manager'), async (req, res) => {
   const propertyId = Number(req.params.propertyId);
   if (!Number.isInteger(propertyId) || propertyId <= 0) {
     return res.status(400).json({ error: 'Invalid property id.' });
   }
 
   try {
-    const result = await deletePropertyForUser(propertyId, req.session.userId);
+    const result = await deletePropertyForUser(propertyId, req.accessContext.effectiveOwnerUserId);
     if (result.error === 'Property not found.') {
       return res.status(404).json({ error: result.error });
     }
@@ -6657,9 +6735,9 @@ app.delete('/api/properties/:propertyId', requireAuth, async (req, res) => {
 });
 
 // GET /api/listings — all listings for current user
-app.get('/api/listings', requireAuth, async (req, res) => {
+app.get('/api/listings', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const listings = await getListingsForUser(req.session.userId);
+    const listings = await getListingsForUser(req.accessContext.effectiveOwnerUserId);
     return res.json({ listings });
   } catch (err) {
     console.error(err);
@@ -6668,7 +6746,7 @@ app.get('/api/listings', requireAuth, async (req, res) => {
 });
 
 // POST /api/listings — create listing (unique name per user)
-app.post('/api/listings', requireAuth, async (req, res) => {
+app.post('/api/listings', requireScopedRole('Manager'), async (req, res) => {
   const name = String(req.body.name || '').trim();
   const propertyId = Number(req.body.propertyId);
   const dateBasis = normaliseDateBasis(req.body.dateBasis);
@@ -6679,7 +6757,7 @@ app.post('/api/listings', requireAuth, async (req, res) => {
 
   try {
     const { listing, error } = await createListingForUser(
-      req.session.userId,
+      req.accessContext.effectiveOwnerUserId,
       name,
       Number.isInteger(propertyId) && propertyId > 0 ? propertyId : null,
       dateBasis,
@@ -6696,14 +6774,14 @@ app.post('/api/listings', requireAuth, async (req, res) => {
 });
 
 // GET /api/listings/:listingId — get one listing for current user
-app.get('/api/listings/:listingId', requireAuth, async (req, res) => {
+app.get('/api/listings/:listingId', requireScopedRole('Staff'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   if (!Number.isInteger(listingId) || listingId <= 0) {
     return res.status(400).json({ error: 'Invalid listing id.' });
   }
 
   try {
-    const listing = await getListingByIdForUser(listingId, req.session.userId);
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
     if (!listing) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
@@ -6720,7 +6798,7 @@ app.get('/api/listings/:listingId', requireAuth, async (req, res) => {
 });
 
 // PUT /api/listings/:listingId — rename listing
-app.put('/api/listings/:listingId', requireAuth, async (req, res) => {
+app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   const name = String(req.body.name || '').trim();
   const propertyId = Number(req.body.propertyId);
@@ -6737,7 +6815,7 @@ app.put('/api/listings/:listingId', requireAuth, async (req, res) => {
   try {
     const { listing, error } = await updateListingForUser(
       listingId,
-      req.session.userId,
+      req.accessContext.effectiveOwnerUserId,
       name,
       Number.isInteger(propertyId) && propertyId > 0 ? propertyId : null,
       dateBasis,
@@ -6760,14 +6838,14 @@ app.put('/api/listings/:listingId', requireAuth, async (req, res) => {
 });
 
 // GET /api/listings/:listingId/feeds — feeds for a listing
-app.get('/api/listings/:listingId/feeds', requireAuth, async (req, res) => {
+app.get('/api/listings/:listingId/feeds', requireScopedRole('Staff'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   if (!Number.isInteger(listingId) || listingId <= 0) {
     return res.status(400).json({ error: 'Invalid listing id.' });
   }
 
   try {
-    const feeds = await getFeedsForListing(listingId, req.session.userId);
+    const feeds = await getFeedsForListing(listingId, req.accessContext.effectiveOwnerUserId);
     if (feeds === null) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
@@ -6779,9 +6857,9 @@ app.get('/api/listings/:listingId/feeds', requireAuth, async (req, res) => {
 });
 
 // GET /api/feed-sources — all configured feed source labels + chosen colors
-app.get('/api/feed-sources', requireAuth, async (req, res) => {
+app.get('/api/feed-sources', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const sources = await getFeedSourcesForUser(req.session.userId);
+    const sources = await getFeedSourcesForUser(req.accessContext.effectiveOwnerUserId);
     return res.json({ sources });
   } catch (err) {
     console.error(err);
@@ -6790,7 +6868,7 @@ app.get('/api/feed-sources', requireAuth, async (req, res) => {
 });
 
 // PUT /api/feed-sources/color — set color for one feed source label
-app.put('/api/feed-sources/color', requireAuth, async (req, res) => {
+app.put('/api/feed-sources/color', requireScopedRole('Manager'), async (req, res) => {
   const label = String(req.body.label || '').trim();
   const color = normaliseColor(req.body.color);
 
@@ -6802,13 +6880,13 @@ app.put('/api/feed-sources/color', requireAuth, async (req, res) => {
   }
 
   try {
-    const sources = await getFeedSourcesForUser(req.session.userId);
+    const sources = await getFeedSourcesForUser(req.accessContext.effectiveOwnerUserId);
     const exists = sources.some((source) => source.label.toLowerCase() === label.toLowerCase());
     if (!exists) {
       return res.status(404).json({ error: 'Feed source not found.' });
     }
 
-    const saved = await upsertFeedSourceColorForUser(req.session.userId, label, color);
+    const saved = await upsertFeedSourceColorForUser(req.accessContext.effectiveOwnerUserId, label, color);
     return res.json({ source: saved });
   } catch (err) {
     console.error(err);
@@ -6817,7 +6895,7 @@ app.put('/api/feed-sources/color', requireAuth, async (req, res) => {
 });
 
 // POST /api/listings/:listingId/feeds — add a feed
-app.post('/api/listings/:listingId/feeds', requireAuth, async (req, res) => {
+app.post('/api/listings/:listingId/feeds', requireScopedRole('Manager'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   const label = String(req.body.label || '').trim();
   const url = normaliseCalendarUrl(req.body.url);
@@ -6833,7 +6911,7 @@ app.post('/api/listings/:listingId/feeds', requireAuth, async (req, res) => {
   }
 
   try {
-    const { feed, error } = await createFeedForListing(listingId, req.session.userId, label, url);
+    const { feed, error } = await createFeedForListing(listingId, req.accessContext.effectiveOwnerUserId, label, url);
     if (error) {
       return res.status(404).json({ error });
     }
@@ -6845,7 +6923,7 @@ app.post('/api/listings/:listingId/feeds', requireAuth, async (req, res) => {
 });
 
 // PUT /api/listings/:listingId/feeds/:feedId — edit a feed
-app.put('/api/listings/:listingId/feeds/:feedId', requireAuth, async (req, res) => {
+app.put('/api/listings/:listingId/feeds/:feedId', requireScopedRole('Manager'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   const feedId = Number(req.params.feedId);
   const label = String(req.body.label || '').trim();
@@ -6862,7 +6940,7 @@ app.put('/api/listings/:listingId/feeds/:feedId', requireAuth, async (req, res) 
   }
 
   try {
-    const { feed, error } = await updateFeedForListing(feedId, listingId, req.session.userId, label, url);
+    const { feed, error } = await updateFeedForListing(feedId, listingId, req.accessContext.effectiveOwnerUserId, label, url);
     if (error === 'Listing not found.') {
       return res.status(404).json({ error });
     }
@@ -7186,14 +7264,14 @@ app.get('/api/calendar.ics', async (req, res) => {
 });
 
 // GET /api/listings/:listingId/events — serve events from the persistent cache
-app.get('/api/listings/:listingId/events', requireAuth, async (req, res) => {
+app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   if (!Number.isInteger(listingId) || listingId <= 0) {
     return res.status(400).json({ error: 'Invalid listing id.' });
   }
 
   try {
-    const listing = await getListingByIdForUser(listingId, req.session.userId);
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
     if (!listing) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
@@ -7223,8 +7301,8 @@ app.get('/api/listings/:listingId/events', requireAuth, async (req, res) => {
       ? cached.map((c) => c.fetched_at).sort().pop()
       : null;
 
-    const bookedChanges = await getBookedInChangesForUserByListings(req.session.userId, [listingId]);
-    const cleaners = await getCleanersForUser(req.session.userId);
+    const bookedChanges = await getBookedInChangesForUserByListings(req.accessContext.effectiveOwnerUserId, [listingId]);
+    const cleaners = await getCleanersForUser(req.accessContext.effectiveOwnerUserId);
     const cleanerNameById = new Map(
       (cleaners || []).map((cleaner) => {
         const fullName = [cleaner.first_name || '', cleaner.last_name || ''].join(' ').trim();
@@ -7247,14 +7325,14 @@ app.get('/api/listings/:listingId/events', requireAuth, async (req, res) => {
 });
 
 // POST /api/listings/:listingId/events/refresh — trigger immediate cache refresh then return events
-app.post('/api/listings/:listingId/events/refresh', requireAuth, async (req, res) => {
+app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager'), async (req, res) => {
   const listingId = Number(req.params.listingId);
   if (!Number.isInteger(listingId) || listingId <= 0) {
     return res.status(400).json({ error: 'Invalid listing id.' });
   }
 
   try {
-    const listing = await getListingByIdForUser(listingId, req.session.userId);
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
     if (!listing) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
@@ -7286,8 +7364,8 @@ app.post('/api/listings/:listingId/events/refresh', requireAuth, async (req, res
       ? cached.map((c) => c.fetched_at).sort().pop()
       : null;
 
-    const bookedChanges = await getBookedInChangesForUserByListings(req.session.userId, [listingId]);
-    const cleaners = await getCleanersForUser(req.session.userId);
+    const bookedChanges = await getBookedInChangesForUserByListings(req.accessContext.effectiveOwnerUserId, [listingId]);
+    const cleaners = await getCleanersForUser(req.accessContext.effectiveOwnerUserId);
     const cleanerNameById = new Map(
       (cleaners || []).map((cleaner) => {
         const fullName = [cleaner.first_name || '', cleaner.last_name || ''].join(' ').trim();
@@ -7310,7 +7388,7 @@ app.post('/api/listings/:listingId/events/refresh', requireAuth, async (req, res
 });
 
 // GET /api/calendar-entries?url=... — load and parse ICS events
-app.get('/api/calendar-entries', requireAuth, async (req, res) => {
+app.get('/api/calendar-entries', requireScopedRole('Staff'), async (req, res) => {
   const calendarUrl = normaliseCalendarUrl(req.query.url);
 
   if (!calendarUrl) {
