@@ -37,7 +37,6 @@ async function checkAdminSession() {
 
 function populateForm(user) {
   document.getElementById('editUserId').value = String(user.id || '');
-  document.getElementById('editUsername').value = user.username || '';
   document.getElementById('editFirstName').value = user.first_name || '';
   document.getElementById('editFamilyName').value = user.family_name || '';
   document.getElementById('editCountry').value = user.country_of_residence || '';
@@ -64,7 +63,6 @@ async function loadSiteUser() {
 }
 
 async function saveSiteUser() {
-  const username = document.getElementById('editUsername').value.trim();
   const firstName = document.getElementById('editFirstName').value.trim();
   const familyName = document.getElementById('editFamilyName').value.trim();
   const country = document.getElementById('editCountry').value.trim();
@@ -72,8 +70,8 @@ async function saveSiteUser() {
   const password = document.getElementById('editPassword').value;
   const isValidated = document.getElementById('editIsValidated').checked;
 
-  if (!username || !firstName || !familyName || !country || !email) {
-    setMessage('Username, first name, family name, country, and email are required.', true);
+  if (!firstName || !familyName || !country || !email) {
+    setMessage('First name, family name, country, and email are required.', true);
     return;
   }
 
@@ -90,7 +88,6 @@ async function saveSiteUser() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        username,
         firstName,
         familyName,
         country,

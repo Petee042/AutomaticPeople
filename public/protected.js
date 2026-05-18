@@ -124,8 +124,10 @@ async function fetchCalendar(url, source) {
     }
 
     const user = await res.json();
-    document.getElementById('displayName').textContent     = user.username;
-    document.getElementById('displayUsername').textContent = user.username;
+    const fullName = [user.firstName, user.familyName].filter(Boolean).join(' ').trim();
+    const displayName = fullName || user.email || '-';
+    document.getElementById('displayName').textContent     = displayName;
+    document.getElementById('displayUsername').textContent = displayName;
     document.getElementById('displayEmail').textContent    = user.email;
   } catch {
     window.location.href = '/';

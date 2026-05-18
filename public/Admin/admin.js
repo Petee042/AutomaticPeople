@@ -45,7 +45,7 @@ function renderUsers(users) {
   adminUsers.forEach((user) => {
     const option = document.createElement('option');
     option.value = String(user.id);
-    option.textContent = user.username + ' (' + user.email + ')';
+    option.textContent = (user.email || ('User #' + user.id));
     select.appendChild(option);
   });
 
@@ -212,7 +212,7 @@ document.getElementById('deleteUserBtn').addEventListener('click', async () => {
         const res = await fetch('/api/admin/users/' + encodeURIComponent(user.id), { method: 'DELETE' });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed deleting user ' + user.username + '.');
+          throw new Error(data.error || 'Failed deleting user ' + (user.email || ('#' + user.id)) + '.');
         }
       }
       setAdminMessage('All users deleted successfully.', false);

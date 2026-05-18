@@ -2629,7 +2629,6 @@ async function getTeamMembershipsForClientAccount(clientAccountId) {
              cm.status,
              cm.created_at,
              cm.updated_at,
-             u.username,
              u.email,
              u.first_name,
              u.family_name,
@@ -2821,7 +2820,6 @@ async function setClientTeamRolesForUser(clientAccountId, invitedByUserId, targe
   return {
     user: {
       id: Number(user.id),
-      username: user.username,
       email: user.email,
       first_name: user.first_name || '',
       family_name: user.family_name || '',
@@ -3020,7 +3018,7 @@ async function addClientMembershipByEmail(clientAccountId, invitedByUserId, emai
     [clientAccountId, user.id, nextRole, invitedByUserId]
   );
 
-  return { membership: result.rows[0], user: { id: user.id, username: user.username, email: user.email } };
+  return { membership: result.rows[0], user: { id: user.id, email: user.email } };
 }
 
 async function revokeClientMembership(clientAccountId, membershipId) {
@@ -3053,7 +3051,6 @@ async function getManagerAssignmentSnapshot(clientAccountId) {
     `
       SELECT cm.id AS membership_id,
              cm.user_id,
-             u.username,
              u.email
       FROM client_memberships cm
       JOIN users u ON u.id = cm.user_id
@@ -4612,17 +4609,16 @@ async function getAllUsers() {
   if (!usePostgres) {
     return readUsersFromFile()
       .slice()
-      .sort((a, b) => String(a.username).localeCompare(String(b.username)))
+      .sort((a, b) => String(a.email).localeCompare(String(b.email)))
       .map((user) => ({
         id: user.id,
-        username: user.username,
         email: user.email,
         created_at: user.created_at
       }));
   }
 
   const result = await pool.query(
-    'SELECT id, username, email, created_at FROM users ORDER BY username ASC'
+    'SELECT id, email, created_at FROM users ORDER BY email ASC'
   );
   return result.rows;
 }
@@ -4631,10 +4627,9 @@ async function getAllSiteUsersWithMemberships() {
   if (!usePostgres) {
     return readUsersFromFile()
       .slice()
-      .sort((a, b) => String(a.username).localeCompare(String(b.username)))
+      .sort((a, b) => String(a.email).localeCompare(String(b.email)))
       .map((user) => ({
         id: Number(user.id),
-        username: user.username,
         email: user.email,
         first_name: user.first_name || '',
         family_name: user.family_name || '',
@@ -4648,7 +4643,6 @@ async function getAllSiteUsersWithMemberships() {
   const result = await pool.query(
     `
       SELECT u.id,
-             u.username,
              u.email,
              u.first_name,
              u.family_name,
@@ -4673,8 +4667,8 @@ async function getAllSiteUsersWithMemberships() {
        AND cm.status IN ('active', 'invited')
       LEFT JOIN client_accounts ca
         ON ca.id = cm.client_account_id
-      GROUP BY u.id, u.username, u.email, u.first_name, u.family_name, u.country_of_residence, u.is_validated, u.created_at
-      ORDER BY u.username ASC
+      GROUP BY u.id, u.email, u.first_name, u.family_name, u.country_of_residence, u.is_validated, u.created_at
+      ORDER BY u.email ASC
     `
   );
 
@@ -4702,7 +4696,6 @@ async function updateSiteUserForAdmin(userId, input) {
     return { error: 'Invalid user id.' };
   }
 
-  const username = String(input.username || '').trim();
   const firstName = String(input.firstName || '').trim();
   const familyName = String(input.familyName || '').trim();
   const country = normaliseCountryOfResidence(input.country) || '';
@@ -4710,9 +4703,6 @@ async function updateSiteUserForAdmin(userId, input) {
   const isValidated = input.isValidated === true;
   const newPassword = String(input.password || '');
 
-  if (!username) {
-    return { error: 'Username is required.' };
-  }
   if (!firstName || !familyName || !country || !email) {
     return { error: 'First name, family name, country, and email are required.' };
   }
@@ -4738,12 +4728,6 @@ async function updateSiteUserForAdmin(userId, input) {
       return { error: 'Email address already in use.' };
     }
 
-    const duplicateUsername = users.some((user) => Number(user.id) !== id && String(user.username || '').toLowerCase() === username.toLowerCase());
-    if (duplicateUsername) {
-      return { error: 'Username already in use.' };
-    }
-
-    users[index].username = username;
     users[index].first_name = firstName;
     users[index].family_name = familyName;
     users[index].country_of_residence = country;
@@ -4766,28 +4750,19 @@ async function updateSiteUserForAdmin(userId, input) {
     return { error: 'Email address already in use.' };
   }
 
-  const usernameConflict = await pool.query(
-    'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND id <> $2 LIMIT 1',
-    [username, id]
-  );
-  if (usernameConflict.rows[0]) {
-    return { error: 'Username already in use.' };
-  }
-
   const updateResult = await pool.query(
     `
       UPDATE users
-      SET username = $1,
-          first_name = $2,
-          family_name = $3,
-          country_of_residence = $4,
-          email = $5,
-          is_validated = $6,
-          password_hash = COALESCE($7, password_hash)
-      WHERE id = $8
+      SET first_name = $1,
+          family_name = $2,
+          country_of_residence = $3,
+          email = $4,
+          is_validated = $5,
+          password_hash = COALESCE($6, password_hash)
+      WHERE id = $7
       RETURNING id
     `,
-    [username, firstName, familyName, country, email, isValidated, passwordHash, id]
+    [firstName, familyName, country, email, isValidated, passwordHash, id]
   );
 
   if (!updateResult.rows[0]) {
@@ -4909,7 +4884,6 @@ async function getUserArchiveData(userId) {
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
       user: {
-        username: user.username,
         email: user.email,
         password_hash: user.password_hash,
         created_at: user.created_at || null
@@ -4934,7 +4908,7 @@ async function getUserArchiveData(userId) {
   }
 
   const userResult = await pool.query(
-    'SELECT id, username, email, password_hash, created_at FROM users WHERE id = $1 LIMIT 1',
+    'SELECT id, email, password_hash, created_at FROM users WHERE id = $1 LIMIT 1',
     [userId]
   );
   const user = userResult.rows[0];
@@ -4990,7 +4964,6 @@ async function getUserArchiveData(userId) {
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
     user: {
-      username: user.username,
       email: user.email,
       password_hash: user.password_hash,
       created_at: user.created_at || null
@@ -5116,10 +5089,9 @@ function normaliseUserArchivePayload(payload) {
     return { error: 'Archive user record is missing.' };
   }
 
-  const username = normaliseArchiveString(userRaw.username || userRaw.userName || userRaw.name);
   const email = normaliseArchiveEmail(userRaw.email || userRaw.mail);
   const passwordHash = normaliseArchiveString(userRaw.password_hash || userRaw.passwordHash || userRaw.hash);
-  if (!username || !email || !passwordHash) {
+  if (!email || !passwordHash) {
     return { error: 'Archive user data is incomplete.' };
   }
 
@@ -5158,7 +5130,6 @@ function normaliseUserArchivePayload(payload) {
     schemaVersion: Number(payload.schemaVersion || payload.schema_version || 1),
     importedAt: new Date().toISOString(),
     user: {
-      username,
       email,
       password_hash: passwordHash,
       created_at: normaliseArchiveTimestamp(userRaw.created_at || userRaw.createdAt)
@@ -5187,9 +5158,11 @@ async function restoreUserArchiveData(archivePayload) {
     return { error: payload.error };
   }
 
-  if (await findUserByUsername(payload.user.username) || await findUserByEmail(payload.user.email)) {
-    return { error: 'A user with this username or email already exists.' };
+  if (await findUserByEmail(payload.user.email)) {
+    return { error: 'A user with this email already exists.' };
   }
+
+  const generatedUsername = await generateUniqueUsernameFromEmail(payload.user.email);
 
   if (!usePostgres) {
     const users = readUsersFromFile();
@@ -5197,7 +5170,7 @@ async function restoreUserArchiveData(archivePayload) {
 
     users.push({
       id: nextUserId,
-      username: payload.user.username,
+      username: generatedUsername,
       email: payload.user.email,
       password_hash: payload.user.password_hash,
       created_at: payload.user.created_at || new Date().toISOString()
@@ -5276,16 +5249,16 @@ async function restoreUserArchiveData(archivePayload) {
     });
 
     writeListingsStore(store);
-    return { user: { id: nextUserId, username: payload.user.username, email: payload.user.email } };
+    return { user: { id: nextUserId, email: payload.user.email } };
   }
 
   const createdUserResult = await pool.query(
     `
       INSERT INTO users (username, email, password_hash, created_at)
       VALUES ($1, $2, $3, COALESCE($4::timestamptz, CURRENT_TIMESTAMP))
-      RETURNING id, username, email
+      RETURNING id, email
     `,
-    [payload.user.username, payload.user.email, payload.user.password_hash, payload.user.created_at]
+    [generatedUsername, payload.user.email, payload.user.password_hash, payload.user.created_at]
   );
 
   const createdUser = createdUserResult.rows[0];
@@ -6979,7 +6952,6 @@ app.post('/api/login', async (req, res) => {
         return res.status(500).json({ error: 'Server error. Please try again.' });
       }
       req.session.userId = authenticatedUser.id;
-      req.session.username = authenticatedUser.username;
       req.session.email = authenticatedUser.email;
       return res.json({ message: 'Login successful.' });
     });
@@ -7119,7 +7091,7 @@ app.get('/api/admin/users/:userId/archive', requireAdminAuth, async (req, res) =
       return res.status(404).json({ error: archive.error });
     }
 
-    const usernamePart = String(archive.user.username || 'user').replace(/[^a-zA-Z0-9_-]+/g, '_');
+    const usernamePart = String(archive.user.email || 'user').replace(/[^a-zA-Z0-9_-]+/g, '_');
     const stamp = new Date().toISOString().slice(0, 10);
     const fileName = usernamePart + '-archive-' + stamp + '.json';
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -7571,7 +7543,8 @@ app.get('/api/me', requireAuth, async (req, res) => {
     }
 
     return res.json({
-      username: user.username || req.session.username,
+      firstName: user.first_name || '',
+      familyName: user.family_name || '',
       email: user.email || req.session.email,
       isValidated: user.is_validated !== false,
       consolidated_ics_token: buildConsolidatedIcsToken(req.session.userId),

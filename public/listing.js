@@ -1200,7 +1200,7 @@ function applyListingAssignmentEditor(snapshot) {
 
     const text = document.createElement('span');
     text.className = 'cleaning-listing-name';
-    text.textContent = manager.email || manager.username || ('Manager #' + manager.membership_id);
+    text.textContent = manager.email || ('Manager #' + manager.membership_id);
 
     row.appendChild(checkbox);
     row.appendChild(text);

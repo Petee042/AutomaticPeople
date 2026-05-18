@@ -208,7 +208,6 @@ function renderTeamMembers(team) {
       if (!groupedByUser.has(userId)) {
         groupedByUser.set(userId, {
           user_id: userId,
-          username: member.username || '',
           first_name: member.first_name || '',
           family_name: member.family_name || '',
           email: member.email || '',
@@ -243,9 +242,8 @@ function renderTeamMembers(team) {
 
     const nameCell = document.createElement('td');
     const fullName = [member.first_name, member.family_name].filter(Boolean).join(' ').trim();
-    const usernameFallback = String(member.username || '').trim();
-    const canUseUsernameFallback = usernameFallback && !usernameFallback.includes('@') && !usernameFallback.toLowerCase().startsWith('staff-');
-    nameCell.textContent = fullName || (canUseUsernameFallback ? usernameFallback : 'Name not set');
+    const emailFallback = String(member.email || '').trim();
+    nameCell.textContent = fullName || (emailFallback || 'Name not set');
 
     const emailCell = document.createElement('td');
     emailCell.textContent = member.email || '';
@@ -306,11 +304,10 @@ function openTeamMemberEditor(member) {
   }
 
   const fullName = [member.first_name, member.family_name].filter(Boolean).join(' ').trim();
-  const usernameFallback = String(member.username || '').trim();
-  const canUseUsernameFallback = usernameFallback && !usernameFallback.includes('@') && !usernameFallback.toLowerCase().startsWith('staff-');
+  const emailFallback = String(member.email || '').trim();
 
   document.getElementById('editTeamMemberUserId').value = String(member.user_id || '');
-  document.getElementById('editTeamMemberName').value = fullName || (canUseUsernameFallback ? usernameFallback : 'Name not set');
+  document.getElementById('editTeamMemberName').value = fullName || (emailFallback || 'Name not set');
   document.getElementById('editTeamMemberEmail').value = member.email || '';
   document.getElementById('editTeamMemberCountry').value = member.country_of_residence || '';
 
@@ -440,7 +437,7 @@ function renderManagerAssignmentSelectors(snapshot) {
   managers.forEach((manager) => {
     const option = document.createElement('option');
     option.value = String(manager.membership_id);
-    option.textContent = (manager.email || manager.username || ('Manager #' + manager.membership_id));
+    option.textContent = (manager.email || ('Manager #' + manager.membership_id));
     managerSelect.appendChild(option);
   });
 
