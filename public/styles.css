@@ -261,10 +261,6 @@ textarea:focus {
 .dashboard-tab-bar {
   display: flex;
   background: #ffffff;
-/* ── Dashboard tab bar ────────────────────────────────────── */
-.dashboard-tab-bar {
-  display: flex;
-  background: #ffffff;
   border-bottom: 2px solid #e0e4f0;
   box-shadow: 0 2px 6px rgba(18, 33, 70, 0.06);
   overflow-x: auto;
@@ -301,13 +297,6 @@ textarea:focus {
   border-bottom-color: #4361ee;
 }
 
-.dashboard-tab-btn:focus-visible {
-  outline: 2px solid #4361ee;
-  outline-offset: -2px;
-}
-
-.dashboard-tab-panel {
-  /* panels just use hidden class to toggle; no extra wrapper style needed */
 .dashboard-tab-btn:focus-visible {
   outline: 2px solid #4361ee;
   outline-offset: -2px;
@@ -1129,10 +1118,17 @@ textarea:focus {
   }
 
   .reservation-calendar {
-   dashboard-tab-btn {
+    grid-template-columns: minmax(72px, 0.9fr) repeat(7, minmax(0, 1fr));
+    gap: 0.22rem;
+  }
+
+  .calendar-channel-label-text {
+    font-size: 0.6rem;
+  }
+
+  .dashboard-tab-btn {
     font-size: 0.82rem;
     padding: 0.75rem 0.4rem;
-    min-width: 72px;
     min-width: 72px;
   }
 }
