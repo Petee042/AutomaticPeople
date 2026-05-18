@@ -740,6 +740,11 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_guest_relationship_unique_contact
+    ON guest_relationships (client_account_id, guest_email, guest_phone)
+  `);
+
+  await pool.query(`
     ALTER TABLE properties
     ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
   `);
@@ -772,6 +777,16 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE cleaners
     ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE cleaners
+    ADD COLUMN IF NOT EXISTS cleaner_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_cleaners_cleaner_user_id
+    ON cleaners (cleaner_user_id)
   `);
 
   await migrateUsersFromFile();
@@ -954,6 +969,63 @@ async function initializeUserStore() {
       WHERE c2.client_account_id IS NULL
     ) lookup
     WHERE c.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE cleaners c
+    SET cleaner_user_id = u.id
+    FROM users u
+    WHERE c.cleaner_user_id IS NULL
+      AND NULLIF(TRIM(c.email), '') IS NOT NULL
+      AND LOWER(u.email) = LOWER(c.email)
+  `);
+
+  await pool.query(`
+    INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+    SELECT DISTINCT p.client_account_id, u.id, 'Manager', 'active', p.user_id
+    FROM properties p
+    JOIN users u
+      ON LOWER(u.email) = LOWER(p.manager_email)
+    WHERE p.client_account_id IS NOT NULL
+      AND NULLIF(TRIM(p.manager_email), '') IS NOT NULL
+    ON CONFLICT (client_account_id, user_id, role) DO NOTHING
+  `);
+
+  await pool.query(`
+    INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+    SELECT DISTINCT c.client_account_id, c.cleaner_user_id, 'Staff', 'active', c.user_id
+    FROM cleaners c
+    WHERE c.client_account_id IS NOT NULL
+      AND c.cleaner_user_id IS NOT NULL
+    ON CONFLICT (client_account_id, user_id, role) DO NOTHING
+  `);
+
+  await pool.query(`
+    INSERT INTO guest_relationships (
+      client_account_id,
+      guest_email,
+      guest_phone,
+      source_type,
+      source_id,
+      first_seen_at,
+      last_seen_at
+    )
+    SELECT
+      rr.client_account_id,
+      LOWER(TRIM(rr.email_address)) AS guest_email,
+      TRIM(COALESCE(rr.telephone, '')) AS guest_phone,
+      'reservation',
+      COALESCE(rr.reservation_identifier, rr.id::text),
+      MIN(rr.created_at),
+      MAX(COALESCE(rr.updated_at, rr.created_at))
+    FROM shared_resource_reservations rr
+    WHERE rr.client_account_id IS NOT NULL
+      AND NULLIF(TRIM(rr.email_address), '') IS NOT NULL
+    GROUP BY rr.client_account_id, LOWER(TRIM(rr.email_address)), TRIM(COALESCE(rr.telephone, ''))
+    ON CONFLICT (client_account_id, guest_email, guest_phone)
+    DO UPDATE
+    SET last_seen_at = GREATEST(guest_relationships.last_seen_at, EXCLUDED.last_seen_at),
+        updated_at = CURRENT_TIMESTAMP
   `);
 }
 
@@ -1916,6 +1988,260 @@ async function getOrCreateAccessContextForUser(userId, requestedClientAccountId)
     memberships,
     active: chooseAccessContextForUser(memberships, requestedClientAccountId)
   };
+}
+
+function normaliseClientTeamRole(value) {
+  const role = String(value || '').trim();
+  return role === 'Manager' || role === 'Staff' ? role : '';
+}
+
+async function getTeamMembershipsForClientAccount(clientAccountId) {
+  const id = Number(clientAccountId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return [];
+  }
+
+  if (!usePostgres) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT cm.id,
+             cm.client_account_id,
+             cm.user_id,
+             cm.role,
+             cm.status,
+             cm.created_at,
+             cm.updated_at,
+             u.username,
+             u.email
+      FROM client_memberships cm
+      JOIN users u ON u.id = cm.user_id
+      WHERE cm.client_account_id = $1
+      ORDER BY cm.role ASC, u.email ASC, cm.id ASC
+    `,
+    [id]
+  );
+
+  return result.rows;
+}
+
+async function getUserByEmailStrict(email) {
+  const normalized = normaliseOptionalEmail(email);
+  if (!normalized) {
+    return null;
+  }
+  return findUserByEmail(normalized);
+}
+
+async function addClientMembershipByEmail(clientAccountId, invitedByUserId, email, role) {
+  const nextRole = normaliseClientTeamRole(role);
+  if (!nextRole) {
+    return { error: 'Role must be Manager or Staff.' };
+  }
+
+  if (!usePostgres) {
+    return { error: 'Membership management requires database mode.' };
+  }
+
+  const user = await getUserByEmailStrict(email);
+  if (!user) {
+    return { error: 'User with this email does not exist yet. Ask them to create an account first.' };
+  }
+
+  const result = await pool.query(
+    `
+      INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+      VALUES ($1, $2, $3, 'active', $4)
+      ON CONFLICT (client_account_id, user_id, role)
+      DO UPDATE
+      SET status = 'active', updated_at = CURRENT_TIMESTAMP, invited_by_user_id = EXCLUDED.invited_by_user_id
+      RETURNING id, client_account_id, user_id, role, status, created_at, updated_at
+    `,
+    [clientAccountId, user.id, nextRole, invitedByUserId]
+  );
+
+  return { membership: result.rows[0], user: { id: user.id, username: user.username, email: user.email } };
+}
+
+async function revokeClientMembership(clientAccountId, membershipId) {
+  if (!usePostgres) {
+    return { error: 'Membership management requires database mode.' };
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE client_memberships
+      SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND client_account_id = $2 AND role IN ('Manager', 'Staff')
+      RETURNING id, client_account_id, user_id, role, status
+    `,
+    [membershipId, clientAccountId]
+  );
+
+  if (!result.rows[0]) {
+    return { error: 'Membership not found.' };
+  }
+  return { membership: result.rows[0] };
+}
+
+async function getManagerAssignmentSnapshot(clientAccountId) {
+  if (!usePostgres) {
+    return { managers: [], propertyAssignments: [], listingAssignments: [] };
+  }
+
+  const managersResult = await pool.query(
+    `
+      SELECT cm.id AS membership_id,
+             cm.user_id,
+             u.username,
+             u.email
+      FROM client_memberships cm
+      JOIN users u ON u.id = cm.user_id
+      WHERE cm.client_account_id = $1
+        AND cm.role = 'Manager'
+        AND cm.status = 'active'
+      ORDER BY u.email ASC, cm.id ASC
+    `,
+    [clientAccountId]
+  );
+
+  const propertyResult = await pool.query(
+    `
+      SELECT mpa.manager_membership_id,
+             mpa.property_id
+      FROM manager_property_assignments mpa
+      JOIN client_memberships cm ON cm.id = mpa.manager_membership_id
+      WHERE cm.client_account_id = $1
+    `,
+    [clientAccountId]
+  );
+
+  const listingResult = await pool.query(
+    `
+      SELECT mla.manager_membership_id,
+             mla.listing_id
+      FROM manager_listing_assignments mla
+      JOIN client_memberships cm ON cm.id = mla.manager_membership_id
+      WHERE cm.client_account_id = $1
+    `,
+    [clientAccountId]
+  );
+
+  return {
+    managers: managersResult.rows,
+    propertyAssignments: propertyResult.rows,
+    listingAssignments: listingResult.rows
+  };
+}
+
+async function replaceManagerAssignments(clientAccountId, managerMembershipId, propertyIds, listingIds) {
+  if (!usePostgres) {
+    return { error: 'Assignment management requires database mode.' };
+  }
+
+  const membershipCheck = await pool.query(
+    `
+      SELECT id
+      FROM client_memberships
+      WHERE id = $1
+        AND client_account_id = $2
+        AND role = 'Manager'
+        AND status = 'active'
+      LIMIT 1
+    `,
+    [managerMembershipId, clientAccountId]
+  );
+  if (!membershipCheck.rows[0]) {
+    return { error: 'Manager membership not found.' };
+  }
+
+  const normalizedPropertyIds = Array.isArray(propertyIds)
+    ? propertyIds.map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0)
+    : [];
+  const normalizedListingIds = Array.isArray(listingIds)
+    ? listingIds.map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0)
+    : [];
+
+  if (normalizedPropertyIds.length) {
+    const propertyCheck = await pool.query(
+      'SELECT id FROM properties WHERE client_account_id = $1 AND id = ANY($2::bigint[])',
+      [clientAccountId, normalizedPropertyIds]
+    );
+    if (propertyCheck.rows.length !== normalizedPropertyIds.length) {
+      return { error: 'One or more property ids are not in this client account.' };
+    }
+  }
+
+  if (normalizedListingIds.length) {
+    const listingCheck = await pool.query(
+      'SELECT id FROM listings WHERE client_account_id = $1 AND id = ANY($2::bigint[])',
+      [clientAccountId, normalizedListingIds]
+    );
+    if (listingCheck.rows.length !== normalizedListingIds.length) {
+      return { error: 'One or more listing ids are not in this client account.' };
+    }
+  }
+
+  await pool.query('DELETE FROM manager_property_assignments WHERE manager_membership_id = $1', [managerMembershipId]);
+  await pool.query('DELETE FROM manager_listing_assignments WHERE manager_membership_id = $1', [managerMembershipId]);
+
+  for (const propertyId of normalizedPropertyIds) {
+    await pool.query(
+      `
+        INSERT INTO manager_property_assignments (manager_membership_id, property_id)
+        VALUES ($1, $2)
+        ON CONFLICT (manager_membership_id, property_id) DO NOTHING
+      `,
+      [managerMembershipId, propertyId]
+    );
+  }
+
+  for (const listingId of normalizedListingIds) {
+    await pool.query(
+      `
+        INSERT INTO manager_listing_assignments (manager_membership_id, listing_id)
+        VALUES ($1, $2)
+        ON CONFLICT (manager_membership_id, listing_id) DO NOTHING
+      `,
+      [managerMembershipId, listingId]
+    );
+  }
+
+  return {
+    managerMembershipId,
+    propertyIds: normalizedPropertyIds,
+    listingIds: normalizedListingIds
+  };
+}
+
+async function getGuestsForClientAccount(clientAccountId) {
+  if (!usePostgres) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id,
+             client_account_id,
+             guest_user_id,
+             guest_email,
+             guest_phone,
+             source_type,
+             source_id,
+             first_seen_at,
+             last_seen_at,
+             created_at,
+             updated_at
+      FROM guest_relationships
+      WHERE client_account_id = $1
+      ORDER BY last_seen_at DESC, id DESC
+    `,
+    [clientAccountId]
+  );
+
+  return result.rows;
 }
 
 async function setUserStripeConnectState(userId, nextState) {
@@ -5551,6 +5877,107 @@ app.post('/api/access/context/switch', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to switch access context.' });
+  }
+});
+
+// GET /api/access/team — list team memberships for the active client account
+app.get('/api/access/team', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const team = await getTeamMembershipsForClientAccount(req.accessContext.activeClientAccountId);
+    return res.json({ team });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load client team.' });
+  }
+});
+
+// POST /api/access/team — add Manager/Staff membership to active client account
+app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
+  const email = String(req.body.email || '').trim();
+  const role = String(req.body.role || '').trim();
+  if (!email) {
+    return res.status(400).json({ error: 'Team member email is required.' });
+  }
+
+  try {
+    const result = await addClientMembershipByEmail(
+      req.accessContext.activeClientAccountId,
+      req.session.userId,
+      email,
+      role
+    );
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to add team member.' });
+  }
+});
+
+// DELETE /api/access/team/:membershipId — revoke a Manager/Staff membership
+app.delete('/api/access/team/:membershipId', requireScopedRole('Client'), async (req, res) => {
+  const membershipId = Number(req.params.membershipId);
+  if (!Number.isInteger(membershipId) || membershipId <= 0) {
+    return res.status(400).json({ error: 'Invalid membership id.' });
+  }
+
+  try {
+    const result = await revokeClientMembership(req.accessContext.activeClientAccountId, membershipId);
+    if (result.error) {
+      return res.status(404).json({ error: result.error });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to revoke membership.' });
+  }
+});
+
+// GET /api/access/manager-assignments — snapshot manager assignments in active client account
+app.get('/api/access/manager-assignments', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const snapshot = await getManagerAssignmentSnapshot(req.accessContext.activeClientAccountId);
+    return res.json(snapshot);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load manager assignments.' });
+  }
+});
+
+// PUT /api/access/manager-assignments/:managerMembershipId — set manager property/listing scope
+app.put('/api/access/manager-assignments/:managerMembershipId', requireScopedRole('Client'), async (req, res) => {
+  const managerMembershipId = Number(req.params.managerMembershipId);
+  if (!Number.isInteger(managerMembershipId) || managerMembershipId <= 0) {
+    return res.status(400).json({ error: 'Invalid manager membership id.' });
+  }
+
+  try {
+    const result = await replaceManagerAssignments(
+      req.accessContext.activeClientAccountId,
+      managerMembershipId,
+      req.body.propertyIds,
+      req.body.listingIds
+    );
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    return res.json({ assignment: result });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to update manager assignments.' });
+  }
+});
+
+// GET /api/access/guests — list guests for the active client account
+app.get('/api/access/guests', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const guests = await getGuestsForClientAccount(req.accessContext.activeClientAccountId);
+    return res.json({ guests });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load guest relationships.' });
   }
 });
 
