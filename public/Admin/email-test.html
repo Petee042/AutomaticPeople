@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Email Test - AutomaticPeople</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="top-bar">
+    <a class="top-brand-link" href="/Admin/index.html" aria-label="AutomaticPeople admin home">
+      <img class="top-brand-logo" src="/images/Icon.jpg" alt="AutomaticPeople logo" />
+    </a>
+    <button id="adminLogoutBtn" class="btn secondary">Log Out</button>
+  </header>
+
+  <main class="dashboard">
+    <div class="card-container wide admin-card">
+      <h2>Email Test Console</h2>
+      <p id="emailTesterMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <h3>Send Test Mail</h3>
+        <form id="emailTestForm" novalidate>
+          <div class="field">
+            <label for="fromEmail">From</label>
+            <input id="fromEmail" type="email" value="noreply@automaticpeople.com" readonly />
+            <p class="hint">Must be a verified sender under @automaticpeople.com in Postmark.</p>
+          </div>
+
+          <div class="field">
+            <label for="toEmail">To</label>
+            <input id="toEmail" type="email" maxlength="254" required />
+          </div>
+
+          <div class="field">
+            <label for="subject">Subject</label>
+            <input id="subject" type="text" maxlength="200" required />
+          </div>
+
+          <div class="field">
+            <label for="body">Body</label>
+            <textarea id="body" rows="10" required></textarea>
+          </div>
+
+          <button id="sendTestMailBtn" type="submit" class="btn primary">Send Test Mail</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="/Admin/email-test.js"></script>
+</body>
+</html>

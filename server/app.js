@@ -20,6 +20,9 @@ const KAYAK_API_BASE_URL = process.env.KAYAK_API_BASE_URL || 'https://sandbox-en
 const KAYAK_API_KEY = process.env.KAYAK_API_KEY || '';
 const STAY_API_KEY = process.env.STAY_API_KEY || '';
 const STAY_API_BASE_URL = 'https://api.stayapi.com';
+const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').trim();
+const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
+const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
@@ -1147,6 +1150,26 @@ function normaliseCleanerId(value) {
   }
   const id = Number(value);
   return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function isValidEmailAddress(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
+function getPostmarkErrorMessage(errorPayload, statusCode) {
+  const payload = errorPayload && typeof errorPayload === 'object' ? errorPayload : null;
+  const message = String((payload && payload.Message) || 'Postmark request failed.').trim();
+  const code = payload && payload.ErrorCode !== undefined && payload.ErrorCode !== null
+    ? String(payload.ErrorCode)
+    : '';
+  let text = message;
+  if (statusCode) {
+    text += ' (HTTP ' + String(statusCode) + ')';
+  }
+  if (code) {
+    text += ' [Postmark code ' + code + ']';
+  }
+  return text;
 }
 
 async function getCleanersForUser(userId) {
@@ -4819,6 +4842,72 @@ app.post('/api/admin/users/load', requireAdminAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load user data.' });
+  }
+});
+
+// GET /api/admin/email/test/config
+app.get('/api/admin/email/test/config', requireAdminAuth, (req, res) => {
+  return res.json({
+    from: POSTMARK_FROM,
+    configured: Boolean(POSTMARK_SERVER_TOKEN && POSTMARK_FROM),
+    messageStream: POSTMARK_MESSAGE_STREAM
+  });
+});
+
+// POST /api/admin/email/test/send
+app.post('/api/admin/email/test/send', requireAdminAuth, async (req, res) => {
+  if (!POSTMARK_SERVER_TOKEN) {
+    return res.status(500).json({ error: 'POSTMARK_SERVER_TOKEN is not configured on the server.' });
+  }
+
+  const to = String(req.body.to || '').trim();
+  const subject = String(req.body.subject || '').trim();
+  const body = String(req.body.body || '').trim();
+  const from = String(req.body.from || POSTMARK_FROM).trim().toLowerCase();
+
+  if (!isValidEmailAddress(to)) {
+    return res.status(400).json({ error: 'Enter a valid To email address.' });
+  }
+  if (!subject) {
+    return res.status(400).json({ error: 'Subject is required.' });
+  }
+  if (!body) {
+    return res.status(400).json({ error: 'Body is required.' });
+  }
+  if (!from || !isValidEmailAddress(from) || !from.endsWith('@automaticpeople.com')) {
+    return res.status(400).json({ error: 'From must be a valid @automaticpeople.com email address.' });
+  }
+
+  try {
+    const postmarkRes = await fetch('https://api.postmarkapp.com/email', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Postmark-Server-Token': POSTMARK_SERVER_TOKEN
+      },
+      body: JSON.stringify({
+        From: from,
+        To: to,
+        Subject: subject,
+        TextBody: body,
+        MessageStream: POSTMARK_MESSAGE_STREAM
+      })
+    });
+
+    const result = await postmarkRes.json().catch(() => ({}));
+    if (!postmarkRes.ok) {
+      return res.status(502).json({ error: getPostmarkErrorMessage(result, postmarkRes.status) });
+    }
+
+    return res.json({
+      ok: true,
+      message: 'Test email sent successfully.',
+      messageId: result && result.MessageID ? String(result.MessageID) : ''
+    });
+  } catch (err) {
+    console.error('Postmark test email failed:', err);
+    return res.status(500).json({ error: 'Failed to send test email.' });
   }
 });
 
