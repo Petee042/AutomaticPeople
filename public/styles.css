@@ -8,10 +8,6 @@ body {
   min-height: 100vh;
 }
 
-body.has-bottom-nav {
-  padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
-}
-
 /* ── Layout ───────────────────────────────────────────────── */
 .card-container {
   background: #ffffff;
@@ -261,42 +257,53 @@ textarea:focus {
   display: none;
 }
 
-.app-bottom-nav {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1200;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.45rem;
-  padding: 0.6rem 0.7rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
-  background: rgba(255, 255, 255, 0.98);
-  border-top: 1px solid #d8dfef;
-  box-shadow: 0 -6px 18px rgba(18, 33, 70, 0.08);
-  backdrop-filter: blur(6px);
+/* ── Dashboard tab bar ────────────────────────────────────── */
+.dashboard-tab-bar {
+  display: flex;
+  background: #ffffff;
+  border-bottom: 2px solid #e0e4f0;
+  box-shadow: 0 2px 6px rgba(18, 33, 70, 0.06);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
 
-.app-bottom-nav-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 40px;
-  padding: 0.35rem 0.45rem;
-  border: 1px solid #d3dbef;
-  border-radius: 8px;
-  text-decoration: none;
-  color: #30436f;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  background: #f6f8ff;
+.dashboard-tab-bar::-webkit-scrollbar {
+  display: none;
 }
 
-.app-bottom-nav-link.is-active {
-  background: #4361ee;
-  border-color: #3451d1;
-  color: #ffffff;
+.dashboard-tab-btn {
+  flex: 1;
+  min-width: 90px;
+  padding: 0.85rem 0.5rem;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  background: none;
+  color: #5a6378;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.18s, border-color 0.18s;
+}
+
+.dashboard-tab-btn:hover {
+  color: #4361ee;
+}
+
+.dashboard-tab-btn.active {
+  color: #4361ee;
+  border-bottom-color: #4361ee;
+}
+
+.dashboard-tab-btn:focus-visible {
+  outline: 2px solid #4361ee;
+  outline-offset: -2px;
+}
+
+.dashboard-tab-panel {
+  /* panels just use hidden class to toggle; no extra wrapper style needed */
 }
 
 /* ── Dashboard ────────────────────────────────────────────── */
@@ -1092,16 +1099,10 @@ textarea:focus {
     font-size: 0.6rem;
   }
 
-  .app-bottom-nav {
-    gap: 0.35rem;
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
-  }
-
-  .app-bottom-nav-link {
-    font-size: 0.72rem;
-    min-height: 38px;
-    padding: 0.3rem 0.35rem;
+  .dashboard-tab-btn {
+    font-size: 0.82rem;
+    padding: 0.75rem 0.4rem;
+    min-width: 72px;
   }
 }
 

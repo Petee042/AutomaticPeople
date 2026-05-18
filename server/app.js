@@ -6472,6 +6472,35 @@ app.get('/api/shared-resources', requireScopedRole('Staff'), async (req, res) =>
   }
 });
 
+// GET /api/shared-resources/all-reservations — consolidated reservations across all shared resources
+app.get('/api/shared-resources/all-reservations', requireScopedRole('Staff'), async (req, res) => {
+  try {
+    let resources = await getSharedResourcesForUser(req.accessContext.effectiveOwnerUserId);
+    if (hasManagerAssignmentScope(req)) {
+      resources = resources.filter((resource) => isSharedResourceAllowedByScope(req, resource));
+    }
+
+    const reservationsArrays = await Promise.all(
+      resources.map(async (resource) => {
+        const rows = await getSharedResourceReservationsByResourceId(resource.id);
+        return rows.map((row) => ({
+          ...row,
+          resource_short_description: resource.short_description || ''
+        }));
+      })
+    );
+
+    const reservations = reservationsArrays
+      .flat()
+      .sort((a, b) => new Date(a.requested_start_at).getTime() - new Date(b.requested_start_at).getTime());
+
+    return res.json({ reservations });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load all reservations.' });
+  }
+});
+
 // POST /api/shared-resources — create shared resource with short description
 app.post('/api/shared-resources', requireScopedRole('Manager'), async (req, res) => {
   try {

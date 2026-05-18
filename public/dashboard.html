@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Listings - AutomaticPeople</title>
+  <title>Dashboard - AutomaticPeople</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -14,332 +14,383 @@
     <button id="logoutBtn" class="btn secondary">Log Out</button>
   </header>
 
+  <nav class="dashboard-tab-bar" role="tablist" aria-label="Main sections">
+    <button class="dashboard-tab-btn active" data-panel="panel-dashboard" role="tab" aria-selected="true" aria-controls="panel-dashboard">Dashboard</button>
+    <button class="dashboard-tab-btn" data-panel="panel-config" role="tab" aria-selected="false" aria-controls="panel-config">Config</button>
+    <button class="dashboard-tab-btn" data-panel="panel-ops" role="tab" aria-selected="false" aria-controls="panel-ops">Ops</button>
+    <button class="dashboard-tab-btn" data-panel="panel-account" role="tab" aria-selected="false" aria-controls="panel-account">Account</button>
+  </nav>
+
   <main class="dashboard">
     <div class="card-container wide">
-      <h2>Your Dashboard</h2>
       <p id="dashboardMessage" class="message"></p>
 
-      <section class="listing-form-section">
-        <h3>Access Context</h3>
-        <p id="accessContextSummary" class="hint">Loading access context...</p>
-        <div class="calendar-source-row">
-          <label for="activeClientContextSelect">Active Client</label>
-          <select id="activeClientContextSelect"></select>
-        </div>
-        <div class="feed-actions">
-          <button type="button" id="switchClientContextBtn" class="btn secondary">Switch Context</button>
-        </div>
-      </section>
+      <!-- ── Dashboard tab ──────────────────────────────────── -->
+      <div id="panel-dashboard" class="dashboard-tab-panel" role="tabpanel">
 
-      <section class="listing-form-section">
-        <h3>Team Access</h3>
-        <div class="listings-block">
-          <table class="calendar-table" aria-label="Team members">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="teamTableBody">
-              <tr>
-                <td colspan="5">No team members found.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <h4>Invite Team Member</h4>
-        <form id="addTeamMemberForm" novalidate>
+        <section class="listing-form-section">
+          <h3>Access Context</h3>
+          <p id="accessContextSummary" class="hint">Loading access context...</p>
           <div class="calendar-source-row">
-            <label for="teamMemberEmail">Email</label>
-            <input id="teamMemberEmail" type="email" maxlength="160" required />
-          </div>
-          <div class="calendar-source-row">
-            <label for="teamMemberRole">Role</label>
-            <select id="teamMemberRole" required>
-              <option value="Manager">Manager</option>
-              <option value="Staff">Staff</option>
-            </select>
-          </div>
-          <button type="submit" class="btn primary calendar-btn">Add Team Member</button>
-        </form>
-      </section>
-
-      <section class="listing-form-section">
-        <h3>Manager Assignments</h3>
-        <div class="calendar-source-row">
-          <label for="managerAssignmentMembership">Manager</label>
-          <select id="managerAssignmentMembership"></select>
-        </div>
-        <div class="calendar-source-row">
-          <label>Property Scope</label>
-          <div id="managerPropertyScope" class="cleaning-listings">
-            <p class="cleaning-empty">No properties available.</p>
-          </div>
-        </div>
-        <div class="calendar-source-row">
-          <label>Listing Scope</label>
-          <div id="managerListingScope" class="cleaning-listings">
-            <p class="cleaning-empty">No listings available.</p>
-          </div>
-        </div>
-        <div class="feed-actions">
-          <button type="button" id="saveManagerAssignmentsBtn" class="btn secondary">Save Manager Assignments</button>
-        </div>
-      </section>
-
-      <section class="listing-form-section">
-        <h3>Guest Contacts</h3>
-        <div class="listings-block">
-          <table class="calendar-table" aria-label="Guest contacts">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Phone</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody id="guestsTableBody">
-              <tr>
-                <td colspan="4">No guest contacts found.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="listing-form-section">
-        <h3>Stripe Connect</h3>
-        <p id="stripeConnectStatus" class="hint">Checking Stripe connection status...</p>
-        <div class="feed-actions">
-          <button type="button" id="startStripeConnectBtn" class="btn secondary">Connect Stripe Account</button>
-        </div>
-      </section>
-
-      <section class="listing-form-section" id="propertiesSection">
-        <h3>Your Properties</h3>
-        <div class="listings-block">
-          <table class="calendar-table" aria-label="Your properties">
-            <thead>
-              <tr>
-                <th>Property</th>
-                <th>Manager</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="propertiesTableBody">
-              <tr>
-                <td colspan="3">No properties yet.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <form id="addPropertyForm" novalidate>
-          <div class="calendar-source-row">
-            <label for="propertyName">Property Name</label>
-            <input id="propertyName" type="text" maxlength="120" required />
-          </div>
-          <button type="submit" class="btn primary calendar-btn">Add Property</button>
-        </form>
-      </section>
-
-      <h2 id="listingsSection">Your Listings</h2>
-
-      <div class="listings-block">
-        <table class="calendar-table" aria-label="Your listings">
-          <thead>
-            <tr>
-              <th>Listing Name</th>
-              <th>Property</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="listingsTableBody">
-            <tr>
-              <td colspan="3">No listings yet.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="ics-export-block">
-        <p class="ics-export-label">Consolidated listing calendar export (.ics)</p>
-        <div class="ics-export-row">
-          <input id="consolidatedIcsExportUrl" type="text" class="ics-export-url" readonly />
-          <button type="button" id="copyConsolidatedIcsUrlBtn" class="btn secondary ics-copy-btn">Copy</button>
-        </div>
-        <p class="ics-export-help">Use this copied URL to subscribe to all configured listings in one calendar.</p>
-      </div>
-
-      <section class="listing-form-section">
-        <h3>Schedule</h3>
-        <form id="cleaningScheduleForm" novalidate>
-          <div class="cleaning-actions-row">
-            <label for="cleaningStartDate">Start date</label>
-            <input id="cleaningStartDate" type="date" required />
-            <label for="cleaningDays">Number of days</label>
-            <input id="cleaningDays" type="number" min="1" max="365" value="7" required />
-          </div>
-          <div id="cleaningListings" class="cleaning-listings" aria-label="Select listings for schedule">
-            <p class="cleaning-empty">No listings available.</p>
-          </div>
-          <div id="schedulePreview" class="schedule-preview" aria-live="polite">
-            <p class="cleaning-empty">Select listings to preview the schedule.</p>
-          </div>
-          <div class="schedule-refresh-row">
-            <button id="refreshScheduleBtn" type="button" class="btn secondary schedule-refresh-btn">Refresh Schedule</button>
-          </div>
-          <div class="schedule-email-row">
-            <label for="scheduleEmailTo">Email text schedule to</label>
-            <input id="scheduleEmailTo" type="email" placeholder="name@example.com" />
-            <button id="sendScheduleEmailBtn" type="button" class="btn secondary schedule-email-btn">Send</button>
-          </div>
-          <p id="scheduleEmailMessage" class="schedule-email-message" aria-live="polite"></p>
-          <div class="schedule-save-row">
-            <button id="saveScheduleChangesBtn" type="button" class="btn secondary schedule-save-btn">Save Changes</button>
-          </div>
-          <div class="schedule-download-row">
-            <div class="schedule-format-row">
-              <label for="cleaningFormat">Download format</label>
-              <select id="cleaningFormat">
-                <option value="txt">Text (.txt)</option>
-                <option value="csv">CSV (.csv)</option>
-              </select>
-            </div>
-            <button id="downloadCleaningScheduleBtn" type="submit" class="btn primary schedule-download-btn">Download Schedule</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="listing-form-section">
-        <h3>Add New Listing</h3>
-        <form id="addListingForm" novalidate>
-          <div class="calendar-source-row">
-            <label for="listingName">Listing Name</label>
-            <input id="listingName" type="text" maxlength="120" required />
-          </div>
-          <div class="calendar-source-row">
-            <label for="listingPropertyId">Property</label>
-            <select id="listingPropertyId" required></select>
-          </div>
-          <button type="submit" class="btn primary calendar-btn">Add Listing</button>
-        </form>
-      </section>
-
-      <section class="listing-form-section">
-        <h3>Feed Source Colours</h3>
-        <table class="calendar-table" aria-label="Feed source colours">
-          <thead>
-            <tr>
-              <th>Feed Source</th>
-              <th>Primary Colour</th>
-            </tr>
-          </thead>
-          <tbody id="feedSourcesTableBody">
-            <tr>
-              <td colspan="2">No feed sources configured yet.</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section class="listing-form-section">
-        <h3>Changeover Staff</h3>
-        <div class="listings-block">
-          <table class="calendar-table" aria-label="Configured changeover staff">
-            <thead>
-              <tr>
-                <th>First Name</th>
-                <th>Last Name</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="cleanersTableBody">
-              <tr>
-                <td colspan="3">No changeover staff configured yet.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <h4 id="cleanerFormTitle">Add Changeover Staff</h4>
-        <form id="cleanerForm" novalidate>
-          <input id="cleanerId" type="hidden" />
-          <div class="calendar-source-row cleaner-row">
-            <label for="cleanerFirstName">First Name</label>
-            <input id="cleanerFirstName" type="text" maxlength="120" required />
-          </div>
-          <div class="calendar-source-row cleaner-row">
-            <label for="cleanerLastName">Last Name</label>
-            <input id="cleanerLastName" type="text" maxlength="120" required />
-          </div>
-          <div class="calendar-source-row cleaner-row">
-            <label for="cleanerEmail">Email Address</label>
-            <input id="cleanerEmail" type="email" maxlength="160" required />
-          </div>
-          <div class="calendar-source-row cleaner-row">
-            <label for="cleanerTelephone">Telephone Number</label>
-            <input id="cleanerTelephone" type="text" maxlength="60" required />
-          </div>
-          <div class="calendar-source-row cleaner-row">
-            <label for="cleanerPassword">Password</label>
-            <input id="cleanerPassword" type="password" minlength="8" required />
+            <label for="activeClientContextSelect">Active Client</label>
+            <select id="activeClientContextSelect"></select>
           </div>
           <div class="feed-actions">
-            <button id="saveCleanerBtn" type="submit" class="btn primary calendar-btn">Add Changeover Staff</button>
-            <button id="cancelCleanerEditBtn" type="button" class="btn secondary hidden">Cancel Edit</button>
+            <button type="button" id="switchClientContextBtn" class="btn secondary">Switch Context</button>
           </div>
-        </form>
-      </section>
+        </section>
 
-      <section class="listing-form-section">
-        <div class="notification-log-header">
-          <h3>Notification Log</h3>
-          <button id="clearNotificationLogBtn" type="button" class="btn secondary">Clear Log</button>
-        </div>
-        <div id="notificationLog" class="notification-log" aria-live="polite">
-          <p class="cleaning-empty">No notifications.</p>
-        </div>
-      </section>
+        <section class="listing-form-section">
+          <h3>Team Access</h3>
+          <div class="listings-block">
+            <table class="calendar-table" aria-label="Team members">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="teamTableBody">
+                <tr>
+                  <td colspan="5">No team members found.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
-      <section class="listing-form-section" id="resourcesSection">
-        <h3>Bookable Shared Resources (Parking)</h3>
-        <div class="listings-block">
-          <table class="calendar-table" aria-label="Bookable shared resources">
+          <h4>Invite Team Member</h4>
+          <form id="addTeamMemberForm" novalidate>
+            <div class="calendar-source-row">
+              <label for="teamMemberEmail">Email</label>
+              <input id="teamMemberEmail" type="email" maxlength="160" required />
+            </div>
+            <div class="calendar-source-row">
+              <label for="teamMemberRole">Role</label>
+              <select id="teamMemberRole" required>
+                <option value="Manager">Manager</option>
+                <option value="Staff">Staff</option>
+              </select>
+            </div>
+            <button type="submit" class="btn primary calendar-btn">Add Team Member</button>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Manager Assignments</h3>
+          <div class="calendar-source-row">
+            <label for="managerAssignmentMembership">Manager</label>
+            <select id="managerAssignmentMembership"></select>
+          </div>
+          <div class="calendar-source-row">
+            <label>Property Scope</label>
+            <div id="managerPropertyScope" class="cleaning-listings">
+              <p class="cleaning-empty">No properties available.</p>
+            </div>
+          </div>
+          <div class="calendar-source-row">
+            <label>Listing Scope</label>
+            <div id="managerListingScope" class="cleaning-listings">
+              <p class="cleaning-empty">No listings available.</p>
+            </div>
+          </div>
+          <div class="feed-actions">
+            <button type="button" id="saveManagerAssignmentsBtn" class="btn secondary">Save Manager Assignments</button>
+          </div>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Guest Contacts</h3>
+          <div class="listings-block">
+            <table class="calendar-table" aria-label="Guest contacts">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody id="guestsTableBody">
+                <tr>
+                  <td colspan="4">No guest contacts found.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="listing-form-section">
+          <div class="notification-log-header">
+            <h3>Notification Log</h3>
+            <button id="clearNotificationLogBtn" type="button" class="btn secondary">Clear Log</button>
+          </div>
+          <div id="notificationLog" class="notification-log" aria-live="polite">
+            <p class="cleaning-empty">No notifications.</p>
+          </div>
+        </section>
+
+      </div><!-- /panel-dashboard -->
+
+      <!-- ── Config tab ─────────────────────────────────────── -->
+      <div id="panel-config" class="dashboard-tab-panel hidden" role="tabpanel">
+
+        <section class="listing-form-section">
+          <h3>Your Properties</h3>
+          <div class="listings-block">
+            <table class="calendar-table" aria-label="Your properties">
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th>Manager</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="propertiesTableBody">
+                <tr>
+                  <td colspan="3">No properties yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <form id="addPropertyForm" novalidate>
+            <div class="calendar-source-row">
+              <label for="propertyName">Property Name</label>
+              <input id="propertyName" type="text" maxlength="120" required />
+            </div>
+            <button type="submit" class="btn primary calendar-btn">Add Property</button>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Your Listings</h3>
+          <div class="listings-block">
+            <table class="calendar-table" aria-label="Your listings">
+              <thead>
+                <tr>
+                  <th>Listing Name</th>
+                  <th>Property</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="listingsTableBody">
+                <tr>
+                  <td colspan="3">No listings yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="ics-export-block">
+            <p class="ics-export-label">Consolidated listing calendar export (.ics)</p>
+            <div class="ics-export-row">
+              <input id="consolidatedIcsExportUrl" type="text" class="ics-export-url" readonly />
+              <button type="button" id="copyConsolidatedIcsUrlBtn" class="btn secondary ics-copy-btn">Copy</button>
+            </div>
+            <p class="ics-export-help">Use this copied URL to subscribe to all configured listings in one calendar.</p>
+          </div>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Add New Listing</h3>
+          <form id="addListingForm" novalidate>
+            <div class="calendar-source-row">
+              <label for="listingName">Listing Name</label>
+              <input id="listingName" type="text" maxlength="120" required />
+            </div>
+            <div class="calendar-source-row">
+              <label for="listingPropertyId">Property</label>
+              <select id="listingPropertyId" required></select>
+            </div>
+            <button type="submit" class="btn primary calendar-btn">Add Listing</button>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Feed Source Colours</h3>
+          <table class="calendar-table" aria-label="Feed source colours">
             <thead>
               <tr>
-                <th>Short Description</th>
-                <th>Property</th>
-                <th>Listing</th>
-                <th>Add/Edit</th>
+                <th>Feed Source</th>
+                <th>Primary Colour</th>
               </tr>
             </thead>
-            <tbody id="sharedResourcesTableBody">
+            <tbody id="feedSourcesTableBody">
               <tr>
-                <td colspan="4">No shared resources yet.</td>
+                <td colspan="2">No feed sources configured yet.</td>
               </tr>
             </tbody>
           </table>
-        </div>
+        </section>
 
-        <form id="addSharedResourceForm" novalidate>
-          <div class="calendar-source-row">
-            <label for="sharedResourceShortDescription">Short Description</label>
-            <input id="sharedResourceShortDescription" type="text" maxlength="160" required />
+        <section class="listing-form-section">
+          <h3>Changeover Staff</h3>
+          <div class="listings-block">
+            <table class="calendar-table" aria-label="Configured changeover staff">
+              <thead>
+                <tr>
+                  <th>First Name</th>
+                  <th>Last Name</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="cleanersTableBody">
+                <tr>
+                  <td colspan="3">No changeover staff configured yet.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <button type="submit" class="btn primary calendar-btn">Create New</button>
-        </form>
-      </section>
+
+          <h4 id="cleanerFormTitle">Add Changeover Staff</h4>
+          <form id="cleanerForm" novalidate>
+            <input id="cleanerId" type="hidden" />
+            <div class="calendar-source-row cleaner-row">
+              <label for="cleanerFirstName">First Name</label>
+              <input id="cleanerFirstName" type="text" maxlength="120" required />
+            </div>
+            <div class="calendar-source-row cleaner-row">
+              <label for="cleanerLastName">Last Name</label>
+              <input id="cleanerLastName" type="text" maxlength="120" required />
+            </div>
+            <div class="calendar-source-row cleaner-row">
+              <label for="cleanerEmail">Email Address</label>
+              <input id="cleanerEmail" type="email" maxlength="160" required />
+            </div>
+            <div class="calendar-source-row cleaner-row">
+              <label for="cleanerTelephone">Telephone Number</label>
+              <input id="cleanerTelephone" type="text" maxlength="60" required />
+            </div>
+            <div class="calendar-source-row cleaner-row">
+              <label for="cleanerPassword">Password</label>
+              <input id="cleanerPassword" type="password" minlength="8" required />
+            </div>
+            <div class="feed-actions">
+              <button id="saveCleanerBtn" type="submit" class="btn primary calendar-btn">Add Changeover Staff</button>
+              <button id="cancelCleanerEditBtn" type="button" class="btn secondary hidden">Cancel Edit</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Bookable Shared Resources (Parking)</h3>
+          <div class="listings-block">
+            <table class="calendar-table" aria-label="Bookable shared resources">
+              <thead>
+                <tr>
+                  <th>Short Description</th>
+                  <th>Property</th>
+                  <th>Listing</th>
+                  <th>Add/Edit</th>
+                </tr>
+              </thead>
+              <tbody id="sharedResourcesTableBody">
+                <tr>
+                  <td colspan="4">No shared resources yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <form id="addSharedResourceForm" novalidate>
+            <div class="calendar-source-row">
+              <label for="sharedResourceShortDescription">Short Description</label>
+              <input id="sharedResourceShortDescription" type="text" maxlength="160" required />
+            </div>
+            <button type="submit" class="btn primary calendar-btn">Create New</button>
+          </form>
+        </section>
+
+      </div><!-- /panel-config -->
+
+      <!-- ── Ops tab ────────────────────────────────────────── -->
+      <div id="panel-ops" class="dashboard-tab-panel hidden" role="tabpanel">
+
+        <section class="listing-form-section">
+          <h3>Schedule</h3>
+          <form id="cleaningScheduleForm" novalidate>
+            <div class="cleaning-actions-row">
+              <label for="cleaningStartDate">Start date</label>
+              <input id="cleaningStartDate" type="date" required />
+              <label for="cleaningDays">Number of days</label>
+              <input id="cleaningDays" type="number" min="1" max="365" value="7" required />
+            </div>
+            <div id="cleaningListings" class="cleaning-listings" aria-label="Select listings for schedule">
+              <p class="cleaning-empty">No listings available.</p>
+            </div>
+            <div id="schedulePreview" class="schedule-preview" aria-live="polite">
+              <p class="cleaning-empty">Select listings to preview the schedule.</p>
+            </div>
+            <div class="schedule-refresh-row">
+              <button id="refreshScheduleBtn" type="button" class="btn secondary schedule-refresh-btn">Refresh Schedule</button>
+            </div>
+            <div class="schedule-email-row">
+              <label for="scheduleEmailTo">Email text schedule to</label>
+              <input id="scheduleEmailTo" type="email" placeholder="name@example.com" />
+              <button id="sendScheduleEmailBtn" type="button" class="btn secondary schedule-email-btn">Send</button>
+            </div>
+            <p id="scheduleEmailMessage" class="schedule-email-message" aria-live="polite"></p>
+            <div class="schedule-save-row">
+              <button id="saveScheduleChangesBtn" type="button" class="btn secondary schedule-save-btn">Save Changes</button>
+            </div>
+            <div class="schedule-download-row">
+              <div class="schedule-format-row">
+                <label for="cleaningFormat">Download format</label>
+                <select id="cleaningFormat">
+                  <option value="txt">Text (.txt)</option>
+                  <option value="csv">CSV (.csv)</option>
+                </select>
+              </div>
+              <button id="downloadCleaningScheduleBtn" type="submit" class="btn primary schedule-download-btn">Download Schedule</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Reservations</h3>
+          <p id="allReservationsMessage" class="message"></p>
+          <div class="table-wrap">
+            <table class="calendar-table" aria-label="All shared resource reservations">
+              <thead>
+                <tr>
+                  <th>Resource</th>
+                  <th>Guest</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="allReservationsTableBody">
+                <tr>
+                  <td colspan="6">Loading reservations...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+      </div><!-- /panel-ops -->
+
+      <!-- ── Account tab ────────────────────────────────────── -->
+      <div id="panel-account" class="dashboard-tab-panel hidden" role="tabpanel">
+
+        <section class="listing-form-section">
+          <h3>Stripe Connect</h3>
+          <p id="stripeConnectStatus" class="hint">Checking Stripe connection status...</p>
+          <div class="feed-actions">
+            <button type="button" id="startStripeConnectBtn" class="btn secondary">Connect Stripe Account</button>
+          </div>
+        </section>
+
+      </div><!-- /panel-account -->
+
     </div>
   </main>
 
-  <script src="bottom-nav.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>

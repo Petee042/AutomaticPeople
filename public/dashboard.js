@@ -2165,3 +2165,124 @@ document.getElementById('copyConsolidatedIcsUrlBtn').addEventListener('click', a
     setMessage('Could not copy consolidated calendar URL.', true);
   }
 });
+
+// ── Dashboard tab switching ───────────────────────────────────
+
+(function initDashboardTabs() {
+  const STORAGE_KEY = 'dashboardActiveTab';
+  const tabBtns = Array.from(document.querySelectorAll('.dashboard-tab-btn'));
+  const panels = Array.from(document.querySelectorAll('.dashboard-tab-panel'));
+
+  function activateTab(panelId) {
+    tabBtns.forEach((btn) => {
+      const isTarget = btn.dataset.panel === panelId;
+      btn.classList.toggle('active', isTarget);
+      btn.setAttribute('aria-selected', String(isTarget));
+    });
+    panels.forEach((panel) => {
+      panel.classList.toggle('hidden', panel.id !== panelId);
+    });
+    try {
+      sessionStorage.setItem(STORAGE_KEY, panelId);
+    } catch {
+      // ignore
+    }
+    if (panelId === 'panel-ops') {
+      loadAllReservations();
+    }
+  }
+
+  tabBtns.forEach((btn) => {
+    btn.addEventListener('click', () => activateTab(btn.dataset.panel));
+  });
+
+  // restore last tab or default to panel-dashboard
+  let initial = 'panel-dashboard';
+  try {
+    const saved = sessionStorage.getItem(STORAGE_KEY);
+    if (saved && document.getElementById(saved)) {
+      initial = saved;
+    }
+  } catch {
+    // ignore
+  }
+  activateTab(initial);
+})();
+
+// ── Consolidated reservations (Ops tab) ──────────────────────
+
+async function loadAllReservations() {
+  const tbody = document.getElementById('allReservationsTableBody');
+  const msgEl = document.getElementById('allReservationsMessage');
+  if (!tbody) return;
+
+  tbody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+  if (msgEl) {
+    msgEl.textContent = '';
+    msgEl.className = 'message';
+  }
+
+  try {
+    const res = await fetch('/api/shared-resources/all-reservations');
+    if (res.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+    if (res.status === 403) {
+      tbody.innerHTML = '<tr><td colspan="6">Access restricted.</td></tr>';
+      return;
+    }
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to load reservations.');
+    }
+
+    const reservations = Array.isArray(data.reservations) ? data.reservations : [];
+    if (!reservations.length) {
+      tbody.innerHTML = '<tr><td colspan="6">No reservations found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    reservations.forEach((row) => {
+      const tr = document.createElement('tr');
+
+      const resourceCell = document.createElement('td');
+      resourceCell.textContent = row.resource_short_description || ('Resource #' + row.shared_resource_id);
+
+      const guestCell = document.createElement('td');
+      guestCell.textContent = ((row.first_name || '') + ' ' + (row.family_name || '')).trim() || row.email_address || '—';
+
+      const startCell = document.createElement('td');
+      startCell.textContent = row.requested_start_at ? new Date(row.requested_start_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—';
+
+      const endCell = document.createElement('td');
+      endCell.textContent = row.requested_end_at ? new Date(row.requested_end_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—';
+
+      const statusCell = document.createElement('td');
+      statusCell.textContent = row.status || '—';
+
+      const actionCell = document.createElement('td');
+      const editLink = document.createElement('a');
+      editLink.href = '/shared-resource.html?id=' + encodeURIComponent(row.shared_resource_id);
+      editLink.className = 'btn secondary';
+      editLink.textContent = 'View Resource';
+      actionCell.appendChild(editLink);
+
+      tr.appendChild(resourceCell);
+      tr.appendChild(guestCell);
+      tr.appendChild(startCell);
+      tr.appendChild(endCell);
+      tr.appendChild(statusCell);
+      tr.appendChild(actionCell);
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    if (msgEl) {
+      msgEl.textContent = err.message || 'Failed to load reservations.';
+      msgEl.className = 'message error';
+    }
+    tbody.innerHTML = '<tr><td colspan="6">—</td></tr>';
+  }
+}
