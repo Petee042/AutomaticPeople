@@ -653,6 +653,127 @@ async function initializeUserStore() {
     WHERE payment_intent_id IS NOT NULL
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_accounts (
+      id BIGSERIAL PRIMARY KEY,
+      created_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_memberships (
+      id BIGSERIAL PRIMARY KEY,
+      client_account_id BIGINT NOT NULL REFERENCES client_accounts(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      invited_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (client_account_id, user_id, role)
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_memberships
+    DROP CONSTRAINT IF EXISTS client_memberships_role_check
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_memberships
+    ADD CONSTRAINT client_memberships_role_check CHECK (role IN ('Client', 'Manager', 'Staff', 'Guest'))
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_memberships
+    DROP CONSTRAINT IF EXISTS client_memberships_status_check
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_memberships
+    ADD CONSTRAINT client_memberships_status_check CHECK (status IN ('active', 'inactive', 'invited', 'revoked'))
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_client_memberships_user
+    ON client_memberships (user_id)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS manager_property_assignments (
+      id BIGSERIAL PRIMARY KEY,
+      manager_membership_id BIGINT NOT NULL REFERENCES client_memberships(id) ON DELETE CASCADE,
+      property_id BIGINT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (manager_membership_id, property_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS manager_listing_assignments (
+      id BIGSERIAL PRIMARY KEY,
+      manager_membership_id BIGINT NOT NULL REFERENCES client_memberships(id) ON DELETE CASCADE,
+      listing_id BIGINT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (manager_membership_id, listing_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS guest_relationships (
+      id BIGSERIAL PRIMARY KEY,
+      client_account_id BIGINT NOT NULL REFERENCES client_accounts(id) ON DELETE CASCADE,
+      guest_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      guest_email TEXT NOT NULL DEFAULT '',
+      guest_phone TEXT NOT NULL DEFAULT '',
+      source_type TEXT NOT NULL DEFAULT 'reservation',
+      source_id TEXT,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE properties
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE shared_resources
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE shared_resource_reservations
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE booked_in_changes
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE feed_source_colors
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE cleaners
+    ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
+  `);
+
   await migrateUsersFromFile();
 
   await pool.query(`
@@ -671,6 +792,168 @@ async function initializeUserStore() {
     WHERE l.user_id = p.user_id
       AND l.property_id IS NULL
       AND LOWER(p.name) = 'default'
+  `);
+
+  await pool.query(`
+    INSERT INTO client_accounts (created_by_user_id, display_name)
+    SELECT u.id,
+           COALESCE(NULLIF(TRIM(u.username), ''), ('User ' || u.id::text)) || ' Client Account'
+    FROM users u
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM client_memberships cm
+      WHERE cm.user_id = u.id
+        AND cm.role = 'Client'
+        AND cm.status = 'active'
+    )
+  `);
+
+  await pool.query(`
+    INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+    SELECT ca.id, ca.created_by_user_id, 'Client', 'active', ca.created_by_user_id
+    FROM client_accounts ca
+    WHERE ca.created_by_user_id IS NOT NULL
+    ON CONFLICT (client_account_id, user_id, role) DO NOTHING
+  `);
+
+  await pool.query(`
+    UPDATE properties p
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT p2.id AS row_id, cm.client_account_id
+      FROM properties p2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = p2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE p2.client_account_id IS NULL
+    ) lookup
+    WHERE p.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE listings l
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT l2.id AS row_id, cm.client_account_id
+      FROM listings l2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = l2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE l2.client_account_id IS NULL
+    ) lookup
+    WHERE l.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE shared_resources r
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT r2.id AS row_id, cm.client_account_id
+      FROM shared_resources r2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = r2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE r2.client_account_id IS NULL
+    ) lookup
+    WHERE r.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE shared_resource_reservations rr
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT rr2.id AS row_id, cm.client_account_id
+      FROM shared_resource_reservations rr2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = rr2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE rr2.client_account_id IS NULL
+    ) lookup
+    WHERE rr.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE booked_in_changes bic
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT bic2.id AS row_id, cm.client_account_id
+      FROM booked_in_changes bic2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = bic2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE bic2.client_account_id IS NULL
+    ) lookup
+    WHERE bic.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE feed_source_colors fsc
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT fsc2.id AS row_id, cm.client_account_id
+      FROM feed_source_colors fsc2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = fsc2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE fsc2.client_account_id IS NULL
+    ) lookup
+    WHERE fsc.id = lookup.row_id
+  `);
+
+  await pool.query(`
+    UPDATE cleaners c
+    SET client_account_id = lookup.client_account_id
+    FROM (
+      SELECT c2.id AS row_id, cm.client_account_id
+      FROM cleaners c2
+      JOIN LATERAL (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = c2.user_id
+          AND role = 'Client'
+          AND status = 'active'
+        ORDER BY id ASC
+        LIMIT 1
+      ) cm ON TRUE
+      WHERE c2.client_account_id IS NULL
+    ) lookup
+    WHERE c.id = lookup.row_id
   `);
 }
 
@@ -744,6 +1027,7 @@ async function createUser(username, email, passwordHash) {
     users.push(user);
     writeUsersToFile(users);
     await ensureDefaultPropertyForUser(user.id);
+    await ensureClientAccountForUser(user.id, user.username);
     return user;
   }
 
@@ -760,6 +1044,7 @@ async function createUser(username, email, passwordHash) {
   );
 
   await ensureDefaultPropertyForUser(result.rows[0].id);
+  await ensureClientAccountForUser(result.rows[0].id, result.rows[0].username);
   return result.rows[0];
 }
 
@@ -1495,6 +1780,141 @@ async function getUserById(userId) {
     [userId]
   );
   return result.rows[0] || null;
+}
+
+async function ensureClientAccountForUser(userId, displayName) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+
+  if (!usePostgres) {
+    return {
+      client_account_id: id,
+      role: 'Client',
+      status: 'active',
+      display_name: String(displayName || ('User ' + id)) + ' Client Account'
+    };
+  }
+
+  const existingMembership = await pool.query(
+    `
+      SELECT cm.id, cm.client_account_id, cm.role, cm.status, ca.display_name
+      FROM client_memberships cm
+      JOIN client_accounts ca ON ca.id = cm.client_account_id
+      WHERE cm.user_id = $1 AND cm.role = 'Client' AND cm.status = 'active'
+      ORDER BY cm.id ASC
+      LIMIT 1
+    `,
+    [id]
+  );
+  if (existingMembership.rows[0]) {
+    return existingMembership.rows[0];
+  }
+
+  const accountResult = await pool.query(
+    `
+      INSERT INTO client_accounts (created_by_user_id, display_name)
+      VALUES ($1, $2)
+      RETURNING id, display_name
+    `,
+    [id, (String(displayName || ('User ' + id)).trim() || ('User ' + id)) + ' Client Account']
+  );
+
+  const account = accountResult.rows[0];
+  const membershipResult = await pool.query(
+    `
+      INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+      VALUES ($1, $2, 'Client', 'active', $2)
+      ON CONFLICT (client_account_id, user_id, role)
+      DO UPDATE SET status = EXCLUDED.status, updated_at = CURRENT_TIMESTAMP
+      RETURNING id, client_account_id, role, status
+    `,
+    [account.id, id]
+  );
+
+  return {
+    ...membershipResult.rows[0],
+    display_name: account.display_name
+  };
+}
+
+async function getAccessMembershipsForUser(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return [];
+  }
+
+  if (!usePostgres) {
+    return [{
+      membership_id: id,
+      client_account_id: id,
+      client_display_name: 'Default Client Account',
+      role: 'Client',
+      status: 'active'
+    }];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT cm.id AS membership_id,
+             cm.client_account_id,
+             ca.display_name AS client_display_name,
+             cm.role,
+             cm.status
+      FROM client_memberships cm
+      JOIN client_accounts ca ON ca.id = cm.client_account_id
+      WHERE cm.user_id = $1
+        AND cm.status IN ('active', 'invited')
+      ORDER BY ca.display_name ASC, cm.role ASC, cm.id ASC
+    `,
+    [id]
+  );
+
+  return result.rows;
+}
+
+function chooseAccessContextForUser(memberships, requestedClientAccountId) {
+  const list = Array.isArray(memberships) ? memberships : [];
+  if (!list.length) {
+    return null;
+  }
+
+  const requested = Number(requestedClientAccountId);
+  if (Number.isInteger(requested) && requested > 0) {
+    const exact = list.find((entry) => Number(entry.client_account_id) === requested);
+    if (exact) {
+      return exact;
+    }
+  }
+
+  const rolePriority = { Client: 1, Manager: 2, Staff: 3, Guest: 4 };
+  const sorted = list.slice().sort((a, b) => {
+    const roleDelta = (rolePriority[a.role] || 99) - (rolePriority[b.role] || 99);
+    if (roleDelta !== 0) return roleDelta;
+    return Number(a.client_account_id) - Number(b.client_account_id);
+  });
+
+  return sorted[0] || null;
+}
+
+async function getOrCreateAccessContextForUser(userId, requestedClientAccountId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { memberships: [], active: null };
+  }
+
+  let memberships = await getAccessMembershipsForUser(id);
+  if (!memberships.length) {
+    const user = await getUserById(id);
+    await ensureClientAccountForUser(id, user && user.username ? user.username : ('User ' + id));
+    memberships = await getAccessMembershipsForUser(id);
+  }
+
+  return {
+    memberships,
+    active: chooseAccessContextForUser(memberships, requestedClientAccountId)
+  };
 }
 
 async function setUserStripeConnectState(userId, nextState) {
@@ -5014,6 +5434,52 @@ app.post('/api/admin/kayak/request', requireAdminAuth, async (req, res) => {
   }
 });
 
+// GET /api/access/context — memberships and active client context for current user
+app.get('/api/access/context', requireAuth, async (req, res) => {
+  try {
+    const context = await getOrCreateAccessContextForUser(req.session.userId, req.session.activeClientAccountId);
+    const active = context.active || null;
+    if (active) {
+      req.session.activeClientAccountId = Number(active.client_account_id);
+    }
+
+    return res.json({
+      activeClientAccountId: active ? Number(active.client_account_id) : null,
+      activeRole: active ? String(active.role || '') : '',
+      memberships: context.memberships || []
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load access context.' });
+  }
+});
+
+// POST /api/access/context/switch — switch active client context for current user
+app.post('/api/access/context/switch', requireAuth, async (req, res) => {
+  const nextClientAccountId = Number(req.body.clientAccountId);
+  if (!Number.isInteger(nextClientAccountId) || nextClientAccountId <= 0) {
+    return res.status(400).json({ error: 'A valid client account id is required.' });
+  }
+
+  try {
+    const context = await getOrCreateAccessContextForUser(req.session.userId, nextClientAccountId);
+    const active = context.active || null;
+    if (!active || Number(active.client_account_id) !== nextClientAccountId) {
+      return res.status(403).json({ error: 'You do not have access to this client account.' });
+    }
+
+    req.session.activeClientAccountId = Number(active.client_account_id);
+    return res.json({
+      activeClientAccountId: Number(active.client_account_id),
+      activeRole: String(active.role || ''),
+      memberships: context.memberships || []
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to switch access context.' });
+  }
+});
+
 // GET /api/me — return current user info (requires auth)
 app.get('/api/me', requireAuth, async (req, res) => {
   try {
@@ -5022,11 +5488,22 @@ app.get('/api/me', requireAuth, async (req, res) => {
       return res.status(401).json({ error: 'Unauthorised' });
     }
 
+    const context = await getOrCreateAccessContextForUser(req.session.userId, req.session.activeClientAccountId);
+    const active = context.active || null;
+    if (active) {
+      req.session.activeClientAccountId = Number(active.client_account_id);
+    }
+
     return res.json({
       username: user.username || req.session.username,
       email: user.email || req.session.email,
       consolidated_ics_token: buildConsolidatedIcsToken(req.session.userId),
-      stripeConnect: formatStripeConnectStatus(user)
+      stripeConnect: formatStripeConnectStatus(user),
+      accessContext: {
+        activeClientAccountId: active ? Number(active.client_account_id) : null,
+        activeRole: active ? String(active.role || '') : '',
+        memberships: context.memberships || []
+      }
     });
   } catch (err) {
     console.error(err);
