@@ -2455,6 +2455,81 @@ async function setClientTeamRolesForUser(clientAccountId, invitedByUserId, targe
   };
 }
 
+async function removeTeamMemberFromClientScope(clientAccountId, targetUserId) {
+  if (!usePostgres) {
+    return { error: 'Membership management requires database mode.' };
+  }
+
+  const userId = Number(targetUserId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return { error: 'Invalid user id.' };
+  }
+
+  const user = await getUserById(userId);
+  if (!user) {
+    return { error: 'Site user not found.' };
+  }
+
+  const revokeResult = await pool.query(
+    `
+      UPDATE client_memberships
+      SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+      WHERE client_account_id = $1
+        AND user_id = $2
+        AND role IN ('Manager', 'Staff')
+        AND status IN ('active', 'invited')
+      RETURNING id, role
+    `,
+    [Number(clientAccountId), userId]
+  );
+
+  if (!revokeResult.rows.length) {
+    return { error: 'This site user is not a team member in the current client scope.' };
+  }
+
+  const revokedManagerMembershipIds = revokeResult.rows
+    .filter((row) => row.role === 'Manager')
+    .map((row) => Number(row.id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (revokedManagerMembershipIds.length) {
+    await pool.query(
+      'DELETE FROM manager_property_assignments WHERE manager_membership_id = ANY($1::bigint[])',
+      [revokedManagerMembershipIds]
+    );
+    await pool.query(
+      'DELETE FROM manager_listing_assignments WHERE manager_membership_id = ANY($1::bigint[])',
+      [revokedManagerMembershipIds]
+    );
+  }
+
+  const remainingMemberships = await pool.query(
+    `
+      SELECT id
+      FROM client_memberships
+      WHERE user_id = $1
+        AND status IN ('active', 'invited')
+        AND (
+          role = 'Client'
+          OR (role IN ('Manager', 'Staff') AND client_account_id <> $2)
+        )
+      LIMIT 1
+    `,
+    [userId, Number(clientAccountId)]
+  );
+
+  let deletedFromSite = false;
+  if (!remainingMemberships.rows.length) {
+    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    deletedFromSite = true;
+  }
+
+  return {
+    removedRoles: revokeResult.rows.map((row) => row.role),
+    deletedFromSite
+  };
+}
+
 async function updateUserInviteProfileIfMissing(userId, input) {
   if (!usePostgres) {
     return;
@@ -6135,7 +6210,23 @@ app.post('/api/signup', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    await createUser(normalisedUsername, normalisedEmail, passwordHash);
+    const createdUser = await createUser(normalisedUsername, normalisedEmail, passwordHash);
+
+    // New client signups are also initialized as Manager + Staff in their own client account.
+    if (usePostgres && createdUser && Number(createdUser.id) > 0) {
+      const context = await getOrCreateAccessContextForUser(createdUser.id, null);
+      const ownClientMembership = (context.memberships || []).find((membership) =>
+        membership.role === 'Client' && membership.status === 'active'
+      );
+      const ownClientAccountId = ownClientMembership
+        ? Number(ownClientMembership.client_account_id)
+        : (context.active ? Number(context.active.client_account_id) : null);
+
+      if (Number.isInteger(ownClientAccountId) && ownClientAccountId > 0) {
+        await setClientTeamRolesForUser(ownClientAccountId, createdUser.id, createdUser.id, ['Manager', 'Staff']);
+      }
+    }
+
     return res.status(201).json({ message: 'Account created. You can now log in.' });
   } catch (err) {
     console.error(err);
@@ -6585,6 +6676,32 @@ app.put('/api/access/team/:userId', requireScopedRole('Client'), async (req, res
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to update team member roles.' });
+  }
+});
+
+// DELETE /api/access/team/:userId — remove site user from current client team and delete site user if no memberships remain
+app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id.' });
+  }
+
+  if (Number(req.session.userId) === userId) {
+    return res.status(400).json({ error: 'You cannot delete your own account from the team.' });
+  }
+
+  try {
+    const result = await removeTeamMemberFromClientScope(
+      req.accessContext.activeClientAccountId,
+      userId
+    );
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete team member.' });
   }
 });
 

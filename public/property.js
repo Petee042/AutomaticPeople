@@ -121,8 +121,6 @@ async function loadProperty() {
   document.getElementById('propertyPublicId').value = formatEntityId(property.id);
   document.getElementById('propertyName').value = property.name || '';
   document.getElementById('postalAddress').value = property.postal_address || '';
-  document.getElementById('managerName').value = property.manager_name || '';
-  document.getElementById('managerEmail').value = property.manager_email || '';
   document.getElementById('deletePropertyBtn').disabled = !canEditProperty || property.is_default === true;
 
   if (currentAccessRole === 'Manager') {
@@ -298,8 +296,6 @@ document.getElementById('propertyForm').addEventListener('submit', async (e) => 
   const button = e.target.querySelector('button[type="submit"]');
   const name = document.getElementById('propertyName').value.trim();
   const postalAddress = document.getElementById('postalAddress').value.trim();
-  const managerName = document.getElementById('managerName').value.trim();
-  const managerEmail = document.getElementById('managerEmail').value.trim();
 
   if (!name) {
     setPropertyMessage('Property name is required.', true);
@@ -311,7 +307,7 @@ document.getElementById('propertyForm').addEventListener('submit', async (e) => 
     const res = await fetch('/api/properties/' + propertyId, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, postalAddress, managerName, managerEmail })
+      body: JSON.stringify({ name, postalAddress })
     });
     const data = await res.json();
 

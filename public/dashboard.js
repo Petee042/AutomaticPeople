@@ -29,6 +29,7 @@ let currentManagerAssignments = {
   listingAssignments: []
 };
 let currentGuests = [];
+let currentEditingTeamUserId = null;
 
 function setScheduleEmailMessage(text, isError) {
   const el = document.getElementById('scheduleEmailMessage');
@@ -185,6 +186,7 @@ function renderTeamMembers(team) {
     cell.textContent = 'No team members found.';
     row.appendChild(cell);
     tbody.appendChild(row);
+    closeTeamMemberEditor();
     return;
   }
 
@@ -223,10 +225,13 @@ function renderTeamMembers(team) {
     cell.textContent = 'No team members found.';
     row.appendChild(cell);
     tbody.appendChild(row);
+    closeTeamMemberEditor();
     return;
   }
 
-  Array.from(groupedByUser.values()).forEach((member) => {
+  const groupedMembers = Array.from(groupedByUser.values());
+
+  groupedMembers.forEach((member) => {
     const row = document.createElement('tr');
 
     const nameCell = document.createElement('td');
@@ -239,30 +244,10 @@ function renderTeamMembers(team) {
     emailCell.textContent = member.email || '';
 
     const roleCell = document.createElement('td');
-    const rolesWrap = document.createElement('div');
-    rolesWrap.className = 'team-role-checkboxes';
-
-    const managerLabel = document.createElement('label');
-    managerLabel.className = 'team-role-option';
-    const managerBox = document.createElement('input');
-    managerBox.type = 'checkbox';
-    managerBox.checked = member.roles.has('Manager');
-    managerBox.disabled = !canManageTeam();
-    managerLabel.appendChild(managerBox);
-    managerLabel.appendChild(document.createTextNode(' Manager'));
-
-    const staffLabel = document.createElement('label');
-    staffLabel.className = 'team-role-option';
-    const staffBox = document.createElement('input');
-    staffBox.type = 'checkbox';
-    staffBox.checked = member.roles.has('Staff');
-    staffBox.disabled = !canManageTeam();
-    staffLabel.appendChild(staffBox);
-    staffLabel.appendChild(document.createTextNode(' Staff'));
-
-    rolesWrap.appendChild(managerLabel);
-    rolesWrap.appendChild(staffLabel);
-    roleCell.appendChild(rolesWrap);
+    const roleLabels = [];
+    if (member.roles.has('Manager')) roleLabels.push('Manager');
+    if (member.roles.has('Staff')) roleLabels.push('Staff');
+    roleCell.textContent = roleLabels.length ? roleLabels.join(' / ') : 'None';
 
     const statusCell = document.createElement('td');
     if (member.is_validated === false) {
@@ -274,28 +259,15 @@ function renderTeamMembers(team) {
     }
 
     const actionCell = document.createElement('td');
-    if (canManageTeam()) {
-      const updateBtn = document.createElement('button');
-      updateBtn.type = 'button';
-      updateBtn.className = 'btn secondary';
-      updateBtn.textContent = 'Update';
-      updateBtn.addEventListener('click', async () => {
-        updateBtn.disabled = true;
-        try {
-          const roles = [];
-          if (managerBox.checked) roles.push('Manager');
-          if (staffBox.checked) roles.push('Staff');
-          await updateTeamMemberRoles(member.user_id, roles);
-          setMessage('Team member roles updated.', false);
-          await fetchTeamMembers();
-          await fetchManagerAssignments();
-        } catch (err) {
-          setMessage(err.message || 'Failed to update team member roles.', true);
-        } finally {
-          updateBtn.disabled = false;
-        }
+    if (canManageTeam() || canViewTeam()) {
+      const actionBtn = document.createElement('button');
+      actionBtn.type = 'button';
+      actionBtn.className = 'btn secondary';
+      actionBtn.textContent = 'View/Update/Delete';
+      actionBtn.addEventListener('click', () => {
+        openTeamMemberEditor(member);
       });
-      actionCell.appendChild(updateBtn);
+      actionCell.appendChild(actionBtn);
     } else {
       actionCell.textContent = '-';
     }
@@ -307,6 +279,55 @@ function renderTeamMembers(team) {
     row.appendChild(actionCell);
     tbody.appendChild(row);
   });
+
+  if (currentEditingTeamUserId) {
+    const selected = groupedMembers.find((member) => Number(member.user_id) === Number(currentEditingTeamUserId)) || null;
+    if (selected) {
+      openTeamMemberEditor(selected);
+    } else {
+      closeTeamMemberEditor();
+    }
+  }
+}
+
+function openTeamMemberEditor(member) {
+  const panel = document.getElementById('teamMemberEditor');
+  if (!panel || !member) {
+    return;
+  }
+
+  const fullName = [member.first_name, member.family_name].filter(Boolean).join(' ').trim();
+  const usernameFallback = String(member.username || '').trim();
+  const canUseUsernameFallback = usernameFallback && !usernameFallback.includes('@') && !usernameFallback.toLowerCase().startsWith('staff-');
+
+  document.getElementById('editTeamMemberUserId').value = String(member.user_id || '');
+  document.getElementById('editTeamMemberName').value = fullName || (canUseUsernameFallback ? usernameFallback : 'Name not set');
+  document.getElementById('editTeamMemberEmail').value = member.email || '';
+  document.getElementById('editTeamMemberTelephone').value = member.telephone || '';
+
+  const managerBox = document.getElementById('editTeamMemberRoleManager');
+  const staffBox = document.getElementById('editTeamMemberRoleStaff');
+  managerBox.checked = member.roles.has('Manager');
+  staffBox.checked = member.roles.has('Staff');
+  managerBox.disabled = !canManageTeam();
+  staffBox.disabled = !canManageTeam();
+
+  const saveBtn = document.getElementById('saveTeamMemberEditorBtn');
+  const deleteBtn = document.getElementById('deleteTeamMemberBtn');
+  if (saveBtn) saveBtn.classList.toggle('hidden', !canManageTeam());
+  if (deleteBtn) deleteBtn.classList.toggle('hidden', !canManageTeam());
+
+  panel.classList.remove('hidden');
+  currentEditingTeamUserId = Number(member.user_id) || null;
+}
+
+function closeTeamMemberEditor() {
+  const panel = document.getElementById('teamMemberEditor');
+  if (!panel) {
+    return;
+  }
+  panel.classList.add('hidden');
+  currentEditingTeamUserId = null;
 }
 
 function renderGuests(guests) {
@@ -598,6 +619,29 @@ async function updateTeamMemberRoles(userId, roles) {
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.error || 'Failed to update team member roles.');
+  }
+
+  return data;
+}
+
+async function deleteTeamMember(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('Invalid user id.');
+  }
+
+  const response = await fetch('/api/access/team/' + encodeURIComponent(id), {
+    method: 'DELETE'
+  });
+
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to delete team member.');
   }
 
   return data;
@@ -1950,20 +1994,65 @@ document.getElementById('addTeamMemberForm').addEventListener('submit', async (e
   }
 });
 
-document.getElementById('managerAssignmentMembership').addEventListener('change', (event) => {
-  renderManagerScopeOptions(Number(event.target.value));
-});
+document.getElementById('saveTeamMemberEditorBtn').addEventListener('click', async () => {
+  const button = document.getElementById('saveTeamMemberEditorBtn');
+  const userId = Number(document.getElementById('editTeamMemberUserId').value);
+  const roles = [];
+  if (document.getElementById('editTeamMemberRoleManager').checked) roles.push('Manager');
+  if (document.getElementById('editTeamMemberRoleStaff').checked) roles.push('Staff');
 
-document.getElementById('saveManagerAssignmentsBtn').addEventListener('click', async () => {
-  const button = document.getElementById('saveManagerAssignmentsBtn');
+  if (!Number.isInteger(userId) || userId <= 0) {
+    setMessage('Select a valid team member first.', true);
+    return;
+  }
+
   button.disabled = true;
   try {
-    await saveManagerAssignments();
+    await updateTeamMemberRoles(userId, roles);
+    setMessage('Team member updated.', false);
+    await fetchTeamMembers();
+    await fetchManagerAssignments();
   } catch (err) {
-    setMessage(err.message || 'Failed to save manager assignments.', true);
+    setMessage(err.message || 'Failed to update team member.', true);
   } finally {
     button.disabled = false;
   }
+});
+
+document.getElementById('deleteTeamMemberBtn').addEventListener('click', async () => {
+  const button = document.getElementById('deleteTeamMemberBtn');
+  const userId = Number(document.getElementById('editTeamMemberUserId').value);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    setMessage('Select a valid team member first.', true);
+    return;
+  }
+
+  const confirmed = window.confirm('Delete this team member from this client scope? They will be removed from the site only if they have no other client relationships.');
+  if (!confirmed) {
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    const result = await deleteTeamMember(userId);
+    closeTeamMemberEditor();
+    if (result && result.deletedFromSite) {
+      setMessage('Team member deleted from this client and removed from the site.', false);
+    } else {
+      setMessage('Team member removed from this client scope.', false);
+    }
+    await fetchTeamMembers();
+    await fetchManagerAssignments();
+  } catch (err) {
+    setMessage(err.message || 'Failed to delete team member.', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('closeTeamMemberEditorBtn').addEventListener('click', () => {
+  closeTeamMemberEditor();
 });
 
 document.getElementById('logoutBtn').addEventListener('click', async () => {
@@ -2292,8 +2381,16 @@ document.getElementById('copyConsolidatedIcsUrlBtn').addEventListener('click', a
   // restore last tab or default to panel-dashboard
   let initial = 'panel-dashboard';
   try {
+    const requested = String(new URLSearchParams(window.location.search).get('tab') || '').trim();
+    if (requested && document.getElementById(requested)) {
+      initial = requested;
+    }
+  } catch {
+    // ignore
+  }
+  try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
-    if (saved && document.getElementById(saved)) {
+    if (initial === 'panel-dashboard' && saved && document.getElementById(saved)) {
       initial = saved;
     }
   } catch {

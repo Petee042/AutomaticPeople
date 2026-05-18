@@ -355,6 +355,35 @@ textarea:focus {
   outline-offset: -2px;
 }
 
+.dashboard-tab-link {
+  flex: 1;
+  min-width: 90px;
+  padding: 0.85rem 0.5rem;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  color: #5a6378;
+  text-decoration: none;
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 0.18s, border-color 0.18s, background 0.18s;
+}
+
+.dashboard-tab-link:hover {
+  color: #4361ee;
+  background: #f4f7ff;
+}
+
+.dashboard-tab-link.active {
+  color: #4361ee;
+  border-bottom-color: #4361ee;
+}
+
+.page-top-nav {
+  margin-bottom: 0;
+}
+
 .dashboard-tab-panel {
   /* panels just use hidden class to toggle; no extra wrapper style needed */
 }

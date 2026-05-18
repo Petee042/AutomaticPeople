@@ -33,7 +33,7 @@
         </section>
 
         <section class="listing-form-section">
-          <h3>Team Access</h3>
+          <h3>Team</h3>
           <div class="listings-block">
             <table class="calendar-table" aria-label="Team members">
               <thead>
@@ -84,28 +84,38 @@
             </fieldset>
             <button type="submit" class="btn primary calendar-btn">Add Team Member</button>
           </form>
-        </section>
 
-        <section class="listing-form-section">
-          <h3>Manager Assignments</h3>
-          <div class="calendar-source-row">
-            <label for="managerAssignmentMembership">Manager</label>
-            <select id="managerAssignmentMembership"></select>
-          </div>
-          <div class="calendar-source-row">
-            <label>Property Scope</label>
-            <div id="managerPropertyScope" class="cleaning-listings">
-              <p class="cleaning-empty">No properties available.</p>
+          <div id="teamMemberEditor" class="listing-form-section hidden" style="margin-top: 1.25rem;">
+            <h4>Edit Team Member</h4>
+            <div class="calendar-source-row">
+              <label for="editTeamMemberName">Name</label>
+              <input id="editTeamMemberName" type="text" readonly />
             </div>
-          </div>
-          <div class="calendar-source-row">
-            <label>Listing Scope</label>
-            <div id="managerListingScope" class="cleaning-listings">
-              <p class="cleaning-empty">No listings available.</p>
+            <div class="calendar-source-row">
+              <label for="editTeamMemberEmail">Email</label>
+              <input id="editTeamMemberEmail" type="text" readonly />
             </div>
-          </div>
-          <div class="feed-actions">
-            <button type="button" id="saveManagerAssignmentsBtn" class="btn secondary">Save Manager Assignments</button>
+            <div class="calendar-source-row">
+              <label for="editTeamMemberTelephone">Telephone</label>
+              <input id="editTeamMemberTelephone" type="text" readonly />
+            </div>
+            <fieldset class="team-role-fieldset">
+              <legend>Roles</legend>
+              <label class="team-role-option">
+                <input id="editTeamMemberRoleManager" type="checkbox" value="Manager" />
+                <span>Manager</span>
+              </label>
+              <label class="team-role-option">
+                <input id="editTeamMemberRoleStaff" type="checkbox" value="Staff" />
+                <span>Staff</span>
+              </label>
+            </fieldset>
+            <input id="editTeamMemberUserId" type="hidden" />
+            <div class="feed-actions">
+              <button type="button" id="saveTeamMemberEditorBtn" class="btn secondary">Save Team Member</button>
+              <button type="button" id="deleteTeamMemberBtn" class="btn secondary">Delete Team Member</button>
+              <button type="button" id="closeTeamMemberEditorBtn" class="btn secondary">Close</button>
+            </div>
           </div>
         </section>
 
@@ -235,7 +245,7 @@
         </section>
 
         <section class="listing-form-section">
-          <h3>Changeover Staff</h3>
+          <h3>The Team</h3>
           <div class="listings-block">
             <table class="calendar-table" aria-label="Configured changeover staff">
               <thead>

@@ -9,6 +9,12 @@
 <body class="logged-page">
   <div class="sticky-page-chrome">
     <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
       <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
     </div>
   </div>
@@ -36,14 +42,6 @@
           <div class="calendar-source-row property-textarea-row">
             <label for="postalAddress">Postal Address</label>
             <textarea id="postalAddress" rows="4" maxlength="600"></textarea>
-          </div>
-          <div class="calendar-source-row">
-            <label for="managerName">Manager Name</label>
-            <input id="managerName" type="text" maxlength="120" />
-          </div>
-          <div class="calendar-source-row">
-            <label for="managerEmail">Manager Email</label>
-            <input id="managerEmail" type="email" maxlength="160" />
           </div>
           <div class="feed-actions">
             <button type="submit" class="btn primary calendar-btn">Save Property</button>
