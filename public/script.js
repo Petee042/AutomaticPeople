@@ -121,7 +121,11 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
       setMessage('login-message', data.message, false);
       window.location.href = '/dashboard.html';
     } else {
-      setMessage('login-message', data.error, true);
+      if (data && data.code === 'ACCOUNT_NOT_VALIDATED') {
+        setMessage('login-message', 'Your account is not validated yet. Please open the validation email and click the link before logging in.', true);
+      } else {
+        setMessage('login-message', data.error, true);
+      }
     }
   } catch {
     setMessage('login-message', 'Network error. Please try again.', true);
