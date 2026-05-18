@@ -30,6 +30,7 @@ let currentManagerAssignments = {
 };
 let currentGuests = [];
 let currentEditingTeamUserId = null;
+let currentTeamMemberDeleteImpact = null;
 
 function setScheduleEmailMessage(text, isError) {
   const el = document.getElementById('scheduleEmailMessage');
@@ -625,13 +626,72 @@ async function updateTeamMemberRoles(userId, roles) {
 }
 
 async function deleteTeamMember(userId) {
+  }
+
+  async function fetchTeamMemberDeleteImpact(userId) {
+    const id = Number(userId);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error('Invalid user id.');
+    }
+
+    const response = await fetch('/api/access/team/' + encodeURIComponent(id) + '/delete-impact');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load delete impact.');
+    }
+
+    return data;
+  }
   const id = Number(userId);
   if (!Number.isInteger(id) || id <= 0) {
     throw new Error('Invalid user id.');
+
+    const impactEl = document.getElementById('teamMemberDeleteImpact');
+    currentTeamMemberDeleteImpact = null;
+    if (impactEl) {
+      if (!canManageTeam()) {
+        impactEl.textContent = 'Delete impact is available to Client role only.';
+      } else {
+        impactEl.textContent = 'Delete impact: loading...';
+      }
+    }
   }
 
   const response = await fetch('/api/access/team/' + encodeURIComponent(id), {
+
+    if (canManageTeam()) {
+      fetchTeamMemberDeleteImpact(member.user_id)
+        .then((impact) => {
+          if (Number(currentEditingTeamUserId) !== Number(member.user_id)) {
+            return;
+          }
+          currentTeamMemberDeleteImpact = impact;
+          if (!impactEl) {
+            return;
+          }
+          if (impact.deletedFromSite) {
+            impactEl.textContent = 'Delete impact: this will remove the user from this client and delete the site user account (no other client associations found).';
+          } else {
+            impactEl.textContent = 'Delete impact: this will remove the user from this client scope only (other client associations exist).';
+          }
+        })
+        .catch((err) => {
+          if (Number(currentEditingTeamUserId) !== Number(member.user_id)) {
+            return;
+          }
+          currentTeamMemberDeleteImpact = null;
+          if (impactEl) {
+            impactEl.textContent = 'Delete impact unavailable: ' + (err.message || 'Failed to load delete impact.');
+          }
+        });
+    }
     method: 'DELETE'
+    currentTeamMemberDeleteImpact = null;
   });
 
   if (response.status === 401) {
@@ -2029,6 +2089,21 @@ document.getElementById('deleteTeamMemberBtn').addEventListener('click', async (
   }
 
   const confirmed = window.confirm('Delete this team member from this client scope? They will be removed from the site only if they have no other client relationships.');
+  let impact = currentTeamMemberDeleteImpact;
+  if (!impact) {
+    try {
+      impact = await fetchTeamMemberDeleteImpact(userId);
+      currentTeamMemberDeleteImpact = impact;
+    } catch (err) {
+      setMessage(err.message || 'Failed to load delete impact.', true);
+      return;
+    }
+  }
+
+  const impactMessage = impact.deletedFromSite
+    ? 'This action will remove the user from this client and delete the site user account.'
+    : 'This action will remove the user from this client scope only.';
+  const confirmed = window.confirm(impactMessage + ' Continue?');
   if (!confirmed) {
     return;
   }

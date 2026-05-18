@@ -2530,6 +2530,59 @@ async function removeTeamMemberFromClientScope(clientAccountId, targetUserId) {
   };
 }
 
+async function getTeamMemberRemovalImpact(clientAccountId, targetUserId) {
+  if (!usePostgres) {
+    return { error: 'Membership management requires database mode.' };
+  }
+
+  const userId = Number(targetUserId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return { error: 'Invalid user id.' };
+  }
+
+  const user = await getUserById(userId);
+  if (!user) {
+    return { error: 'Site user not found.' };
+  }
+
+  const removableRolesResult = await pool.query(
+    `
+      SELECT role
+      FROM client_memberships
+      WHERE client_account_id = $1
+        AND user_id = $2
+        AND role IN ('Manager', 'Staff')
+        AND status IN ('active', 'invited')
+      ORDER BY role ASC
+    `,
+    [Number(clientAccountId), userId]
+  );
+
+  if (!removableRolesResult.rows.length) {
+    return { error: 'This site user is not a team member in the current client scope.' };
+  }
+
+  const remainingMemberships = await pool.query(
+    `
+      SELECT id
+      FROM client_memberships
+      WHERE user_id = $1
+        AND status IN ('active', 'invited')
+        AND (
+          role = 'Client'
+          OR (role IN ('Manager', 'Staff') AND client_account_id <> $2)
+        )
+      LIMIT 1
+    `,
+    [userId, Number(clientAccountId)]
+  );
+
+  return {
+    removedRoles: removableRolesResult.rows.map((row) => row.role),
+    deletedFromSite: !remainingMemberships.rows.length
+  };
+}
+
 async function updateUserInviteProfileIfMissing(userId, input) {
   if (!usePostgres) {
     return;
@@ -6702,6 +6755,32 @@ app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, 
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to delete team member.' });
+  }
+});
+
+// GET /api/access/team/:userId/delete-impact — preview whether deletion is scope-only or site-wide
+app.get('/api/access/team/:userId/delete-impact', requireScopedRole('Client'), async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id.' });
+  }
+
+  if (Number(req.session.userId) === userId) {
+    return res.status(400).json({ error: 'You cannot delete your own account from the team.' });
+  }
+
+  try {
+    const impact = await getTeamMemberRemovalImpact(
+      req.accessContext.activeClientAccountId,
+      userId
+    );
+    if (impact.error) {
+      return res.status(400).json({ error: impact.error });
+    }
+    return res.json(impact);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load delete impact.' });
   }
 });
 
