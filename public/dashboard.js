@@ -20,6 +20,14 @@ let schedulePreviewRequestId = 0;
 let currentScheduleRows = [];
 let currentScheduleErrors = [];
 let currentNotificationRows = [];
+let currentAccessContext = null;
+let currentTeamMembers = [];
+let currentManagerAssignments = {
+  managers: [],
+  propertyAssignments: [],
+  listingAssignments: []
+};
+let currentGuests = [];
 
 function setScheduleEmailMessage(text, isError) {
   const el = document.getElementById('scheduleEmailMessage');
@@ -51,6 +59,277 @@ function setStripeConnectStatus(text, isError) {
   }
   el.textContent = text || '';
   el.className = isError ? 'hint error' : 'hint';
+}
+
+function canManageTeam() {
+  return Boolean(currentAccessContext && currentAccessContext.activeRole === 'Client');
+}
+
+function canViewTeam() {
+  if (!currentAccessContext) return false;
+  return currentAccessContext.activeRole === 'Client' || currentAccessContext.activeRole === 'Manager';
+}
+
+function canManageAssignments() {
+  return Boolean(currentAccessContext && currentAccessContext.activeRole === 'Client');
+}
+
+function canViewAssignments() {
+  if (!currentAccessContext) return false;
+  return currentAccessContext.activeRole === 'Client' || currentAccessContext.activeRole === 'Manager';
+}
+
+function canViewGuests() {
+  if (!currentAccessContext) return false;
+  return currentAccessContext.activeRole === 'Client' || currentAccessContext.activeRole === 'Manager';
+}
+
+function applyAccessRoleVisibility() {
+  const addTeamForm = document.getElementById('addTeamMemberForm');
+  const saveAssignmentsBtn = document.getElementById('saveManagerAssignmentsBtn');
+
+  if (addTeamForm) {
+    addTeamForm.classList.toggle('hidden', !canManageTeam());
+  }
+  if (saveAssignmentsBtn) {
+    saveAssignmentsBtn.classList.toggle('hidden', !canManageAssignments());
+  }
+}
+
+function renderAccessContext(context) {
+  currentAccessContext = context || null;
+
+  const summary = document.getElementById('accessContextSummary');
+  const select = document.getElementById('activeClientContextSelect');
+  if (!summary || !select) {
+    return;
+  }
+
+  const memberships = (context && Array.isArray(context.memberships)) ? context.memberships : [];
+  const activeClientAccountId = context ? Number(context.activeClientAccountId) : null;
+  const activeRole = context ? String(context.activeRole || '') : '';
+
+  select.innerHTML = '';
+  memberships.forEach((membership) => {
+    const option = document.createElement('option');
+    option.value = String(membership.client_account_id);
+    option.textContent = (membership.account_name || ('Client #' + membership.client_account_id)) + ' (' + membership.role + ')';
+    if (Number(membership.client_account_id) === activeClientAccountId) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  });
+
+  if (!memberships.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No memberships found';
+    select.appendChild(option);
+  }
+
+  const activeMembership = memberships.find((membership) => Number(membership.client_account_id) === activeClientAccountId) || null;
+  summary.textContent = activeMembership
+    ? ('Active: ' + (activeMembership.account_name || ('Client #' + activeClientAccountId)) + ' as ' + (activeRole || activeMembership.role))
+    : 'No active client access context.';
+
+  applyAccessRoleVisibility();
+}
+
+function renderTeamMembers(team) {
+  currentTeamMembers = Array.isArray(team) ? team : [];
+
+  const tbody = document.getElementById('teamTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!currentTeamMembers.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 5;
+    cell.textContent = 'No team members found.';
+    row.appendChild(cell);
+    tbody.appendChild(row);
+    return;
+  }
+
+  currentTeamMembers.forEach((member) => {
+    const row = document.createElement('tr');
+
+    const nameCell = document.createElement('td');
+    nameCell.textContent = member.username || 'Unknown';
+
+    const emailCell = document.createElement('td');
+    emailCell.textContent = member.email || '';
+
+    const roleCell = document.createElement('td');
+    roleCell.textContent = member.role || '';
+
+    const statusCell = document.createElement('td');
+    statusCell.textContent = member.status || '';
+
+    const actionCell = document.createElement('td');
+    if (canManageTeam() && (member.role === 'Manager' || member.role === 'Staff') && member.status === 'active') {
+      const revokeBtn = document.createElement('button');
+      revokeBtn.type = 'button';
+      revokeBtn.className = 'btn secondary';
+      revokeBtn.textContent = 'Revoke';
+      revokeBtn.addEventListener('click', () => {
+        revokeTeamMembership(member.id);
+      });
+      actionCell.appendChild(revokeBtn);
+    } else {
+      actionCell.textContent = '-';
+    }
+
+    row.appendChild(nameCell);
+    row.appendChild(emailCell);
+    row.appendChild(roleCell);
+    row.appendChild(statusCell);
+    row.appendChild(actionCell);
+    tbody.appendChild(row);
+  });
+}
+
+function renderGuests(guests) {
+  currentGuests = Array.isArray(guests) ? guests : [];
+  const tbody = document.getElementById('guestsTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!currentGuests.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 4;
+    cell.textContent = 'No guest contacts found.';
+    row.appendChild(cell);
+    tbody.appendChild(row);
+    return;
+  }
+
+  currentGuests.forEach((guest) => {
+    const row = document.createElement('tr');
+
+    const nameCell = document.createElement('td');
+    nameCell.textContent = guest.guest_email || guest.guest_phone || 'Guest';
+
+    const emailCell = document.createElement('td');
+    emailCell.textContent = guest.guest_email || '';
+
+    const phoneCell = document.createElement('td');
+    phoneCell.textContent = guest.guest_phone || '';
+
+    const sourceCell = document.createElement('td');
+    sourceCell.textContent = guest.source_type || '';
+
+    row.appendChild(nameCell);
+    row.appendChild(emailCell);
+    row.appendChild(phoneCell);
+    row.appendChild(sourceCell);
+    tbody.appendChild(row);
+  });
+}
+
+function renderManagerAssignmentSelectors(snapshot) {
+  currentManagerAssignments = snapshot || { managers: [], propertyAssignments: [], listingAssignments: [] };
+
+  const managerSelect = document.getElementById('managerAssignmentMembership');
+  if (!managerSelect) {
+    return;
+  }
+
+  const managers = Array.isArray(currentManagerAssignments.managers) ? currentManagerAssignments.managers : [];
+  managerSelect.innerHTML = '';
+
+  if (!managers.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No active managers';
+    managerSelect.appendChild(option);
+    renderManagerScopeOptions(null);
+    return;
+  }
+
+  managers.forEach((manager) => {
+    const option = document.createElement('option');
+    option.value = String(manager.membership_id);
+    option.textContent = (manager.email || manager.username || ('Manager #' + manager.membership_id));
+    managerSelect.appendChild(option);
+  });
+
+  renderManagerScopeOptions(Number(managerSelect.value));
+}
+
+function renderManagerScopeOptions(membershipId) {
+  const propertyContainer = document.getElementById('managerPropertyScope');
+  const listingContainer = document.getElementById('managerListingScope');
+  if (!propertyContainer || !listingContainer) {
+    return;
+  }
+
+  const managerMembershipId = Number(membershipId);
+  const propertyAssignments = new Set(
+    (currentManagerAssignments.propertyAssignments || [])
+      .filter((row) => Number(row.manager_membership_id) === managerMembershipId)
+      .map((row) => Number(row.property_id))
+  );
+  const listingAssignments = new Set(
+    (currentManagerAssignments.listingAssignments || [])
+      .filter((row) => Number(row.manager_membership_id) === managerMembershipId)
+      .map((row) => Number(row.listing_id))
+  );
+
+  propertyContainer.innerHTML = '';
+  if (!(currentProperties || []).length) {
+    propertyContainer.innerHTML = '<p class="cleaning-empty">No properties available.</p>';
+  } else {
+    currentProperties.forEach((property) => {
+      const row = document.createElement('label');
+      row.className = 'cleaning-listing-row';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'manager-property-checkbox';
+      checkbox.value = String(property.id);
+      checkbox.checked = propertyAssignments.has(Number(property.id));
+
+      const text = document.createElement('span');
+      text.className = 'cleaning-listing-name';
+      text.textContent = property.name;
+
+      row.appendChild(checkbox);
+      row.appendChild(text);
+      propertyContainer.appendChild(row);
+    });
+  }
+
+  listingContainer.innerHTML = '';
+  if (!(currentListings || []).length) {
+    listingContainer.innerHTML = '<p class="cleaning-empty">No listings available.</p>';
+  } else {
+    currentListings.forEach((listing) => {
+      const row = document.createElement('label');
+      row.className = 'cleaning-listing-row';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'manager-listing-checkbox';
+      checkbox.value = String(listing.id);
+      checkbox.checked = listingAssignments.has(Number(listing.id));
+
+      const text = document.createElement('span');
+      text.className = 'cleaning-listing-name';
+      text.textContent = listing.name;
+
+      row.appendChild(checkbox);
+      row.appendChild(text);
+      listingContainer.appendChild(row);
+    });
+  }
+
+  const disabled = !canManageAssignments();
+  Array.from(document.querySelectorAll('.manager-property-checkbox, .manager-listing-checkbox')).forEach((checkbox) => {
+    checkbox.disabled = disabled;
+  });
 }
 
 function renderStripeConnectStatus(status) {
@@ -94,6 +373,192 @@ async function fetchStripeConnectStatus() {
   }
 
   renderStripeConnectStatus(data.stripeConnect || null);
+}
+
+async function fetchAccessContext() {
+  const response = await fetch('/api/access/context');
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load access context.');
+  }
+  renderAccessContext(data);
+}
+
+async function switchAccessContext(clientAccountId) {
+  const response = await fetch('/api/access/context/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientAccountId })
+  });
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to switch context.');
+  }
+  renderAccessContext(data);
+}
+
+async function fetchTeamMembers() {
+  if (!canViewTeam()) {
+    renderTeamMembers([]);
+    return;
+  }
+
+  const response = await fetch('/api/access/team');
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+  if (response.status === 403) {
+    renderTeamMembers([]);
+    return;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load team memberships.');
+  }
+
+  renderTeamMembers(data.team || []);
+}
+
+async function addTeamMembership(email, role) {
+  const response = await fetch('/api/access/team', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, role })
+  });
+
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to add team member.');
+  }
+
+  return data;
+}
+
+async function revokeTeamMembership(membershipId) {
+  const id = Number(membershipId);
+  if (!Number.isInteger(id) || id <= 0) {
+    setMessage('Invalid membership id.', true);
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/access/team/' + encodeURIComponent(id), {
+      method: 'DELETE'
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to revoke team membership.');
+    }
+
+    setMessage('Team membership revoked.', false);
+    await fetchTeamMembers();
+    await fetchManagerAssignments();
+  } catch (err) {
+    setMessage(err.message || 'Failed to revoke team membership.', true);
+  }
+}
+
+async function fetchManagerAssignments() {
+  if (!canViewAssignments()) {
+    renderManagerAssignmentSelectors({ managers: [], propertyAssignments: [], listingAssignments: [] });
+    return;
+  }
+
+  const response = await fetch('/api/access/manager-assignments');
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+  if (response.status === 403) {
+    renderManagerAssignmentSelectors({ managers: [], propertyAssignments: [], listingAssignments: [] });
+    return;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load manager assignments.');
+  }
+
+  renderManagerAssignmentSelectors(data);
+}
+
+async function saveManagerAssignments() {
+  if (!canManageAssignments()) {
+    setMessage('Only Client role can change manager assignments.', true);
+    return;
+  }
+
+  const managerMembershipId = Number(document.getElementById('managerAssignmentMembership').value);
+  if (!Number.isInteger(managerMembershipId) || managerMembershipId <= 0) {
+    setMessage('Please select a manager.', true);
+    return;
+  }
+
+  const propertyIds = Array.from(document.querySelectorAll('.manager-property-checkbox:checked')).map((checkbox) => Number(checkbox.value));
+  const listingIds = Array.from(document.querySelectorAll('.manager-listing-checkbox:checked')).map((checkbox) => Number(checkbox.value));
+
+  const response = await fetch('/api/access/manager-assignments/' + encodeURIComponent(managerMembershipId), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ propertyIds, listingIds })
+  });
+
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to save manager assignments.');
+  }
+
+  setMessage('Manager assignments saved.', false);
+  await fetchManagerAssignments();
+}
+
+async function fetchGuests() {
+  if (!canViewGuests()) {
+    renderGuests([]);
+    return;
+  }
+
+  const response = await fetch('/api/access/guests');
+  if (response.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+  if (response.status === 403) {
+    renderGuests([]);
+    return;
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load guests.');
+  }
+  renderGuests(data.guests || []);
 }
 
 function renderListings(listings) {
@@ -1092,6 +1557,23 @@ async function persistCurrentScheduleChanges() {
   return { ok: true, saved: Number(saveData.saved || 0) };
 }
 
+async function loadDashboardData() {
+  await fetchProperties();
+  await fetchListings();
+  await fetchFeedSources();
+  await fetchCleaners();
+  await fetchSharedResources();
+  await fetchTeamMembers();
+  await fetchManagerAssignments();
+  await fetchGuests();
+  await fetchStripeConnectStatus();
+
+  const managerSelect = document.getElementById('managerAssignmentMembership');
+  if (managerSelect) {
+    renderManagerScopeOptions(Number(managerSelect.value));
+  }
+}
+
 (async () => {
   try {
     const meRes = await fetch('/api/me');
@@ -1106,12 +1588,8 @@ async function persistCurrentScheduleChanges() {
     }
     renderStripeConnectStatus(meData.stripeConnect || null);
 
-    await fetchProperties();
-    await fetchListings();
-    await fetchFeedSources();
-    await fetchCleaners();
-    await fetchSharedResources();
-    await fetchStripeConnectStatus();
+    await fetchAccessContext();
+    await loadDashboardData();
 
     const now = new Date();
     const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -1228,6 +1706,71 @@ document.getElementById('addSharedResourceForm').addEventListener('submit', asyn
     window.location.href = '/shared-resource.html?id=' + encodeURIComponent(data.resource.id);
   } catch {
     setMessage('Network error creating shared resource.', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('switchClientContextBtn').addEventListener('click', async () => {
+  const button = document.getElementById('switchClientContextBtn');
+  const select = document.getElementById('activeClientContextSelect');
+  const clientAccountId = Number(select.value);
+
+  if (!Number.isInteger(clientAccountId) || clientAccountId <= 0) {
+    setMessage('Please select a valid client context.', true);
+    return;
+  }
+
+  button.disabled = true;
+  setMessage('Switching client context...', false);
+  try {
+    await switchAccessContext(clientAccountId);
+    await loadDashboardData();
+    setMessage('Client context switched.', false);
+  } catch (err) {
+    setMessage(err.message || 'Failed to switch client context.', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('addTeamMemberForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const button = form.querySelector('button[type="submit"]');
+  const email = document.getElementById('teamMemberEmail').value.trim();
+  const role = document.getElementById('teamMemberRole').value;
+
+  if (!email) {
+    setMessage('Team member email is required.', true);
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    await addTeamMembership(email, role);
+    setMessage('Team member added.', false);
+    document.getElementById('teamMemberEmail').value = '';
+    await fetchTeamMembers();
+    await fetchManagerAssignments();
+  } catch (err) {
+    setMessage(err.message || 'Failed to add team member.', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('managerAssignmentMembership').addEventListener('change', (event) => {
+  renderManagerScopeOptions(Number(event.target.value));
+});
+
+document.getElementById('saveManagerAssignmentsBtn').addEventListener('click', async () => {
+  const button = document.getElementById('saveManagerAssignmentsBtn');
+  button.disabled = true;
+  try {
+    await saveManagerAssignments();
+  } catch (err) {
+    setMessage(err.message || 'Failed to save manager assignments.', true);
   } finally {
     button.disabled = false;
   }

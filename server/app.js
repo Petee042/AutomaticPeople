@@ -5416,10 +5416,58 @@ function requireScopedRole(minimumRole) {
 
       req.session.activeClientAccountId = Number(active.client_account_id);
       const ownerUserId = await getClientOwnerUserId(active.client_account_id);
+
+      let managerMembershipId = null;
+      let assignmentScope = {
+        hasAssignments: false,
+        propertyIdSet: new Set(),
+        listingIdSet: new Set()
+      };
+
+      if (usePostgres && String(active.role || '') === 'Manager') {
+        const managerMembership = await pool.query(
+          `
+            SELECT id
+            FROM client_memberships
+            WHERE client_account_id = $1
+              AND user_id = $2
+              AND role = 'Manager'
+              AND status = 'active'
+            ORDER BY id ASC
+            LIMIT 1
+          `,
+          [Number(active.client_account_id), Number(req.session.userId)]
+        );
+        managerMembershipId = managerMembership.rows[0] ? Number(managerMembership.rows[0].id) : null;
+
+        if (Number.isInteger(managerMembershipId) && managerMembershipId > 0) {
+          const [propertyResult, listingResult] = await Promise.all([
+            pool.query(
+              'SELECT property_id FROM manager_property_assignments WHERE manager_membership_id = $1',
+              [managerMembershipId]
+            ),
+            pool.query(
+              'SELECT listing_id FROM manager_listing_assignments WHERE manager_membership_id = $1',
+              [managerMembershipId]
+            )
+          ]);
+
+          const propertyIdSet = new Set(propertyResult.rows.map((row) => Number(row.property_id)).filter((id) => Number.isInteger(id) && id > 0));
+          const listingIdSet = new Set(listingResult.rows.map((row) => Number(row.listing_id)).filter((id) => Number.isInteger(id) && id > 0));
+          assignmentScope = {
+            hasAssignments: propertyIdSet.size > 0 || listingIdSet.size > 0,
+            propertyIdSet,
+            listingIdSet
+          };
+        }
+      }
+
       req.accessContext = {
         activeClientAccountId: Number(active.client_account_id),
         activeRole: String(active.role || ''),
-        effectiveOwnerUserId: ownerUserId || Number(req.session.userId)
+        effectiveOwnerUserId: ownerUserId || Number(req.session.userId),
+        managerMembershipId,
+        assignmentScope
       };
 
       return next();
@@ -5428,6 +5476,60 @@ function requireScopedRole(minimumRole) {
       return res.status(500).json({ error: 'Failed to resolve access context.' });
     }
   };
+}
+
+function hasManagerAssignmentScope(req) {
+  return Boolean(
+    req
+    && req.accessContext
+    && req.accessContext.activeRole === 'Manager'
+    && req.accessContext.assignmentScope
+    && req.accessContext.assignmentScope.hasAssignments === true
+  );
+}
+
+function isPropertyAllowedByScope(req, propertyId) {
+  if (!hasManagerAssignmentScope(req)) {
+    return true;
+  }
+  const id = Number(propertyId);
+  return Number.isInteger(id) && id > 0 && req.accessContext.assignmentScope.propertyIdSet.has(id);
+}
+
+function isListingAllowedByScope(req, listing) {
+  if (!hasManagerAssignmentScope(req)) {
+    return true;
+  }
+
+  const listingId = Number(listing && listing.id);
+  if (Number.isInteger(listingId) && listingId > 0 && req.accessContext.assignmentScope.listingIdSet.has(listingId)) {
+    return true;
+  }
+
+  const propertyId = Number(listing && listing.property_id);
+  if (Number.isInteger(propertyId) && propertyId > 0 && req.accessContext.assignmentScope.propertyIdSet.has(propertyId)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isSharedResourceAllowedByScope(req, resource) {
+  if (!hasManagerAssignmentScope(req)) {
+    return true;
+  }
+
+  const listingId = Number(resource && resource.listing_id);
+  if (Number.isInteger(listingId) && listingId > 0 && req.accessContext.assignmentScope.listingIdSet.has(listingId)) {
+    return true;
+  }
+
+  const propertyId = Number(resource && resource.property_id);
+  if (Number.isInteger(propertyId) && propertyId > 0 && req.accessContext.assignmentScope.propertyIdSet.has(propertyId)) {
+    return true;
+  }
+
+  return false;
 }
 
 function normaliseAdminQueryValue(value, type) {
@@ -6232,7 +6334,12 @@ app.put('/api/cleaners/:cleanerId', requireScopedRole('Manager'), async (req, re
 
 // POST /api/booked-in-changes/lookup — fetch booked-in changes for selected listings
 app.post('/api/booked-in-changes/lookup', requireScopedRole('Staff'), async (req, res) => {
-  const listingIds = Array.isArray(req.body.listingIds) ? req.body.listingIds : [];
+  let listingIds = Array.isArray(req.body.listingIds) ? req.body.listingIds : [];
+  if (hasManagerAssignmentScope(req)) {
+    listingIds = listingIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0 && req.accessContext.assignmentScope.listingIdSet.has(value));
+  }
 
   try {
     const changes = await getBookedInChangesForUserByListings(req.accessContext.effectiveOwnerUserId, listingIds);
@@ -6245,7 +6352,13 @@ app.post('/api/booked-in-changes/lookup', requireScopedRole('Staff'), async (req
 
 // POST /api/booked-in-changes/upsert — persist changeover overrides for reservations
 app.post('/api/booked-in-changes/upsert', requireScopedRole('Manager'), async (req, res) => {
-  const changes = Array.isArray(req.body.changes) ? req.body.changes : [];
+  let changes = Array.isArray(req.body.changes) ? req.body.changes : [];
+  if (hasManagerAssignmentScope(req)) {
+    changes = changes.filter((entry) => {
+      const listingId = Number(entry && entry.listingId);
+      return Number.isInteger(listingId) && listingId > 0 && req.accessContext.assignmentScope.listingIdSet.has(listingId);
+    });
+  }
 
   try {
     const result = await upsertBookedInChangesForUser(req.accessContext.effectiveOwnerUserId, changes);
@@ -6258,7 +6371,13 @@ app.post('/api/booked-in-changes/upsert', requireScopedRole('Manager'), async (r
 
 // POST /api/booked-in-changes/delete — delete booked-in changes by reservation keys
 app.post('/api/booked-in-changes/delete', requireScopedRole('Manager'), async (req, res) => {
-  const changes = Array.isArray(req.body.changes) ? req.body.changes : [];
+  let changes = Array.isArray(req.body.changes) ? req.body.changes : [];
+  if (hasManagerAssignmentScope(req)) {
+    changes = changes.filter((entry) => {
+      const listingId = Number(entry && entry.listingId);
+      return Number.isInteger(listingId) && listingId > 0 && req.accessContext.assignmentScope.listingIdSet.has(listingId);
+    });
+  }
 
   try {
     const result = await deleteBookedInChangesForUser(req.accessContext.effectiveOwnerUserId, changes);
@@ -6314,7 +6433,10 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
 // GET /api/shared-resources — all shared resources for current user
 app.get('/api/shared-resources', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const resources = await getSharedResourcesForUser(req.accessContext.effectiveOwnerUserId);
+    let resources = await getSharedResourcesForUser(req.accessContext.effectiveOwnerUserId);
+    if (hasManagerAssignmentScope(req)) {
+      resources = resources.filter((resource) => isSharedResourceAllowedByScope(req, resource));
+    }
     return res.json({ resources });
   } catch (err) {
     console.error(err);
@@ -6366,6 +6488,9 @@ app.get('/api/shared-resources/:resourceId', requireScopedRole('Staff'), async (
   try {
     const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+    if (!isSharedResourceAllowedByScope(req, resource)) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
     return res.json({ resource });
@@ -6429,6 +6554,9 @@ app.get('/api/shared-resources/:resourceId/reservations', requireScopedRole('Sta
   try {
     const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+    if (!isSharedResourceAllowedByScope(req, resource)) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
     const reservations = await getSharedResourceReservationsByResourceId(resourceId);
@@ -6848,6 +6976,14 @@ app.put('/api/shared-resources/:resourceId', requireScopedRole('Manager'), async
   }
 
   try {
+    const existing = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+    if (!isSharedResourceAllowedByScope(req, existing)) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+
     const { resource, error } = await updateSharedResourceForUser(resourceId, req.accessContext.effectiveOwnerUserId, {
       shortDescription: req.body.shortDescription,
       fullDescriptionHtml: req.body.fullDescriptionHtml,
@@ -6897,6 +7033,9 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', 
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
+    if (!isSharedResourceAllowedByScope(req, resource)) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
 
     const result = await updateSharedResourceReservationStatusForUser(
       reservationId,
@@ -6930,6 +7069,9 @@ app.get('/api/shared-resources/:resourceId/reservations/:reservationId', require
   try {
     const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+    if (!isSharedResourceAllowedByScope(req, resource)) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
 
@@ -6980,6 +7122,9 @@ app.put('/api/shared-resources/:resourceId/reservations/:reservationId', require
   try {
     const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (!resource) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+    if (!isSharedResourceAllowedByScope(req, resource)) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
 
@@ -7049,6 +7194,14 @@ app.delete('/api/shared-resources/:resourceId', requireScopedRole('Manager'), as
   }
 
   try {
+    const existing = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+    if (!isSharedResourceAllowedByScope(req, existing)) {
+      return res.status(404).json({ error: 'Shared resource not found.' });
+    }
+
     const result = await deleteSharedResourceForUser(resourceId, req.accessContext.effectiveOwnerUserId);
     if (result.error === 'Shared resource not found.') {
       return res.status(404).json({ error: result.error });
@@ -7066,7 +7219,10 @@ app.delete('/api/shared-resources/:resourceId', requireScopedRole('Manager'), as
 // GET /api/properties — all properties for current user
 app.get('/api/properties', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const properties = await getPropertiesForUser(req.accessContext.effectiveOwnerUserId);
+    let properties = await getPropertiesForUser(req.accessContext.effectiveOwnerUserId);
+    if (hasManagerAssignmentScope(req)) {
+      properties = properties.filter((property) => isPropertyAllowedByScope(req, property.id));
+    }
     return res.json({ properties });
   } catch (err) {
     console.error(err);
@@ -7105,6 +7261,9 @@ app.get('/api/properties/:propertyId', requireScopedRole('Staff'), async (req, r
     if (!property) {
       return res.status(404).json({ error: 'Property not found.' });
     }
+    if (!isPropertyAllowedByScope(req, property.id)) {
+      return res.status(404).json({ error: 'Property not found.' });
+    }
     return res.json({ property });
   } catch (err) {
     console.error(err);
@@ -7120,6 +7279,11 @@ app.put('/api/properties/:propertyId', requireScopedRole('Manager'), async (req,
   }
 
   try {
+    const existing = await getPropertyByIdForUser(propertyId, req.accessContext.effectiveOwnerUserId);
+    if (!existing || !isPropertyAllowedByScope(req, existing.id)) {
+      return res.status(404).json({ error: 'Property not found.' });
+    }
+
     const { property, error } = await updatePropertyForUser(propertyId, req.accessContext.effectiveOwnerUserId, {
       name: req.body.name,
       postalAddress: req.body.postalAddress,
@@ -7147,6 +7311,11 @@ app.delete('/api/properties/:propertyId', requireScopedRole('Manager'), async (r
   }
 
   try {
+    const existing = await getPropertyByIdForUser(propertyId, req.accessContext.effectiveOwnerUserId);
+    if (!existing || !isPropertyAllowedByScope(req, existing.id)) {
+      return res.status(404).json({ error: 'Property not found.' });
+    }
+
     const result = await deletePropertyForUser(propertyId, req.accessContext.effectiveOwnerUserId);
     if (result.error === 'Property not found.') {
       return res.status(404).json({ error: result.error });
@@ -7164,7 +7333,10 @@ app.delete('/api/properties/:propertyId', requireScopedRole('Manager'), async (r
 // GET /api/listings — all listings for current user
 app.get('/api/listings', requireScopedRole('Staff'), async (req, res) => {
   try {
-    const listings = await getListingsForUser(req.accessContext.effectiveOwnerUserId);
+    let listings = await getListingsForUser(req.accessContext.effectiveOwnerUserId);
+    if (hasManagerAssignmentScope(req)) {
+      listings = listings.filter((listing) => isListingAllowedByScope(req, listing));
+    }
     return res.json({ listings });
   } catch (err) {
     console.error(err);
@@ -7183,6 +7355,13 @@ app.post('/api/listings', requireScopedRole('Manager'), async (req, res) => {
   }
 
   try {
+    if (hasManagerAssignmentScope(req)) {
+      const scopedPropertyId = Number.isInteger(propertyId) && propertyId > 0 ? propertyId : null;
+      if (!scopedPropertyId || !isPropertyAllowedByScope(req, scopedPropertyId)) {
+        return res.status(403).json({ error: 'You are not allowed to create listings for this property.' });
+      }
+    }
+
     const { listing, error } = await createListingForUser(
       req.accessContext.effectiveOwnerUserId,
       name,
@@ -7210,6 +7389,9 @@ app.get('/api/listings/:listingId', requireScopedRole('Staff'), async (req, res)
   try {
     const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
     if (!listing) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+    if (!isListingAllowedByScope(req, listing)) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
     return res.json({
@@ -7240,6 +7422,18 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
   }
 
   try {
+    const existing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!existing || !isListingAllowedByScope(req, existing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
+    if (hasManagerAssignmentScope(req)) {
+      const scopedPropertyId = Number.isInteger(propertyId) && propertyId > 0 ? propertyId : Number(existing.property_id || 0);
+      if (!isPropertyAllowedByScope(req, scopedPropertyId)) {
+        return res.status(403).json({ error: 'You are not allowed to move this listing to that property.' });
+      }
+    }
+
     const { listing, error } = await updateListingForUser(
       listingId,
       req.accessContext.effectiveOwnerUserId,
@@ -7272,6 +7466,11 @@ app.get('/api/listings/:listingId/feeds', requireScopedRole('Staff'), async (req
   }
 
   try {
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
     const feeds = await getFeedsForListing(listingId, req.accessContext.effectiveOwnerUserId);
     if (feeds === null) {
       return res.status(404).json({ error: 'Listing not found.' });
@@ -7338,6 +7537,11 @@ app.post('/api/listings/:listingId/feeds', requireScopedRole('Manager'), async (
   }
 
   try {
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
     const { feed, error } = await createFeedForListing(listingId, req.accessContext.effectiveOwnerUserId, label, url);
     if (error) {
       return res.status(404).json({ error });
@@ -7367,6 +7571,11 @@ app.put('/api/listings/:listingId/feeds/:feedId', requireScopedRole('Manager'), 
   }
 
   try {
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
     const { feed, error } = await updateFeedForListing(feedId, listingId, req.accessContext.effectiveOwnerUserId, label, url);
     if (error === 'Listing not found.') {
       return res.status(404).json({ error });
@@ -7702,6 +7911,9 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
     if (!listing) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
+    if (!isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
 
     const cached = await getCachedEventsForListing(listingId);
 
@@ -7761,6 +7973,9 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
   try {
     const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
     if (!listing) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+    if (!isListingAllowedByScope(req, listing)) {
       return res.status(404).json({ error: 'Listing not found.' });
     }
 

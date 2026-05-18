@@ -20,6 +20,100 @@
       <p id="dashboardMessage" class="message"></p>
 
       <section class="listing-form-section">
+        <h3>Access Context</h3>
+        <p id="accessContextSummary" class="hint">Loading access context...</p>
+        <div class="calendar-source-row">
+          <label for="activeClientContextSelect">Active Client</label>
+          <select id="activeClientContextSelect"></select>
+        </div>
+        <div class="feed-actions">
+          <button type="button" id="switchClientContextBtn" class="btn secondary">Switch Context</button>
+        </div>
+      </section>
+
+      <section class="listing-form-section">
+        <h3>Team Access</h3>
+        <div class="listings-block">
+          <table class="calendar-table" aria-label="Team members">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="teamTableBody">
+              <tr>
+                <td colspan="5">No team members found.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Invite Team Member</h4>
+        <form id="addTeamMemberForm" novalidate>
+          <div class="calendar-source-row">
+            <label for="teamMemberEmail">Email</label>
+            <input id="teamMemberEmail" type="email" maxlength="160" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="teamMemberRole">Role</label>
+            <select id="teamMemberRole" required>
+              <option value="Manager">Manager</option>
+              <option value="Staff">Staff</option>
+            </select>
+          </div>
+          <button type="submit" class="btn primary calendar-btn">Add Team Member</button>
+        </form>
+      </section>
+
+      <section class="listing-form-section">
+        <h3>Manager Assignments</h3>
+        <div class="calendar-source-row">
+          <label for="managerAssignmentMembership">Manager</label>
+          <select id="managerAssignmentMembership"></select>
+        </div>
+        <div class="calendar-source-row">
+          <label>Property Scope</label>
+          <div id="managerPropertyScope" class="cleaning-listings">
+            <p class="cleaning-empty">No properties available.</p>
+          </div>
+        </div>
+        <div class="calendar-source-row">
+          <label>Listing Scope</label>
+          <div id="managerListingScope" class="cleaning-listings">
+            <p class="cleaning-empty">No listings available.</p>
+          </div>
+        </div>
+        <div class="feed-actions">
+          <button type="button" id="saveManagerAssignmentsBtn" class="btn secondary">Save Manager Assignments</button>
+        </div>
+      </section>
+
+      <section class="listing-form-section">
+        <h3>Guest Contacts</h3>
+        <div class="listings-block">
+          <table class="calendar-table" aria-label="Guest contacts">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody id="guestsTableBody">
+              <tr>
+                <td colspan="4">No guest contacts found.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="listing-form-section">
         <h3>Stripe Connect</h3>
         <p id="stripeConnectStatus" class="hint">Checking Stripe connection status...</p>
         <div class="feed-actions">
