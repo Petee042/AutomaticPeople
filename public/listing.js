@@ -1289,6 +1289,7 @@ async function saveListingManagerAssignments() {
 
       const res = await fetch('/api/access/manager-assignments/' + encodeURIComponent(membershipId), {
         method: 'PUT',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ propertyIds, listingIds: isChecked ? [listingId] : [] })
       });

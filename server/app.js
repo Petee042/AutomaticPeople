@@ -6115,7 +6115,7 @@ app.get('/api/access/manager-assignments', requireScopedRole('Manager'), async (
 });
 
 // PUT /api/access/manager-assignments/:managerMembershipId — set manager property/listing scope
-app.put('/api/access/manager-assignments/:managerMembershipId', requireScopedRole('Client'), async (req, res) => {
+app.put('/api/access/manager-assignments/:managerMembershipId', requireScopedRole('Manager'), async (req, res) => {
   const managerMembershipId = Number(req.params.managerMembershipId);
   if (!Number.isInteger(managerMembershipId) || managerMembershipId <= 0) {
     return res.status(400).json({ error: 'Invalid manager membership id.' });
