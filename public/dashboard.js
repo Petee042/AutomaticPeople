@@ -2642,17 +2642,19 @@ document.getElementById('copyConsolidatedIcsUrlBtn').addEventListener('click', a
 
   // restore last tab or default to panel-dashboard
   let initial = 'panel-dashboard';
+  let hasExplicitTab = false;
   try {
     const requested = String(new URLSearchParams(window.location.search).get('tab') || '').trim();
     if (requested && document.getElementById(requested)) {
       initial = requested;
+      hasExplicitTab = true;
     }
   } catch {
     // ignore
   }
   try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
-    if (initial === 'panel-dashboard' && saved && document.getElementById(saved)) {
+    if (!hasExplicitTab && initial === 'panel-dashboard' && saved && document.getElementById(saved)) {
       initial = saved;
     }
   } catch {

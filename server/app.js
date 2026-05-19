@@ -2309,6 +2309,16 @@ async function ensureClientAccountForUser(userId, displayName) {
     [account.id, id]
   );
 
+  await pool.query(
+    `
+      INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+      VALUES ($1, $2, 'Manager', 'active', $2)
+      ON CONFLICT (client_account_id, user_id, role)
+      DO UPDATE SET status = EXCLUDED.status, updated_at = CURRENT_TIMESTAMP
+    `,
+    [account.id, id]
+  );
+
   return {
     ...membershipResult.rows[0],
     display_name: account.display_name
@@ -5528,21 +5538,6 @@ app.post('/api/signup', async (req, res) => {
       country: normalisedCountry,
       isValidated: false
     });
-
-    // New client signups are also initialized as Manager + Staff in their own client account.
-    if (createdUser && Number(createdUser.id) > 0) {
-      const context = await getOrCreateAccessContextForUser(createdUser.id, null);
-      const ownClientMembership = (context.memberships || []).find((membership) =>
-        membership.role === 'Client' && membership.status === 'active'
-      );
-      const ownClientAccountId = ownClientMembership
-        ? Number(ownClientMembership.client_account_id)
-        : (context.active ? Number(context.active.client_account_id) : null);
-
-      if (Number.isInteger(ownClientAccountId) && ownClientAccountId > 0) {
-        await setClientTeamRolesForUser(ownClientAccountId, createdUser.id, createdUser.id, ['Manager', 'Staff']);
-      }
-    }
 
     const validationEmailResult = await sendSiteUserValidationEmail(req, createdUser);
     if (!validationEmailResult.ok) {
