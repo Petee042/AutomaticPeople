@@ -6,6 +6,7 @@ const isCreateMode = String(params.get('new') || '').trim() === '1' || !(Number.
 let teamUserId = Number.isInteger(teamUserIdParam) && teamUserIdParam > 0 ? teamUserIdParam : null;
 let canManageTeam = false;
 let initialFormState = '';
+let suppressBeforeunload = false;
 
 function setMessage(text, isError) {
   const el = document.getElementById('teamMemberMessage');
@@ -37,6 +38,7 @@ function hasUnsavedChanges() {
 }
 
 function goBackToConfig() {
+  suppressBeforeunload = true;
   window.location.href = '/dashboard.html?tab=panel-config';
 }
 
@@ -311,6 +313,9 @@ document.getElementById('cancelTeamMemberBtn').addEventListener('click', () => {
 });
 
 window.addEventListener('beforeunload', (event) => {
+  if (suppressBeforeunload) {
+    return;
+  }
   if (!hasUnsavedChanges()) {
     return;
   }
