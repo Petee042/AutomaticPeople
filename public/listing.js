@@ -8,6 +8,7 @@ let canEditListing = false;
 let currentAccessRole = '';
 let currentUserEmail = '';
 let initialListingFormState = '';
+let suppressBeforeunload = false;
 let managerScopeState = {
   hasAssignments: false,
   propertyIdSet: new Set(),
@@ -1008,6 +1009,10 @@ async function loadListing() {
   await loadSourceColorPreferences();
   await loadProperties();
 
+  document.getElementById('listingFeedsSection').classList.remove('hidden');
+  document.getElementById('listingCalendarSection').classList.remove('hidden');
+  document.getElementById('listingAssignmentEditor').classList.remove('hidden');
+
   const listingRes = await fetch('/api/listings/' + listingId);
   if (listingRes.status === 401) {
     window.location.href = '/';
@@ -1378,6 +1383,7 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
     if (isCreateMode) {
       const nextListingId = Number(data && data.listing && data.listing.id);
       if (Number.isInteger(nextListingId) && nextListingId > 0) {
+        suppressBeforeunload = true;
         window.location.href = '/listing.html?id=' + encodeURIComponent(nextListingId);
         return;
       }
@@ -1522,6 +1528,9 @@ document.getElementById('deleteListingBtn').addEventListener('click', async () =
 });
 
 window.addEventListener('beforeunload', (event) => {
+  if (suppressBeforeunload) {
+    return;
+  }
   if (!hasUnsavedListingChanges()) {
     return;
   }
