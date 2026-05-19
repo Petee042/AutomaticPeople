@@ -1166,6 +1166,7 @@ async function updateCalendars() {
       populateUsualCleanerSelect(cleaners, null);
       document.getElementById('listingTitle').textContent = 'Create Listing';
       document.getElementById('listingPublicId').value = 'New';
+      document.getElementById('listingAssignmentEditor').classList.add('hidden');
       document.getElementById('deleteListingBtn').classList.add('hidden');
       initialListingFormState = getListingFormState();
     } else {
@@ -1345,7 +1346,7 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
     setListingMessage('Read-only access: editing is not allowed for your role.', true);
     return;
   }
-  const button = e.target.querySelector('button[type="submit"]');
+  const button = document.getElementById('saveListingBtn');
   const name = document.getElementById('listingName').value.trim();
   const propertyId = Number(document.getElementById('listingPropertyId').value);
   const dateBasis = document.getElementById('listingDateBasis').value === 'checkin' ? 'checkin' : 'checkout';
