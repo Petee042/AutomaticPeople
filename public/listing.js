@@ -1016,7 +1016,6 @@ async function loadListing() {
   await loadProperties();
 
   document.getElementById('listingFeedsSection').classList.remove('hidden');
-  document.getElementById('listingCalendarSection').classList.remove('hidden');
   document.getElementById('listingAssignmentEditor').classList.remove('hidden');
 
   const listingRes = await fetch('/api/listings/' + listingId);
@@ -1412,7 +1411,8 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
   }
 });
 
-document.getElementById('feedForm').addEventListener('submit', async (e) => {
+const feedForm = document.getElementById('feedForm');
+if (feedForm) feedForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   if (!canEditListing) {
