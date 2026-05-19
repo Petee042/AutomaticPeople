@@ -1264,6 +1264,7 @@ async function saveListingManagerAssignments() {
 
   const managers = (currentManagerAssignments.managers || []);
   const propertyAssignments = (currentManagerAssignments.propertyAssignments || []);
+  const listingAssignments = (currentManagerAssignments.listingAssignments || []);
 
   const savePromises = managers.map(async (manager) => {
     const membershipId = Number(manager.membership_id);
@@ -1279,7 +1280,7 @@ async function saveListingManagerAssignments() {
     );
 
     const shouldHaveListingAssignment = isChecked;
-    const currentHasListingAssignment = propertyAssignments.some(
+    const currentHasListingAssignment = listingAssignments.some(
       (row) => Number(row.manager_membership_id) === membershipId && Number(row.listing_id) === listingId
     );
 
@@ -1305,6 +1306,7 @@ async function saveListingManagerAssignments() {
     await fetchListingManagers();
   } catch (err) {
     setListingMessage(err.message || 'Failed to save manager assignments.', true);
+    throw err;
   }
 }
 
@@ -1381,25 +1383,20 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
     if (isCreateMode) {
       const nextListingId = Number(data && data.listing && data.listing.id);
       if (Number.isInteger(nextListingId) && nextListingId > 0) {
-        try {
-          await saveListingManagerAssignments();
-        } catch (err) {
-          console.error('Failed to save assignments on create:', err);
-        }
+        listingId = nextListingId;
+        await saveListingManagerAssignments();
+        suppressBeforeunload = true;
         goBackToConfig();
         return;
       }
     } else {
-      try {
-        await saveListingManagerAssignments();
-      } catch (err) {
-        console.error('Failed to save assignments on update:', err);
-      }
+      await saveListingManagerAssignments();
     }
 
     document.getElementById('listingTitle').textContent = 'Listing: ' + data.listing.name;
     initialListingFormState = getListingFormState();
     setListingMessage('Listing updated.', false);
+    suppressBeforeunload = true;
     goBackToConfig();
   } catch {
     setListingMessage('Network error saving listing.', true);
@@ -1537,12 +1534,9 @@ document.getElementById('deleteListingBtn').addEventListener('click', async () =
 });
 
 window.addEventListener('beforeunload', (event) => {
-    if (suppressBeforeunload) {
-      return;
-    }
-    listingId = nextListingId;
-    suppressBeforeunload = true;
-    suppressBeforeunload = true;
+  if (suppressBeforeunload) {
+    return;
+  }
   if (!hasUnsavedListingChanges()) {
     return;
   }
