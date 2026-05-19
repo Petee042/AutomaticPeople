@@ -1008,6 +1008,10 @@ function clearFeedEditMode() {
   document.getElementById('cancelFeedEditBtn').classList.add('hidden');
 }
 
+function hasValidListingId() {
+  return Number.isInteger(listingId) && listingId > 0;
+}
+
 async function loadListing() {
   if (!listingId) {
     return;
@@ -1172,7 +1176,8 @@ async function updateCalendars() {
       await loadProperties();
       const cleaners = await loadCleaners();
       populateUsualCleanerSelect(cleaners, null);
-        await fetchListingManagers();
+      document.getElementById('listingFeedsSection').classList.add('hidden');
+      document.getElementById('listingAssignmentEditor').classList.add('hidden');
       document.getElementById('listingTitle').textContent = 'Create Listing';
       document.getElementById('listingPublicId').value = 'New';
       document.getElementById('deleteListingBtn').classList.add('hidden');
@@ -1428,6 +1433,11 @@ if (feedForm) feedForm.addEventListener('submit', async (e) => {
 
   if (!canEditListing) {
     setListingMessage('Read-only access: editing feeds is not allowed for your role.', true);
+    return;
+  }
+
+  if (!hasValidListingId()) {
+    setListingMessage('Save the listing first, then add feed sources.', true);
     return;
   }
 
