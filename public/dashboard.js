@@ -1226,6 +1226,11 @@ function toDateKey(value) {
   return keyFromUtcDate(d);
 }
 
+function formatMonthLabel(date) {
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return monthNames[date.getUTCMonth()] + ' ' + date.getUTCFullYear();
+}
+
 function renderCleaningListings(listings) {
   const container = document.getElementById('cleaningListings');
   container.innerHTML = '';
