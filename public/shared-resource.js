@@ -648,6 +648,17 @@ function renderPropertyOptions(selectedPropertyId) {
   select.value = selectedPropertyId ? String(selectedPropertyId) : '';
 }
 
+function sortListingsByProperty(listings) {
+  return (listings || []).slice().sort((a, b) => {
+    const pa = (a.property_name || '').toLowerCase();
+    const pb = (b.property_name || '').toLowerCase();
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    const na = (a.name || '').toLowerCase();
+    const nb = (b.name || '').toLowerCase();
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  });
+}
+
 function renderListingOptions(selectedListingId) {
   const propertyId = Number(document.getElementById('sharedResourcePropertyId').value || 0);
   const select = document.getElementById('sharedResourceListingId');
@@ -658,12 +669,12 @@ function renderListingOptions(selectedListingId) {
   allOption.textContent = 'All Listings';
   select.appendChild(allOption);
 
-  const filteredListings = (currentListings || []).filter((listing) => {
+  const filteredListings = sortListingsByProperty(sortListingsByProperty((currentListings || []).filter((listing) => {
     if (!propertyId) {
       return true;
     }
     return Number(listing.property_id) === propertyId;
-  });
+  }));
 
   filteredListings.forEach((listing) => {
     const option = document.createElement('option');

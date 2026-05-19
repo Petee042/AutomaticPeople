@@ -4210,7 +4210,7 @@ async function getListingsForUser(userId) {
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.user_id = $1
-      ORDER BY l.name ASC
+      ORDER BY LOWER(p.name) ASC, LOWER(l.name) ASC
     `,
     [userId]
   );

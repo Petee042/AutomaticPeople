@@ -878,7 +878,19 @@ async function fetchGuests() {
   renderGuests(data.guests || []);
 }
 
+function sortListingsByProperty(listings) {
+  return (listings || []).slice().sort((a, b) => {
+    const pa = (a.property_name || '').toLowerCase();
+    const pb = (b.property_name || '').toLowerCase();
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    const na = (a.name || '').toLowerCase();
+    const nb = (b.name || '').toLowerCase();
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  });
+}
+
 function renderListings(listings) {
+  const sorted = sortListingsByProperty(listings);
   const tbody = document.getElementById('listingsTableBody');
   if (tbody) {
     tbody.innerHTML = '';
@@ -886,7 +898,7 @@ function renderListings(listings) {
 
   renderConfigRows(
     'configListingsList',
-    (listings || []).map((listing) => ({
+    (sorted || []).map((listing) => ({
       name: listing.name || ('Listing #' + listing.id),
       href: '/listing.html?id=' + encodeURIComponent(listing.id)
     })),
@@ -897,7 +909,7 @@ function renderListings(listings) {
     return;
   }
 
-  if (!listings.length) {
+  if (!sorted.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
     cell.colSpan = 3;
@@ -907,7 +919,7 @@ function renderListings(listings) {
     return;
   }
 
-  listings.forEach((listing) => {
+  sorted.forEach((listing) => {
     const row = document.createElement('tr');
 
     const scopeState = getCurrentManagerScopeState();
@@ -1232,10 +1244,11 @@ function formatMonthLabel(date) {
 }
 
 function renderCleaningListings(listings) {
+  const sorted = sortListingsByProperty(listings);
   const container = document.getElementById('cleaningListings');
   container.innerHTML = '';
 
-  if (!listings.length) {
+  if (!sorted.length) {
     const text = document.createElement('p');
     text.className = 'cleaning-empty';
     text.textContent = 'No listings available.';
@@ -1243,7 +1256,7 @@ function renderCleaningListings(listings) {
     return;
   }
 
-  listings.forEach((listing) => {
+  sorted.forEach((listing) => {
     const row = document.createElement('label');
     row.className = 'cleaning-listing-row';
 
@@ -1781,13 +1794,14 @@ function opsCalendarSetFetchedAt(isoString) {
 }
 
 function renderOpsCalendarListingSelector(listings) {
+  const sorted = sortListingsByProperty(listings);
   const container = document.getElementById('opsCalendarListings');
   if (!container) {
     return;
   }
 
   container.innerHTML = '';
-  if (!Array.isArray(listings) || !listings.length) {
+  if (!Array.isArray(sorted) || !sorted.length) {
     const empty = document.createElement('p');
     empty.className = 'cleaning-empty';
     empty.textContent = 'No listings available.';
@@ -1796,16 +1810,16 @@ function renderOpsCalendarListingSelector(listings) {
     return;
   }
 
-  const validIds = new Set(listings.map((listing) => String(listing.id)));
+  const validIds = new Set(sorted.map((listing) => String(listing.id)));
   const nextSelectedIds = new Set(
     Array.from(opsCalSelectedListingIds || []).filter((id) => validIds.has(String(id)))
   );
   if (!nextSelectedIds.size) {
-    listings.forEach((listing) => nextSelectedIds.add(String(listing.id)));
+    sorted.forEach((listing) => nextSelectedIds.add(String(listing.id)));
   }
   opsCalSelectedListingIds = nextSelectedIds;
 
-  listings.forEach((listing) => {
+  sorted.forEach((listing) => {
     const row = document.createElement('label');
     row.className = 'cleaning-listing-row';
 
