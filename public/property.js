@@ -1,10 +1,13 @@
 'use strict';
 
 const params = new URLSearchParams(window.location.search);
-const propertyId = Number(params.get('id'));
+const propertyIdParam = Number(params.get('id'));
+const isCreateMode = String(params.get('new') || '').trim() === '1' || !(Number.isInteger(propertyIdParam) && propertyIdParam > 0);
+let propertyId = Number.isInteger(propertyIdParam) && propertyIdParam > 0 ? propertyIdParam : null;
 let canEditProperty = false;
 let currentAccessRole = '';
 let currentUserEmail = '';
+let initialPropertyFormState = '';
 let managerScopeState = {
   hasAssignments: false,
   propertyIdSet: new Set()
@@ -14,6 +17,28 @@ let currentManagerAssignments = {
   propertyAssignments: [],
   listingAssignments: []
 };
+
+function getPropertyFormState() {
+  return JSON.stringify({
+    name: String(document.getElementById('propertyName').value || ''),
+    postalAddress: String(document.getElementById('postalAddress').value || '')
+  });
+}
+
+function hasUnsavedPropertyChanges() {
+  return getPropertyFormState() !== initialPropertyFormState;
+}
+
+function confirmDiscardPropertyChanges() {
+  if (!hasUnsavedPropertyChanges()) {
+    return true;
+  }
+  return window.confirm('You have unsaved changes. Cancel changes and continue?');
+}
+
+function goBackToConfig() {
+  window.location.href = '/dashboard.html?tab=panel-config';
+}
 
 function setPropertyMessage(text, isError) {
   const el = document.getElementById('propertyMessage');
@@ -101,6 +126,10 @@ function applyPropertyAccess(role) {
 }
 
 async function loadProperty() {
+  if (!propertyId) {
+    return;
+  }
+
   const res = await fetch('/api/properties/' + propertyId);
   if (res.status === 401) {
     window.location.href = '/';
@@ -137,6 +166,11 @@ async function loadProperty() {
 }
 
 async function fetchPropertyManagers() {
+  if (isCreateMode) {
+    applyPropertyAssignmentEditor(null);
+    return;
+  }
+
   const res = await fetch('/api/access/manager-assignments');
   if (res.status === 401) {
     window.location.href = '/';
@@ -260,11 +294,6 @@ async function savePropertyManagerAssignments() {
 }
 
 (async () => {
-  if (!Number.isInteger(propertyId) || propertyId <= 0) {
-    setPropertyMessage('Invalid property id.', true);
-    return;
-  }
-
   try {
     const meRes = await fetch('/api/me');
     if (!meRes.ok) {
@@ -278,7 +307,18 @@ async function savePropertyManagerAssignments() {
     applyPropertyAccess(currentAccessRole);
     await loadPropertyManagerScope();
 
-    await loadProperty();
+    if (isCreateMode) {
+      document.getElementById('propertyTitle').textContent = 'Create Property';
+      document.getElementById('propertyPublicId').value = 'New';
+      document.getElementById('deletePropertyBtn').classList.add('hidden');
+      document.getElementById('propertyAssignmentEditor').classList.add('hidden');
+      setPropertyScopeHint('');
+      initialPropertyFormState = getPropertyFormState();
+    } else {
+      await loadProperty();
+      initialPropertyFormState = getPropertyFormState();
+    }
+
     await fetchPropertyManagers();
   } catch (err) {
     setPropertyMessage(err.message || 'Failed to load property page.', true);
@@ -304,8 +344,8 @@ document.getElementById('propertyForm').addEventListener('submit', async (e) => 
 
   button.disabled = true;
   try {
-    const res = await fetch('/api/properties/' + propertyId, {
-      method: 'PUT',
+    const res = await fetch(isCreateMode ? '/api/properties' : ('/api/properties/' + propertyId), {
+      method: isCreateMode ? 'POST' : 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, postalAddress })
     });
@@ -316,7 +356,16 @@ document.getElementById('propertyForm').addEventListener('submit', async (e) => 
       return;
     }
 
+    if (isCreateMode) {
+      const nextId = Number(data && data.property && data.property.id);
+      if (Number.isInteger(nextId) && nextId > 0) {
+        window.location.href = '/property.html?id=' + encodeURIComponent(nextId);
+        return;
+      }
+    }
+
     document.getElementById('propertyTitle').textContent = 'Property: ' + data.property.name;
+    initialPropertyFormState = getPropertyFormState();
     setPropertyMessage('Property saved.', false);
   } catch {
     setPropertyMessage('Network error saving property.', true);
@@ -326,6 +375,10 @@ document.getElementById('propertyForm').addEventListener('submit', async (e) => 
 });
 
 document.getElementById('deletePropertyBtn').addEventListener('click', async () => {
+  if (isCreateMode || !propertyId) {
+    return;
+  }
+
   if (!canEditProperty) {
     setPropertyMessage('Read-only access: deleting is not allowed for your role.', true);
     return;
@@ -352,11 +405,11 @@ document.getElementById('deletePropertyBtn').addEventListener('click', async () 
       return;
     }
 
-    window.location.href = '/dashboard.html';
+    goBackToConfig();
   } catch {
     setPropertyMessage('Network error deleting property.', true);
   } finally {
-    if (!window.location.href.endsWith('/dashboard.html')) {
+    if (!window.location.href.includes('/dashboard.html')) {
       button.disabled = false;
     }
   }
@@ -372,8 +425,26 @@ document.getElementById('savePropertyAssignmentsBtn').addEventListener('click', 
   }
 });
 
+document.getElementById('cancelPropertyBtn').addEventListener('click', () => {
+  if (!confirmDiscardPropertyChanges()) {
+    return;
+  }
+  goBackToConfig();
+});
+
 document.getElementById('backBtn').addEventListener('click', () => {
-  window.location.href = '/dashboard.html';
+  if (!confirmDiscardPropertyChanges()) {
+    return;
+  }
+  goBackToConfig();
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedPropertyChanges()) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = '';
 });
 
 const logoutBtn = document.getElementById('logoutBtn');

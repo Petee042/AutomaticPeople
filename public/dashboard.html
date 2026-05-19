@@ -178,53 +178,20 @@
       <!-- ── Config tab ─────────────────────────────────────── -->
       <div id="panel-config" class="dashboard-tab-panel hidden" role="tabpanel">
 
-        <section class="listing-form-section">
-          <h3>Your Properties</h3>
-          <div class="listings-block">
-            <table class="calendar-table" aria-label="Your properties">
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Manager</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="propertiesTableBody">
-                <tr>
-                  <td colspan="3">No properties yet.</td>
-                </tr>
-              </tbody>
-            </table>
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Properties</h3>
+            <button id="createPropertyConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Property" aria-label="Create New Property">+</button>
           </div>
-
-          <form id="addPropertyForm" novalidate>
-            <div class="calendar-source-row">
-              <label for="propertyName">Property Name</label>
-              <input id="propertyName" type="text" maxlength="120" required />
-            </div>
-            <button type="submit" class="btn primary calendar-btn">Add Property</button>
-          </form>
+          <div id="configPropertiesList" class="config-item-list" aria-label="Properties"></div>
         </section>
 
-        <section class="listing-form-section">
-          <h3>Your Listings</h3>
-          <div class="listings-block">
-            <table class="calendar-table" aria-label="Your listings">
-              <thead>
-                <tr>
-                  <th>Listing Name</th>
-                  <th>Property</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="listingsTableBody">
-                <tr>
-                  <td colspan="3">No listings yet.</td>
-                </tr>
-              </tbody>
-            </table>
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Listings</h3>
+            <button id="createListingConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Listing" aria-label="Create New Listing">+</button>
           </div>
-
+          <div id="configListingsList" class="config-item-list" aria-label="Listings"></div>
           <div class="ics-export-block">
             <p class="ics-export-label">Consolidated listing calendar export (.ics)</p>
             <div class="ics-export-row">
@@ -235,114 +202,28 @@
           </div>
         </section>
 
-        <section class="listing-form-section">
-          <h3>Add New Listing</h3>
-          <form id="addListingForm" novalidate>
-            <div class="calendar-source-row">
-              <label for="listingName">Listing Name</label>
-              <input id="listingName" type="text" maxlength="120" required />
-            </div>
-            <div class="calendar-source-row">
-              <label for="listingPropertyId">Property</label>
-              <select id="listingPropertyId" required></select>
-            </div>
-            <button type="submit" class="btn primary calendar-btn">Add Listing</button>
-          </form>
-        </section>
-
-        <section class="listing-form-section">
-          <h3>Feed Source Colours</h3>
-          <table class="calendar-table" aria-label="Feed source colours">
-            <thead>
-              <tr>
-                <th>Feed Source</th>
-                <th>Primary Colour</th>
-              </tr>
-            </thead>
-            <tbody id="feedSourcesTableBody">
-              <tr>
-                <td colspan="2">No feed sources configured yet.</td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-
-        <section class="listing-form-section">
-          <h3>The Team</h3>
-          <div class="listings-block">
-            <table class="calendar-table" aria-label="Configured changeover staff">
-              <thead>
-                <tr>
-                  <th>First Name</th>
-                  <th>Last Name</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="cleanersTableBody">
-                <tr>
-                  <td colspan="3">No changeover staff configured yet.</td>
-                </tr>
-              </tbody>
-            </table>
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Team</h3>
+            <button id="createTeamConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Team Member" aria-label="Create New Team Member">+</button>
           </div>
-
-          <h4 id="cleanerFormTitle">Add Changeover Staff</h4>
-          <form id="cleanerForm" novalidate>
-            <input id="cleanerId" type="hidden" />
-            <div class="calendar-source-row cleaner-row">
-              <label for="cleanerFirstName">First Name</label>
-              <input id="cleanerFirstName" type="text" maxlength="120" required />
-            </div>
-            <div class="calendar-source-row cleaner-row">
-              <label for="cleanerLastName">Last Name</label>
-              <input id="cleanerLastName" type="text" maxlength="120" required />
-            </div>
-            <div class="calendar-source-row cleaner-row">
-              <label for="cleanerEmail">Email Address</label>
-              <input id="cleanerEmail" type="email" maxlength="160" required />
-            </div>
-            <div class="calendar-source-row cleaner-row">
-              <label for="cleanerTelephone">Telephone Number</label>
-              <input id="cleanerTelephone" type="text" maxlength="60" required />
-            </div>
-            <div class="calendar-source-row cleaner-row">
-              <label for="cleanerPassword">Password</label>
-              <input id="cleanerPassword" type="password" minlength="8" required />
-            </div>
-            <div class="feed-actions">
-              <button id="saveCleanerBtn" type="submit" class="btn primary calendar-btn">Add Changeover Staff</button>
-              <button id="cancelCleanerEditBtn" type="button" class="btn secondary hidden">Cancel Edit</button>
-            </div>
-          </form>
+          <div id="configTeamList" class="config-item-list" aria-label="Team"></div>
         </section>
 
-        <section class="listing-form-section">
-          <h3>Bookable Shared Resources (Parking)</h3>
-          <div class="listings-block">
-            <table class="calendar-table" aria-label="Bookable shared resources">
-              <thead>
-                <tr>
-                  <th>Short Description</th>
-                  <th>Property</th>
-                  <th>Listing</th>
-                  <th>Add/Edit</th>
-                </tr>
-              </thead>
-              <tbody id="sharedResourcesTableBody">
-                <tr>
-                  <td colspan="4">No shared resources yet.</td>
-                </tr>
-              </tbody>
-            </table>
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Facilities</h3>
+            <button id="createFacilityConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Facility" aria-label="Create New Facility">+</button>
           </div>
+          <div id="configFacilitiesList" class="config-item-list" aria-label="Facilities"></div>
+        </section>
 
-          <form id="addSharedResourceForm" novalidate>
-            <div class="calendar-source-row">
-              <label for="sharedResourceShortDescription">Short Description</label>
-              <input id="sharedResourceShortDescription" type="text" maxlength="160" required />
-            </div>
-            <button type="submit" class="btn primary calendar-btn">Create New</button>
-          </form>
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Guests</h3>
+            <button id="createGuestConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Guest" aria-label="Create New Guest">+</button>
+          </div>
+          <div id="configGuestsList" class="config-item-list" aria-label="Guests"></div>
         </section>
 
       </div><!-- /panel-config -->

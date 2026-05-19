@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Member - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="logged-page">
+  <div class="sticky-page-chrome">
+    <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
+      <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
+    </div>
+  </div>
+
+  <main class="dashboard">
+    <div class="card-container wide">
+      <div class="feed-actions" style="margin-bottom: 0.7rem;">
+        <button id="backBtn" type="button" class="btn secondary">← Back</button>
+      </div>
+      <h2 id="teamMemberTitle">Team Member</h2>
+      <p id="teamMemberMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <h3>Team Configuration</h3>
+        <form id="teamMemberForm" novalidate>
+          <div class="calendar-source-row">
+            <label for="teamMemberFirstName">First Name</label>
+            <input id="teamMemberFirstName" type="text" maxlength="120" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="teamMemberFamilyName">Family Name</label>
+            <input id="teamMemberFamilyName" type="text" maxlength="120" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="teamMemberCountry">Country Of Residence</label>
+            <input id="teamMemberCountry" type="text" maxlength="120" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="teamMemberEmail">Email</label>
+            <input id="teamMemberEmail" type="email" maxlength="160" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="teamMemberPassword">Password</label>
+            <input id="teamMemberPassword" type="password" minlength="8" />
+          </div>
+
+          <fieldset class="team-role-fieldset">
+            <legend>Roles</legend>
+            <label class="team-role-option">
+              <input id="teamRoleManager" type="checkbox" value="Manager" />
+              <span>Manager</span>
+            </label>
+            <label class="team-role-option">
+              <input id="teamRoleStaff" type="checkbox" value="Staff" />
+              <span>Staff</span>
+            </label>
+          </fieldset>
+
+          <div class="feed-actions">
+            <button type="submit" id="saveTeamMemberBtn" class="btn primary calendar-btn">Save Team Member</button>
+            <button type="button" id="deleteTeamMemberBtn" class="btn secondary">Delete Team Member</button>
+            <button type="button" id="cancelTeamMemberBtn" class="btn secondary">Cancel</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="sticky-layout.js"></script>
+  <script src="team-member.js"></script>
+</body>
+</html>

@@ -22,13 +22,13 @@
   <main class="dashboard">
     <div class="card-container wide">
       <div class="feed-actions" style="margin-bottom: 0.7rem;">
-        <button id="backBtn" type="button" class="btn secondary">Back</button>
+        <button id="backBtn" type="button" class="btn secondary">← Back</button>
       </div>
-      <h2 id="sharedResourceTitle">Shared Resource</h2>
+      <h2 id="sharedResourceTitle">Facility</h2>
       <p id="sharedResourceMessage" class="message"></p>
 
       <section class="listing-form-section">
-        <h3>Bookable Shared Resource Configuration</h3>
+        <h3>Facility Configuration</h3>
         <form id="sharedResourceForm" novalidate>
           <div class="calendar-source-row resource-booking-url-row">
             <label for="bookingPageUrl">Booking Page URL</label>
@@ -143,13 +143,14 @@
           </div>
 
           <div class="feed-actions">
-            <button type="submit" class="btn primary calendar-btn">Save Shared Resource</button>
-            <button type="button" id="deleteSharedResourceBtn" class="btn secondary">Delete Shared Resource</button>
+            <button type="submit" class="btn primary calendar-btn">Save Facility</button>
+            <button type="button" id="deleteSharedResourceBtn" class="btn secondary">Delete Facility</button>
+            <button type="button" id="cancelSharedResourceBtn" class="btn secondary">Cancel</button>
           </div>
         </form>
       </section>
 
-      <section class="listing-form-section" style="margin-top: 2rem;">
+      <section id="sharedResourceReservationsSection" class="listing-form-section" style="margin-top: 2rem;">
         <h3>Reservations</h3>
         <p id="adminReservationsMessage" class="message"></p>
         <div class="table-wrap public-resource-reservations-wrap">

@@ -1,10 +1,13 @@
 'use strict';
 
 const params = new URLSearchParams(window.location.search);
-const resourceId = Number(params.get('id'));
+const resourceIdParam = Number(params.get('id'));
+const isCreateMode = String(params.get('new') || '').trim() === '1' || !(Number.isInteger(resourceIdParam) && resourceIdParam > 0);
+let resourceId = Number.isInteger(resourceIdParam) && resourceIdParam > 0 ? resourceIdParam : null;
 let canEditSharedResource = false;
 let currentProperties = [];
 let currentListings = [];
+let initialSharedResourceFormState = '';
 let activePaymentMessageKey = 'free_of_charge';
 let currentPaymentMessages = {
   free_of_charge: '',
@@ -20,6 +23,45 @@ let currentChargeConfig = {
   hourlyRate: '',
   hourlyRates: Array.from({ length: 24 }, () => '')
 };
+
+function getSharedResourceFormState() {
+  persistActivePaymentMessage();
+  return JSON.stringify({
+    shortDescription: String(document.getElementById('shortDescription').value || ''),
+    resourceType: String(document.getElementById('resourceType').value || ''),
+    fullDescriptionHtml: String(getEditorHtml() || ''),
+    maxUnits: String(document.getElementById('maxUnits').value || ''),
+    maxDaysAdvanceBooking: String(document.getElementById('maxDaysAdvanceBooking').value || ''),
+    propertyId: String(document.getElementById('sharedResourcePropertyId').value || ''),
+    listingId: String(document.getElementById('sharedResourceListingId').value || ''),
+    freeOfCharge: document.getElementById('paymentFreeOfCharge').checked,
+    cashOnSite: document.getElementById('paymentCashOnSite').checked,
+    bankTransfer: document.getElementById('paymentBankTransfer').checked,
+    onlinePayment: document.getElementById('paymentOnlinePayment').checked,
+    paymentMessages: {
+      free_of_charge: currentPaymentMessages.free_of_charge || '',
+      cash_on_site: currentPaymentMessages.cash_on_site || '',
+      bank_transfer: currentPaymentMessages.bank_transfer || '',
+      online_payment: currentPaymentMessages.online_payment || ''
+    },
+    chargeConfig: currentChargeConfig
+  });
+}
+
+function hasUnsavedSharedResourceChanges() {
+  return getSharedResourceFormState() !== initialSharedResourceFormState;
+}
+
+function confirmDiscardSharedResourceChanges() {
+  if (!hasUnsavedSharedResourceChanges()) {
+    return true;
+  }
+  return window.confirm('You have unsaved changes. Cancel changes and continue?');
+}
+
+function goBackToConfig() {
+  window.location.href = '/dashboard.html?tab=panel-config';
+}
 
 function setSharedResourceMessage(text, isError) {
   const el = document.getElementById('sharedResourceMessage');
@@ -520,17 +562,17 @@ async function loadSharedResource() {
     return;
   }
   if (res.status === 404) {
-    setSharedResourceMessage('Shared resource not found.', true);
+    setSharedResourceMessage('Facility not found.', true);
     return;
   }
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to load shared resource.');
+    throw new Error(data.error || 'Failed to load facility.');
   }
 
   const resource = data.resource;
-  document.getElementById('sharedResourceTitle').textContent = 'Shared Resource: ' + (resource.short_description || '');
+  document.getElementById('sharedResourceTitle').textContent = 'Facility: ' + (resource.short_description || '');
   document.getElementById('shortDescription').value = resource.short_description || '';
   document.getElementById('resourceType').value = resource.resource_type === 'parking' ? 'parking' : 'undefined';
   document.getElementById('fullDescriptionEditor').innerHTML = resource.full_description_html || '';
@@ -609,6 +651,10 @@ function renderAdminReservationsTable(reservations) {
 }
 
 async function loadAdminReservations() {
+  if (!resourceId) {
+    return;
+  }
+
   const msgEl = document.getElementById('adminReservationsMessage');
   try {
     const res = await fetch('/api/shared-resources/' + resourceId + '/reservations');
@@ -632,11 +678,6 @@ async function loadAdminReservations() {
 (async () => {
   setBookingPageUrl();
 
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
-    setSharedResourceMessage('Invalid shared resource id.', true);
-    return;
-  }
-
   try {
     const meRes = await fetch('/api/me');
     if (!meRes.ok) {
@@ -653,10 +694,20 @@ async function loadAdminReservations() {
       return;
     }
 
-    await loadSharedResource();
-    await loadAdminReservations();
+    if (isCreateMode) {
+      document.getElementById('sharedResourceTitle').textContent = 'Create Facility';
+      document.getElementById('deleteSharedResourceBtn').classList.add('hidden');
+      document.getElementById('sharedResourceReservationsSection').classList.add('hidden');
+      document.getElementById('maxUnits').value = '1';
+      document.getElementById('maxDaysAdvanceBooking').value = '365';
+      initialSharedResourceFormState = getSharedResourceFormState();
+    } else {
+      await loadSharedResource();
+      await loadAdminReservations();
+      initialSharedResourceFormState = getSharedResourceFormState();
+    }
   } catch (err) {
-    setSharedResourceMessage(err.message || 'Failed to load shared resource page.', true);
+    setSharedResourceMessage(err.message || 'Failed to load facility page.', true);
   }
 })();
 
@@ -843,8 +894,10 @@ document.getElementById('sharedResourceForm').addEventListener('submit', async (
 
   button.disabled = true;
   try {
-    const res = await fetch('/api/shared-resources/' + resourceId, {
-      method: 'PUT',
+    const endpoint = isCreateMode ? '/api/shared-resources' : ('/api/shared-resources/' + resourceId);
+    const method = isCreateMode ? 'POST' : 'PUT';
+    const res = await fetch(endpoint, {
+      method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         shortDescription,
@@ -873,7 +926,7 @@ document.getElementById('sharedResourceForm').addEventListener('submit', async (
     const data = await res.json();
 
     if (!res.ok) {
-      setSharedResourceMessage(data.error || 'Failed to save shared resource.', true);
+      setSharedResourceMessage(data.error || 'Failed to save facility.', true);
       return;
     }
 
@@ -902,9 +955,17 @@ document.getElementById('sharedResourceForm').addEventListener('submit', async (
     };
     renderChargeConfigSummary();
 
-    document.getElementById('sharedResourceTitle').textContent = 'Shared Resource: ' + (data.resource.short_description || '');
+    if (isCreateMode) {
+      const nextResourceId = Number(data && data.resource && data.resource.id);
+      if (Number.isInteger(nextResourceId) && nextResourceId > 0) {
+        window.location.href = '/shared-resource.html?id=' + encodeURIComponent(nextResourceId);
+        return;
+      }
+    }
+
+    document.getElementById('sharedResourceTitle').textContent = 'Facility: ' + (data.resource.short_description || '');
     const savedSummary = [
-      'Shared resource saved.',
+      'Facility saved.',
       'charge_basis=' + String(data.resource.charge_basis || ''),
       'daily_charge_mode=' + String(data.resource.daily_charge_mode || ''),
       'daily_rate=' + (data.resource.daily_rate === null || data.resource.daily_rate === undefined ? '' : String(data.resource.daily_rate)),
@@ -912,23 +973,28 @@ document.getElementById('sharedResourceForm').addEventListener('submit', async (
       'hourly_rate=' + (data.resource.hourly_rate === null || data.resource.hourly_rate === undefined ? '' : String(data.resource.hourly_rate)),
       'updated_at=' + String(data.resource.updated_at || '')
     ].join(' ');
+    initialSharedResourceFormState = getSharedResourceFormState();
     setSharedResourceMessage(savedSummary, false);
   } catch {
-    setSharedResourceMessage('Network error saving shared resource.', true);
+    setSharedResourceMessage('Network error saving facility.', true);
   } finally {
     button.disabled = false;
   }
 });
 
 document.getElementById('deleteSharedResourceBtn').addEventListener('click', async () => {
+  if (isCreateMode || !resourceId) {
+    return;
+  }
+
   if (!canEditSharedResource) {
     setSharedResourceMessage('Read-only access: deleting is not allowed for your role.', true);
     return;
   }
 
-  const shortDescription = document.getElementById('shortDescription').value.trim() || 'this shared resource';
+  const shortDescription = document.getElementById('shortDescription').value.trim() || 'this facility';
   const confirmed = window.confirm(
-    'Are you sure you want to delete shared resource: ' + shortDescription + '?\n\nAll reservation data for this resource will be irrevocably lost.'
+    'Are you sure you want to delete facility: ' + shortDescription + '?\n\nAll reservation data for this facility will be irrevocably lost.'
   );
   if (!confirmed) {
     return;
@@ -943,22 +1009,40 @@ document.getElementById('deleteSharedResourceBtn').addEventListener('click', asy
     const data = await res.json();
 
     if (!res.ok) {
-      setSharedResourceMessage(data.error || 'Failed to delete shared resource.', true);
+      setSharedResourceMessage(data.error || 'Failed to delete facility.', true);
       return;
     }
 
-    window.location.href = '/dashboard.html';
+    goBackToConfig();
   } catch {
-    setSharedResourceMessage('Network error deleting shared resource.', true);
+    setSharedResourceMessage('Network error deleting facility.', true);
   } finally {
-    if (!window.location.href.endsWith('/dashboard.html')) {
+    if (!window.location.href.includes('/dashboard.html')) {
       button.disabled = false;
     }
   }
 });
 
 document.getElementById('backBtn').addEventListener('click', () => {
-  window.location.href = '/dashboard.html';
+  if (!confirmDiscardSharedResourceChanges()) {
+    return;
+  }
+  goBackToConfig();
+});
+
+document.getElementById('cancelSharedResourceBtn').addEventListener('click', () => {
+  if (!confirmDiscardSharedResourceChanges()) {
+    return;
+  }
+  goBackToConfig();
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedSharedResourceChanges()) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = '';
 });
 
 const logoutBtn = document.getElementById('logoutBtn');

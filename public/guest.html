@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Guest - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="logged-page">
+  <div class="sticky-page-chrome">
+    <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
+      <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
+    </div>
+  </div>
+
+  <main class="dashboard">
+    <div class="card-container wide">
+      <div class="feed-actions" style="margin-bottom: 0.7rem;">
+        <button id="backBtn" type="button" class="btn secondary">← Back</button>
+      </div>
+      <h2 id="guestTitle">Guest</h2>
+      <p id="guestMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <h3>Guest Configuration</h3>
+        <form id="guestForm" novalidate>
+          <div class="calendar-source-row">
+            <label for="guestFirstName">First Name</label>
+            <input id="guestFirstName" type="text" maxlength="120" />
+          </div>
+          <div class="calendar-source-row">
+            <label for="guestFamilyName">Family Name</label>
+            <input id="guestFamilyName" type="text" maxlength="120" />
+          </div>
+          <div class="calendar-source-row">
+            <label for="guestEmail">Email</label>
+            <input id="guestEmail" type="email" maxlength="160" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="guestPhone">Phone</label>
+            <input id="guestPhone" type="text" maxlength="60" />
+          </div>
+          <div class="calendar-source-row">
+            <label for="guestSourceType">Source</label>
+            <input id="guestSourceType" type="text" readonly />
+          </div>
+
+          <div class="feed-actions">
+            <button type="submit" id="saveGuestBtn" class="btn primary calendar-btn">Save Guest</button>
+            <button type="button" id="deleteGuestBtn" class="btn secondary">Delete Guest</button>
+            <button type="button" id="cancelGuestBtn" class="btn secondary">Cancel</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="sticky-layout.js"></script>
+  <script src="guest.js"></script>
+</body>
+</html>

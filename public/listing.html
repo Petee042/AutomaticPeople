@@ -22,7 +22,7 @@
   <main class="dashboard">
     <div class="card-container wide">
       <div class="feed-actions" style="margin-bottom: 0.7rem;">
-        <button id="backBtn" type="button" class="btn secondary">Back</button>
+        <button id="backBtn" type="button" class="btn secondary">← Back</button>
       </div>
       <h2 id="listingTitle">Listing</h2>
       <p id="listingMessage" class="message"></p>
@@ -56,11 +56,15 @@
               <option value="">— None —</option>
             </select>
           </div>
-          <button type="submit" class="btn primary calendar-btn">Save Listing</button>
+          <div class="feed-actions">
+            <button type="submit" class="btn primary calendar-btn">Save Listing</button>
+            <button type="button" id="deleteListingBtn" class="btn secondary">Delete Listing</button>
+            <button type="button" id="cancelListingBtn" class="btn secondary">Cancel</button>
+          </div>
         </form>
       </section>
 
-      <section class="calendar-section">
+      <section id="listingFeedsSection" class="calendar-section">
         <h3>Calendar Feeds</h3>
         <div class="table-wrap">
           <table class="calendar-table" aria-label="Calendar feeds">
@@ -105,7 +109,7 @@
         </div>
       </section>
 
-      <section class="calendar-section">
+      <section id="listingCalendarSection" class="calendar-section">
         <h3>Reservation Calendar</h3>
         <button type="button" id="updateCalendarsBtn" class="btn primary calendar-btn">Refresh Calendar</button>
         <span id="calendarFetchedAt" class="calendar-fetched-at"></span>

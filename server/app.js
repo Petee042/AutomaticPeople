@@ -4343,6 +4343,23 @@ async function updateListingForUser(listingId, userId, name, propertyId, dateBas
   }
 }
 
+async function deleteListingForUser(listingId, userId) {
+  const result = await pool.query(
+    `
+      DELETE FROM listings
+      WHERE id = $1 AND user_id = $2
+      RETURNING id
+    `,
+    [listingId, userId]
+  );
+
+  if (!result.rows[0]) {
+    return { error: 'Listing not found.' };
+  }
+
+  return { deletedListingId: Number(result.rows[0].id) };
+}
+
 async function getBookedInChangesForUserByListings(userId, listingIds) {
   const uniqueListingIds = Array.from(new Set((listingIds || [])
     .map((id) => Number(id))
@@ -4368,6 +4385,154 @@ async function getBookedInChangesForUserByListings(userId, listingIds) {
     [userId, uniqueListingIds]
   );
   return result.rows;
+}
+
+async function getGuestByIdForClientAccount(clientAccountId, guestId) {
+  const result = await pool.query(
+    `
+      SELECT id,
+             client_account_id,
+             guest_user_id,
+             guest_email,
+             guest_phone,
+             guest_first_name,
+             guest_family_name,
+             source_type,
+             source_id,
+             first_seen_at,
+             last_seen_at,
+             created_at,
+             updated_at
+      FROM guest_relationships
+      WHERE client_account_id = $1
+        AND id = $2
+      LIMIT 1
+    `,
+    [clientAccountId, guestId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function createGuestForClientAccount(clientAccountId, payload) {
+  const firstName = String(payload && payload.firstName || '').trim().slice(0, 120);
+  const familyName = String(payload && payload.familyName || '').trim().slice(0, 120);
+  const email = normaliseOptionalEmail(payload && payload.email);
+  const phone = String(payload && payload.phone || '').trim().slice(0, 60);
+
+  if (!email) {
+    return { error: 'A valid guest email is required.' };
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        INSERT INTO guest_relationships (
+          client_account_id,
+          guest_email,
+          guest_phone,
+          guest_first_name,
+          guest_family_name,
+          source_type,
+          source_id,
+          first_seen_at,
+          last_seen_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 'manual', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING id,
+                  client_account_id,
+                  guest_user_id,
+                  guest_email,
+                  guest_phone,
+                  guest_first_name,
+                  guest_family_name,
+                  source_type,
+                  source_id,
+                  first_seen_at,
+                  last_seen_at,
+                  created_at,
+                  updated_at
+      `,
+      [clientAccountId, email, phone, firstName, familyName]
+    );
+
+    return { guest: result.rows[0] };
+  } catch (err) {
+    if (err && err.code === '23505') {
+      return { error: 'A guest with this email and phone already exists.' };
+    }
+    throw err;
+  }
+}
+
+async function updateGuestForClientAccount(clientAccountId, guestId, payload) {
+  const firstName = String(payload && payload.firstName || '').trim().slice(0, 120);
+  const familyName = String(payload && payload.familyName || '').trim().slice(0, 120);
+  const email = normaliseOptionalEmail(payload && payload.email);
+  const phone = String(payload && payload.phone || '').trim().slice(0, 60);
+
+  if (!email) {
+    return { error: 'A valid guest email is required.' };
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        UPDATE guest_relationships
+        SET guest_email = $1,
+            guest_phone = $2,
+            guest_first_name = $3,
+            guest_family_name = $4,
+            last_seen_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $5
+          AND id = $6
+        RETURNING id,
+                  client_account_id,
+                  guest_user_id,
+                  guest_email,
+                  guest_phone,
+                  guest_first_name,
+                  guest_family_name,
+                  source_type,
+                  source_id,
+                  first_seen_at,
+                  last_seen_at,
+                  created_at,
+                  updated_at
+      `,
+      [email, phone, firstName, familyName, clientAccountId, guestId]
+    );
+
+    if (!result.rows[0]) {
+      return { error: 'Guest not found.' };
+    }
+
+    return { guest: result.rows[0] };
+  } catch (err) {
+    if (err && err.code === '23505') {
+      return { error: 'A guest with this email and phone already exists.' };
+    }
+    throw err;
+  }
+}
+
+async function deleteGuestForClientAccount(clientAccountId, guestId) {
+  const result = await pool.query(
+    `
+      DELETE FROM guest_relationships
+      WHERE client_account_id = $1
+        AND id = $2
+      RETURNING id
+    `,
+    [clientAccountId, guestId]
+  );
+
+  if (!result.rows[0]) {
+    return { error: 'Guest not found.' };
+  }
+
+  return { deletedGuestId: Number(result.rows[0].id) };
 }
 
 async function upsertBookedInChangesForUser(userId, changes) {
@@ -7456,6 +7621,31 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
   }
 });
 
+// DELETE /api/listings/:listingId — delete listing
+app.delete('/api/listings/:listingId', requireScopedRole('Manager'), async (req, res) => {
+  const listingId = Number(req.params.listingId);
+  if (!Number.isInteger(listingId) || listingId <= 0) {
+    return res.status(400).json({ error: 'Invalid listing id.' });
+  }
+
+  try {
+    const existing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!existing || !isListingAllowedByScope(req, existing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
+    const result = await deleteListingForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (result.error) {
+      return res.status(404).json({ error: result.error });
+    }
+
+    return res.json({ message: 'Listing deleted.', deletedListingId: result.deletedListingId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete listing.' });
+  }
+});
+
 // GET /api/listings/:listingId/feeds — feeds for a listing
 app.get('/api/listings/:listingId/feeds', requireScopedRole('Staff'), async (req, res) => {
   const listingId = Number(req.params.listingId);
@@ -7477,6 +7667,83 @@ app.get('/api/listings/:listingId/feeds', requireScopedRole('Staff'), async (req
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load feeds.' });
+  }
+});
+
+// POST /api/access/guests — create guest record in active client account
+app.post('/api/access/guests', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const result = await createGuestForClientAccount(req.accessContext.activeClientAccountId, req.body || {});
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to create guest relationship.' });
+  }
+});
+
+// GET /api/access/guests/:guestId — get one guest record in active client account
+app.get('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req, res) => {
+  const guestId = Number(req.params.guestId);
+  if (!Number.isInteger(guestId) || guestId <= 0) {
+    return res.status(400).json({ error: 'Invalid guest id.' });
+  }
+
+  try {
+    const guest = await getGuestByIdForClientAccount(req.accessContext.activeClientAccountId, guestId);
+    if (!guest) {
+      return res.status(404).json({ error: 'Guest not found.' });
+    }
+    return res.json({ guest });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load guest relationship.' });
+  }
+});
+
+// PUT /api/access/guests/:guestId — update one guest record in active client account
+app.put('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req, res) => {
+  const guestId = Number(req.params.guestId);
+  if (!Number.isInteger(guestId) || guestId <= 0) {
+    return res.status(400).json({ error: 'Invalid guest id.' });
+  }
+
+  try {
+    const result = await updateGuestForClientAccount(req.accessContext.activeClientAccountId, guestId, req.body || {});
+    if (result.error === 'Guest not found.') {
+      return res.status(404).json({ error: result.error });
+    }
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to update guest relationship.' });
+  }
+});
+
+// DELETE /api/access/guests/:guestId — delete one guest record in active client account
+app.delete('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req, res) => {
+  const guestId = Number(req.params.guestId);
+  if (!Number.isInteger(guestId) || guestId <= 0) {
+    return res.status(400).json({ error: 'Invalid guest id.' });
+  }
+
+  try {
+    const result = await deleteGuestForClientAccount(req.accessContext.activeClientAccountId, guestId);
+    if (result.error === 'Guest not found.') {
+      return res.status(404).json({ error: result.error });
+    }
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    return res.json({ message: 'Guest deleted.', deletedGuestId: result.deletedGuestId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete guest relationship.' });
   }
 });
 

@@ -142,6 +142,47 @@ function createScopeBadge(text) {
   return badge;
 }
 
+function renderConfigRows(containerId, items, emptyText) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(items) || !items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'config-item-empty';
+    empty.textContent = emptyText;
+    container.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'config-item-row';
+
+    const name = document.createElement('span');
+    name.className = 'config-item-name';
+    name.textContent = item.name || 'Untitled';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn secondary config-edit-btn';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Edit';
+    editBtn.setAttribute('aria-label', 'Edit ' + (item.name || 'item'));
+    editBtn.addEventListener('click', () => {
+      if (item.href) {
+        window.location.href = item.href;
+      }
+    });
+
+    row.appendChild(name);
+    row.appendChild(editBtn);
+    container.appendChild(row);
+  });
+}
+
 function applyAccessRoleVisibility() {
   const addTeamForm = document.getElementById('addTeamMemberForm');
   const saveAssignmentsBtn = document.getElementById('saveManagerAssignmentsBtn');
@@ -194,6 +235,7 @@ function renderTeamMembers(team) {
     row.appendChild(cell);
     tbody.appendChild(row);
     closeTeamMemberEditor();
+    renderConfigRows('configTeamList', [], 'No team members yet.');
     return;
   }
 
@@ -232,10 +274,24 @@ function renderTeamMembers(team) {
     row.appendChild(cell);
     tbody.appendChild(row);
     closeTeamMemberEditor();
+    renderConfigRows('configTeamList', [], 'No team members yet.');
     return;
   }
 
   const groupedMembers = Array.from(groupedByUser.values());
+
+  renderConfigRows(
+    'configTeamList',
+    groupedMembers.map((member) => {
+      const fullName = [member.first_name, member.family_name].filter(Boolean).join(' ').trim();
+      const emailFallback = String(member.email || '').trim();
+      return {
+        name: fullName || emailFallback || ('Team Member #' + member.user_id),
+        href: '/team-member.html?id=' + encodeURIComponent(member.user_id)
+      };
+    }),
+    'No team members yet.'
+  );
 
   groupedMembers.forEach((member) => {
     const row = document.createElement('tr');
@@ -387,8 +443,21 @@ function renderGuests(guests) {
     cell.textContent = 'No guest contacts found.';
     row.appendChild(cell);
     tbody.appendChild(row);
+    renderConfigRows('configGuestsList', [], 'No guests yet.');
     return;
   }
+
+  renderConfigRows(
+    'configGuestsList',
+    currentGuests.map((guest) => {
+      const guestName = [guest.guest_first_name, guest.guest_family_name].filter(Boolean).join(' ').trim();
+      return {
+        name: guestName || guest.guest_email || guest.guest_phone || ('Guest #' + guest.id),
+        href: '/guest.html?id=' + encodeURIComponent(guest.id)
+      };
+    }),
+    'No guests yet.'
+  );
 
   currentGuests.forEach((guest) => {
     const row = document.createElement('tr');
@@ -799,7 +868,22 @@ async function fetchGuests() {
 
 function renderListings(listings) {
   const tbody = document.getElementById('listingsTableBody');
-  tbody.innerHTML = '';
+  if (tbody) {
+    tbody.innerHTML = '';
+  }
+
+  renderConfigRows(
+    'configListingsList',
+    (listings || []).map((listing) => ({
+      name: listing.name || ('Listing #' + listing.id),
+      href: '/listing.html?id=' + encodeURIComponent(listing.id)
+    })),
+    'No listings yet.'
+  );
+
+  if (!tbody) {
+    return;
+  }
 
   if (!listings.length) {
     const row = document.createElement('tr');
@@ -857,16 +941,27 @@ function renderProperties(properties) {
   currentProperties = properties || [];
 
   const tbody = document.getElementById('propertiesTableBody');
-  tbody.innerHTML = '';
+  if (tbody) {
+    tbody.innerHTML = '';
+  }
 
-  if (!currentProperties.length) {
+  renderConfigRows(
+    'configPropertiesList',
+    currentProperties.map((property) => ({
+      name: property.name || ('Property #' + property.id),
+      href: '/property.html?id=' + encodeURIComponent(property.id)
+    })),
+    'No properties yet.'
+  );
+
+  if (tbody && !currentProperties.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
     cell.colSpan = 3;
     cell.textContent = 'No properties yet.';
     row.appendChild(cell);
     tbody.appendChild(row);
-  } else {
+  } else if (tbody) {
     currentProperties.forEach((property) => {
       const row = document.createElement('tr');
 
@@ -905,16 +1000,21 @@ function renderProperties(properties) {
   }
 
   const select = document.getElementById('listingPropertyId');
-  select.innerHTML = '';
-  currentProperties.forEach((property) => {
-    const option = document.createElement('option');
-    option.value = String(property.id);
-    option.textContent = property.name;
-    select.appendChild(option);
-  });
+  if (select) {
+    select.innerHTML = '';
+    currentProperties.forEach((property) => {
+      const option = document.createElement('option');
+      option.value = String(property.id);
+      option.textContent = property.name;
+      select.appendChild(option);
+    });
+  }
 }
 
 function resetCleanerForm() {
+  if (!document.getElementById('cleanerId')) {
+    return;
+  }
   document.getElementById('cleanerId').value = '';
   document.getElementById('cleanerFirstName').value = '';
   document.getElementById('cleanerLastName').value = '';
@@ -929,6 +1029,9 @@ function resetCleanerForm() {
 }
 
 function startCleanerEdit(cleanerId) {
+  if (!document.getElementById('cleanerId')) {
+    return;
+  }
   const cleaner = currentCleaners.find((item) => Number(item.id) === Number(cleanerId));
   if (!cleaner) {
     setMessage('Changeover staff entry not found.', true);
@@ -952,6 +1055,9 @@ function renderCleaners(cleaners) {
   currentCleaners = cleaners || [];
 
   const tbody = document.getElementById('cleanersTableBody');
+  if (!tbody) {
+    return;
+  }
   tbody.innerHTML = '';
 
   if (!currentCleaners.length) {
@@ -1001,9 +1107,26 @@ function renderSharedResources(resources) {
 
   const tbody = document.getElementById('sharedResourcesTableBody');
   if (!tbody) {
+    renderConfigRows(
+      'configFacilitiesList',
+      currentSharedResources.map((resource) => ({
+        name: resource.short_description || ('Facility #' + resource.id),
+        href: '/shared-resource.html?id=' + encodeURIComponent(resource.id)
+      })),
+      'No facilities yet.'
+    );
     return;
   }
   tbody.innerHTML = '';
+
+  renderConfigRows(
+    'configFacilitiesList',
+    currentSharedResources.map((resource) => ({
+      name: resource.short_description || ('Facility #' + resource.id),
+      href: '/shared-resource.html?id=' + encodeURIComponent(resource.id)
+    })),
+    'No facilities yet.'
+  );
 
   if (!currentSharedResources.length) {
     const row = document.createElement('tr');
@@ -1672,6 +1795,9 @@ async function updateSchedulePreview() {
 
 function renderFeedSources(sources) {
   const tbody = document.getElementById('feedSourcesTableBody');
+  if (!tbody) {
+    return;
+  }
   tbody.innerHTML = '';
 
   if (!sources.length) {
@@ -1902,7 +2028,8 @@ async function loadDashboardData() {
   }
 })();
 
-document.getElementById('addListingForm').addEventListener('submit', async (e) => {
+const addListingForm = document.getElementById('addListingForm');
+if (addListingForm) addListingForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const button = e.target.querySelector('button[type="submit"]');
   const name = document.getElementById('listingName').value.trim();
@@ -1944,7 +2071,8 @@ document.getElementById('addListingForm').addEventListener('submit', async (e) =
   }
 });
 
-document.getElementById('addPropertyForm').addEventListener('submit', async (e) => {
+const addPropertyForm = document.getElementById('addPropertyForm');
+if (addPropertyForm) addPropertyForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const button = e.target.querySelector('button[type="submit"]');
@@ -1980,7 +2108,8 @@ document.getElementById('addPropertyForm').addEventListener('submit', async (e) 
   }
 });
 
-document.getElementById('addSharedResourceForm').addEventListener('submit', async (e) => {
+const addSharedResourceForm = document.getElementById('addSharedResourceForm');
+if (addSharedResourceForm) addSharedResourceForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const button = e.target.querySelector('button[type="submit"]');
@@ -2012,6 +2141,41 @@ document.getElementById('addSharedResourceForm').addEventListener('submit', asyn
     button.disabled = false;
   }
 });
+
+const createPropertyConfigBtn = document.getElementById('createPropertyConfigBtn');
+if (createPropertyConfigBtn) {
+  createPropertyConfigBtn.addEventListener('click', () => {
+    window.location.href = '/property.html?new=1';
+  });
+}
+
+const createListingConfigBtn = document.getElementById('createListingConfigBtn');
+if (createListingConfigBtn) {
+  createListingConfigBtn.addEventListener('click', () => {
+    window.location.href = '/listing.html?new=1';
+  });
+}
+
+const createTeamConfigBtn = document.getElementById('createTeamConfigBtn');
+if (createTeamConfigBtn) {
+  createTeamConfigBtn.addEventListener('click', () => {
+    window.location.href = '/team-member.html?new=1';
+  });
+}
+
+const createFacilityConfigBtn = document.getElementById('createFacilityConfigBtn');
+if (createFacilityConfigBtn) {
+  createFacilityConfigBtn.addEventListener('click', () => {
+    window.location.href = '/shared-resource.html?new=1';
+  });
+}
+
+const createGuestConfigBtn = document.getElementById('createGuestConfigBtn');
+if (createGuestConfigBtn) {
+  createGuestConfigBtn.addEventListener('click', () => {
+    window.location.href = '/guest.html?new=1';
+  });
+}
 
 document.getElementById('addTeamMemberForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2371,7 +2535,8 @@ document.getElementById('saveScheduleChangesBtn').addEventListener('click', asyn
   }
 });
 
-document.getElementById('cleanerForm').addEventListener('submit', async (e) => {
+const cleanerForm = document.getElementById('cleanerForm');
+if (cleanerForm) cleanerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const cleanerId = Number(document.getElementById('cleanerId').value);
@@ -2421,9 +2586,12 @@ document.getElementById('cleanerForm').addEventListener('submit', async (e) => {
   }
 });
 
-document.getElementById('cancelCleanerEditBtn').addEventListener('click', () => {
-  resetCleanerForm();
-});
+const cancelCleanerEditBtn = document.getElementById('cancelCleanerEditBtn');
+if (cancelCleanerEditBtn) {
+  cancelCleanerEditBtn.addEventListener('click', () => {
+    resetCleanerForm();
+  });
+}
 
 document.getElementById('copyConsolidatedIcsUrlBtn').addEventListener('click', async () => {
   const url = document.getElementById('consolidatedIcsExportUrl').value;

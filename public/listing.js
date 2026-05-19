@@ -1,10 +1,13 @@
 'use strict';
 
 const params = new URLSearchParams(window.location.search);
-const listingId = Number(params.get('id'));
+const listingIdParam = Number(params.get('id'));
+const isCreateMode = String(params.get('new') || '').trim() === '1' || !(Number.isInteger(listingIdParam) && listingIdParam > 0);
+let listingId = Number.isInteger(listingIdParam) && listingIdParam > 0 ? listingIdParam : null;
 let canEditListing = false;
 let currentAccessRole = '';
 let currentUserEmail = '';
+let initialListingFormState = '';
 let managerScopeState = {
   hasAssignments: false,
   propertyIdSet: new Set(),
@@ -29,6 +32,30 @@ const cleanerBadgeColorMap = {};
 const sourceColorMap = {};
 const sourcePalette = ['#ff5a5f', '#003580', '#2a9d8f', '#e76f51', '#264653', '#f4a261', '#8a5cf6'];
 const cleanerBadgePalette = ['#0f766e', '#1d4ed8', '#b45309', '#be123c', '#4338ca', '#166534', '#92400e', '#0369a1'];
+
+function getListingFormState() {
+  return JSON.stringify({
+    name: String(document.getElementById('listingName').value || ''),
+    propertyId: String(document.getElementById('listingPropertyId').value || ''),
+    dateBasis: String(document.getElementById('listingDateBasis').value || ''),
+    usualCleanerId: String(document.getElementById('listingUsualCleaner').value || '')
+  });
+}
+
+function hasUnsavedListingChanges() {
+  return getListingFormState() !== initialListingFormState;
+}
+
+function confirmDiscardListingChanges() {
+  if (!hasUnsavedListingChanges()) {
+    return true;
+  }
+  return window.confirm('You have unsaved changes. Cancel changes and continue?');
+}
+
+function goBackToConfig() {
+  window.location.href = '/dashboard.html?tab=panel-config';
+}
 
 function normaliseSourceKey(source) {
   return String(source || 'Unknown').trim().toLowerCase();
@@ -974,6 +1001,10 @@ function clearFeedEditMode() {
 }
 
 async function loadListing() {
+  if (!listingId) {
+    return;
+  }
+
   await loadSourceColorPreferences();
   await loadProperties();
 
@@ -1112,11 +1143,6 @@ async function updateCalendars() {
 }
 
 (async () => {
-  if (!Number.isInteger(listingId) || listingId <= 0) {
-    setListingMessage('Invalid listing id.', true);
-    return;
-  }
-
   try {
     const meRes = await fetch('/api/me');
     if (!meRes.ok) {
@@ -1130,15 +1156,34 @@ async function updateCalendars() {
     applyListingAccess(currentAccessRole);
     await loadListingManagerScope();
 
-    await loadListing();
-    await loadCachedCalendar();
-    await fetchListingManagers();
+    if (isCreateMode) {
+      await loadProperties();
+      const cleaners = await loadCleaners();
+      populateUsualCleanerSelect(cleaners, null);
+      document.getElementById('listingTitle').textContent = 'Create Listing';
+      document.getElementById('listingPublicId').value = 'New';
+      document.getElementById('listingFeedsSection').classList.add('hidden');
+      document.getElementById('listingCalendarSection').classList.add('hidden');
+      document.getElementById('listingAssignmentEditor').classList.add('hidden');
+      document.getElementById('deleteListingBtn').classList.add('hidden');
+      initialListingFormState = getListingFormState();
+    } else {
+      await loadListing();
+      await loadCachedCalendar();
+      await fetchListingManagers();
+      initialListingFormState = getListingFormState();
+    }
   } catch (err) {
     setListingMessage(err.message || 'Failed to load listing page.', true);
   }
 })();
 
 async function fetchListingManagers() {
+  if (isCreateMode || !listingId) {
+    applyListingAssignmentEditor(null);
+    return;
+  }
+
   const res = await fetch('/api/access/manager-assignments');
   if (res.status === 401) {
     window.location.href = '/';
@@ -1318,8 +1363,8 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
 
   button.disabled = true;
   try {
-    const res = await fetch('/api/listings/' + listingId, {
-      method: 'PUT',
+    const res = await fetch(isCreateMode ? '/api/listings' : ('/api/listings/' + listingId), {
+      method: isCreateMode ? 'POST' : 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, propertyId, dateBasis, usualCleanerId })
     });
@@ -1330,7 +1375,16 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
       return;
     }
 
+    if (isCreateMode) {
+      const nextListingId = Number(data && data.listing && data.listing.id);
+      if (Number.isInteger(nextListingId) && nextListingId > 0) {
+        window.location.href = '/listing.html?id=' + encodeURIComponent(nextListingId);
+        return;
+      }
+    }
+
     document.getElementById('listingTitle').textContent = 'Listing: ' + data.listing.name;
+    initialListingFormState = getListingFormState();
     setListingMessage('Listing updated.', false);
   } catch {
     setListingMessage('Network error saving listing.', true);
@@ -1419,7 +1473,60 @@ document.getElementById('nextMonthBtn').addEventListener('click', () => {
 });
 
 document.getElementById('backBtn').addEventListener('click', () => {
-  window.location.href = '/dashboard.html';
+  if (!confirmDiscardListingChanges()) {
+    return;
+  }
+  goBackToConfig();
+});
+
+document.getElementById('cancelListingBtn').addEventListener('click', () => {
+  if (!confirmDiscardListingChanges()) {
+    return;
+  }
+  goBackToConfig();
+});
+
+document.getElementById('deleteListingBtn').addEventListener('click', async () => {
+  if (isCreateMode || !listingId) {
+    return;
+  }
+
+  if (!canEditListing) {
+    setListingMessage('Read-only access: deleting is not allowed for your role.', true);
+    return;
+  }
+
+  const listingName = document.getElementById('listingName').value.trim() || 'this listing';
+  const confirmed = window.confirm('Are you sure you want to delete listing: ' + listingName + '?');
+  if (!confirmed) {
+    return;
+  }
+
+  const button = document.getElementById('deleteListingBtn');
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/listings/' + listingId, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) {
+      setListingMessage(data.error || 'Failed to delete listing.', true);
+      return;
+    }
+    goBackToConfig();
+  } catch {
+    setListingMessage('Network error deleting listing.', true);
+  } finally {
+    if (!window.location.href.includes('/dashboard.html')) {
+      button.disabled = false;
+    }
+  }
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedListingChanges()) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = '';
 });
 
 const logoutBtn = document.getElementById('logoutBtn');
