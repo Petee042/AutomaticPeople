@@ -87,6 +87,27 @@
       <!-- ── Ops tab ────────────────────────────────────────── -->
       <div id="panel-ops" class="dashboard-tab-panel hidden" role="tabpanel">
 
+        <section class="listing-form-section" id="opsCalendarSection">
+          <h3>Reservation Calendar</h3>
+          <div id="opsCalendarListings" class="cleaning-listings ops-calendar-listings" aria-label="Select listings to display">
+            <p class="cleaning-empty">Loading listings...</p>
+          </div>
+          <div class="ops-calendar-controls">
+            <button type="button" id="opsCalendarRefreshBtn" class="btn primary calendar-btn">Refresh</button>
+            <span id="opsCalendarFetchedAt" class="calendar-fetched-at"></span>
+          </div>
+          <p id="opsCalendarMessage" class="message"></p>
+          <div class="calendar-month-header">
+            <button type="button" id="opsCalendarPrevBtn" class="btn secondary">Prev</button>
+            <h4 id="opsCalendarMonthLabel" class="month-label">Month</h4>
+            <button type="button" id="opsCalendarNextBtn" class="btn secondary">Next</button>
+          </div>
+          <div id="opsCalendarCleanerLegend" class="calendar-cleaner-legend"></div>
+          <div class="reservation-calendar-wrap">
+            <div id="opsReservationCalendar" class="reservation-calendar" aria-label="Reservation month view"></div>
+          </div>
+        </section>
+
         <section class="listing-form-section">
           <h3>Schedule</h3>
           <form id="cleaningScheduleForm" novalidate>

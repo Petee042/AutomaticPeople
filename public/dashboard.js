@@ -32,6 +32,18 @@ let currentGuests = [];
 let currentEditingTeamUserId = null;
 let currentTeamMemberDeleteImpact = null;
 
+let opsCalCurrentMonth = new Date();
+let opsCalCurrentEvents = [];
+let opsCalCurrentCleaningChanges = [];
+let opsCalCurrentFetchedAt = null;
+let opsCalSelectedListingIds = new Set();
+let opsCalRequestId = 0;
+
+const opsCalSourceColorMap = {};
+const opsCalSourcePalette = ['#ff5a5f', '#003580', '#2a9d8f', '#e76f51', '#264653', '#f4a261', '#8a5cf6'];
+const opsCalCleanerBadgeColorMap = {};
+const opsCalCleanerBadgePalette = ['#0f766e', '#1d4ed8', '#b45309', '#be123c', '#4338ca', '#166534', '#92400e', '#0369a1'];
+
 function setScheduleEmailMessage(text, isError) {
   const el = document.getElementById('scheduleEmailMessage');
   if (!el) return;
@@ -1741,6 +1753,705 @@ function renderSchedulePreviewTable(rows, errors, notifications) {
   }
 }
 
+function opsCalendarSetMessage(text, isError) {
+  const el = document.getElementById('opsCalendarMessage');
+  if (!el) {
+    return;
+  }
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function opsCalendarSetFetchedAt(isoString) {
+  const el = document.getElementById('opsCalendarFetchedAt');
+  if (!el) {
+    return;
+  }
+  if (!isoString) {
+    el.textContent = '';
+    return;
+  }
+  const date = new Date(isoString);
+  el.textContent = 'Last updated: ' + date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderOpsCalendarListingSelector(listings) {
+  const container = document.getElementById('opsCalendarListings');
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(listings) || !listings.length) {
+    const empty = document.createElement('p');
+    empty.className = 'cleaning-empty';
+    empty.textContent = 'No listings available.';
+    container.appendChild(empty);
+    opsCalSelectedListingIds = new Set();
+    return;
+  }
+
+  const validIds = new Set(listings.map((listing) => String(listing.id)));
+  const nextSelectedIds = new Set(
+    Array.from(opsCalSelectedListingIds || []).filter((id) => validIds.has(String(id)))
+  );
+  if (!nextSelectedIds.size) {
+    listings.forEach((listing) => nextSelectedIds.add(String(listing.id)));
+  }
+  opsCalSelectedListingIds = nextSelectedIds;
+
+  listings.forEach((listing) => {
+    const row = document.createElement('label');
+    row.className = 'cleaning-listing-row';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'ops-calendar-listing-checkbox';
+    checkbox.value = String(listing.id);
+    checkbox.checked = opsCalSelectedListingIds.has(String(listing.id));
+
+    const textWrap = document.createElement('span');
+    textWrap.className = 'cleaning-listing-name';
+    textWrap.textContent = listing.name || ('Listing #' + listing.id);
+
+    const detail = document.createElement('span');
+    detail.className = 'hint';
+    const propertyName = listing.property_name || 'Unknown property';
+    const dateBasis = listing.date_basis === 'checkin' ? 'Check-in basis' : 'Check-out basis';
+    detail.textContent = propertyName + ' - ' + dateBasis;
+
+    row.appendChild(checkbox);
+    row.appendChild(textWrap);
+    row.appendChild(detail);
+    container.appendChild(row);
+  });
+
+  Array.from(container.querySelectorAll('.ops-calendar-listing-checkbox')).forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const checkedBoxes = Array.from(container.querySelectorAll('.ops-calendar-listing-checkbox:checked'));
+      opsCalSelectedListingIds = new Set(checkedBoxes.map((box) => String(box.value)));
+      refreshOpsCalendar(false);
+    });
+  });
+}
+
+function getOpsSelectedListings() {
+  return Array.from(document.querySelectorAll('.ops-calendar-listing-checkbox:checked')).map((box) => ({
+    id: Number(box.value),
+    name: box.closest('label') ? String(box.closest('label').querySelector('.cleaning-listing-name')?.textContent || '') : ''
+  })).filter((listing) => Number.isInteger(listing.id) && listing.id > 0);
+}
+
+function opsCalendarSourceKey(source) {
+  return String(source || 'Unknown').trim().toLowerCase();
+}
+
+function opsCalendarSourceColor(source) {
+  const key = opsCalendarSourceKey(source);
+  if (!opsCalSourceColorMap[key]) {
+    const idx = Object.keys(opsCalSourceColorMap).length % opsCalSourcePalette.length;
+    opsCalSourceColorMap[key] = opsCalSourcePalette[idx];
+  }
+  return opsCalSourceColorMap[key];
+}
+
+function opsCalendarGetCleanerKey(change) {
+  if (change && change.cleaner_id) {
+    return 'id:' + String(change.cleaner_id);
+  }
+  const name = String(change && change.cleaner_name ? change.cleaner_name : '').trim().toLowerCase();
+  return name ? ('name:' + name) : '';
+}
+
+function opsCalendarGetCleanerInitials(change) {
+  const key = opsCalendarGetCleanerKey(change);
+  if (!key) {
+    return '';
+  }
+  const name = String(change && change.cleaner_name ? change.cleaner_name : '').trim();
+  if (!name || name.toLowerCase() === 'unallocated') {
+    return '';
+  }
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return parts[0].charAt(0).toUpperCase();
+  }
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+
+function opsCalendarGetCleanerColor(change) {
+  const key = opsCalendarGetCleanerKey(change);
+  if (!key) {
+    return '#2d3d66';
+  }
+  if (!opsCalCleanerBadgeColorMap[key]) {
+    const idx = Object.keys(opsCalCleanerBadgeColorMap).length % opsCalCleanerBadgePalette.length;
+    opsCalCleanerBadgeColorMap[key] = opsCalCleanerBadgePalette[idx];
+  }
+  return opsCalCleanerBadgeColorMap[key];
+}
+
+function opsCalendarGetCleanerDisplayName(change) {
+  if (!change) {
+    return '';
+  }
+  const name = String(change.cleaner_name || '').trim();
+  return !name || name.toLowerCase() === 'unallocated' ? '' : name;
+}
+
+function opsCalendarGetSources(events) {
+  const sources = [];
+  const seen = new Set();
+
+  function addSource(source) {
+    const label = String(source || 'Unknown').trim() || 'Unknown';
+    const key = opsCalendarSourceKey(label);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    sources.push(label);
+  }
+
+  (events || []).forEach((event) => addSource(event.source || 'Unknown'));
+  return sources;
+}
+
+function eachDateKeyInclusive(startKey, endKey, callback) {
+  if (!startKey || !endKey) {
+    return;
+  }
+  const startDate = utcDateFromKey(startKey);
+  const endDate = utcDateFromKey(endKey);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return;
+  }
+  const step = startDate <= endDate ? 1 : -1;
+  for (let cursor = new Date(startDate.getTime()); ; cursor = addUtcDays(cursor, step)) {
+    callback(keyFromUtcDate(cursor));
+    if (cursor.getTime() === endDate.getTime()) {
+      break;
+    }
+  }
+}
+
+function buildDayTooltip(dayEntry) {
+  if (!dayEntry || !dayEntry.events.length) {
+    return '';
+  }
+
+  return dayEntry.events.map((event) => {
+    const rawLines = Object.entries(event.raw || {}).map(([key, value]) => key + ': ' + value).join(' | ');
+    const title = event.title ? event.title : '(untitled)';
+    return (event.source || 'Unknown') + ' - ' + title + (rawLines ? ' - ' + rawLines : '');
+  }).join('\n');
+}
+
+function buildBarTooltip(events) {
+  if (!events || !events.length) {
+    return '';
+  }
+
+  return events.map((event) => {
+    const checkin = formatDateKeyForTooltip(toDateKey(event.start));
+    const checkout = formatDateKeyForTooltip(toDateKey(event.end));
+    return 'Summary: ' + (event.title || (event.raw && event.raw.SUMMARY) || '(untitled)')
+      + '\nCheck-in: ' + checkin
+      + '\nCheck-out: ' + checkout;
+  }).join('\n\n');
+}
+
+function formatDateKeyForTooltip(key) {
+  if (!key) {
+    return 'Unknown';
+  }
+  const date = utcDateFromKey(key);
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return date.getUTCDate() + ' ' + monthNames[date.getUTCMonth()] + ' ' + date.getUTCFullYear();
+}
+
+function getOpsEventSummary(event) {
+  return event.title || (event.raw && event.raw.SUMMARY) || '(untitled)';
+}
+
+function isOpsAirbnbNotAvailableEvent(event, sourceLabel) {
+  const sourceKey = opsCalendarSourceKey(sourceLabel || (event && event.source));
+  if (!sourceKey.includes('airbnb')) {
+    return false;
+  }
+  return String(getOpsEventSummary(event) || '').toLowerCase().includes('not available');
+}
+
+function shouldDimBar(events, sourceLabel) {
+  return (events || []).some((event) => isOpsAirbnbNotAvailableEvent(event, sourceLabel));
+}
+
+function hasDisplayUnavailable(events) {
+  return (events || []).some((event) => event && event.isUnavailableBlock);
+}
+
+function hasReservationEligible(events) {
+  return (events || []).some((event) => event && event.isReservation !== false);
+}
+
+function applyUnavailableHatch(bar) {
+  bar.classList.add('day-bar-unavailable');
+  const hatch = document.createElement('span');
+  hatch.className = 'day-bar-hatch';
+  bar.appendChild(hatch);
+}
+
+function opsCalendarMonthStart(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function opsCalendarBuildDayIndex(events) {
+  const index = {};
+
+  function ensureDay(key) {
+    if (!index[key]) {
+      index[key] = {
+        stays: new Set(),
+        checkins: new Set(),
+        checkouts: new Set(),
+        stayEventsBySource: {},
+        checkinEventsBySource: {},
+        checkoutEventsBySource: {},
+        events: [],
+        conflict: false
+      };
+    }
+    return index[key];
+  }
+
+  function addSourceEvent(day, fieldName, source, event) {
+    if (!day[fieldName][source]) {
+      day[fieldName][source] = [];
+    }
+    day[fieldName][source].push(event);
+  }
+
+  (events || []).forEach((event) => {
+    const source = event.source || 'Unknown';
+    const startKey = toDateKey(event.start);
+    const rawEndKey = toDateKey(event.end);
+    if (!startKey) {
+      return;
+    }
+
+    const startDate = utcDateFromKey(startKey);
+    let endDate = rawEndKey ? utcDateFromKey(rawEndKey) : addUtcDays(startDate, 1);
+    if (endDate <= startDate) {
+      endDate = addUtcDays(startDate, 1);
+    }
+
+    const checkinDay = ensureDay(startKey);
+    checkinDay.checkins.add(source);
+    addSourceEvent(checkinDay, 'checkinEventsBySource', source, event);
+
+    const checkoutKey = keyFromUtcDate(endDate);
+    const checkoutDay = ensureDay(checkoutKey);
+    checkoutDay.checkouts.add(source);
+    addSourceEvent(checkoutDay, 'checkoutEventsBySource', source, event);
+
+    for (let cursor = new Date(startDate.getTime()); cursor < endDate; cursor = addUtcDays(cursor, 1)) {
+      const day = ensureDay(keyFromUtcDate(cursor));
+      day.stays.add(source);
+      day.events.push(event);
+      addSourceEvent(day, 'stayEventsBySource', source, event);
+    }
+  });
+
+  Object.keys(index).forEach((key) => {
+    if (index[key].stays.size > 1) {
+      index[key].conflict = true;
+    }
+  });
+
+  return index;
+}
+
+function opsCalendarBuildCleaningBadgesByDate(changes) {
+  const byDate = {};
+  (changes || []).forEach((change) => {
+    const checkinKey = toDateKey(change.reservation_checkin_date);
+    const checkoutKey = toDateKey(change.reservation_checkout_date);
+    const cleanKey = toDateKey(change.changeover_date);
+    if (!checkinKey || !checkoutKey || !cleanKey) {
+      return;
+    }
+
+    const initials = opsCalendarGetCleanerInitials(change);
+    if (!initials) {
+      return;
+    }
+    const cleanerKey = opsCalendarGetCleanerKey(change);
+    const badgeColor = opsCalendarGetCleanerColor(change);
+
+    let startKey = cleanKey;
+    let endKey = cleanKey;
+
+    if (String(cleanKey) < String(checkinKey)) {
+      startKey = cleanKey;
+      endKey = checkinKey;
+    } else if (String(cleanKey) > String(checkoutKey)) {
+      startKey = checkoutKey;
+      endKey = cleanKey;
+    }
+
+    eachDateKeyInclusive(startKey, endKey, (dateKey) => {
+      if (!byDate[dateKey]) {
+        byDate[dateKey] = new Map();
+      }
+      const key = cleanerKey || ('initials:' + initials);
+      if (!byDate[dateKey].has(key)) {
+        byDate[dateKey].set(key, {
+          initials,
+          color: badgeColor
+        });
+      }
+    });
+  });
+
+  return byDate;
+}
+
+function opsCalendarRenderCleanerLegend(changes) {
+  const legend = document.getElementById('opsCalendarCleanerLegend');
+  if (!legend) {
+    return;
+  }
+  legend.innerHTML = '';
+
+  const byKey = new Map();
+  (changes || []).forEach((change) => {
+    const initials = opsCalendarGetCleanerInitials(change);
+    const name = opsCalendarGetCleanerDisplayName(change);
+    if (!initials || !name) {
+      return;
+    }
+    const key = opsCalendarGetCleanerKey(change) || ('name:' + name.toLowerCase());
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        initials,
+        name,
+        color: opsCalendarGetCleanerColor(change)
+      });
+    }
+  });
+
+  Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name)).forEach((itemData) => {
+    const item = document.createElement('div');
+    item.className = 'cleaner-legend-item';
+
+    const badge = document.createElement('span');
+    badge.className = 'calendar-day-cleaner-badge';
+    badge.textContent = itemData.initials;
+    badge.style.backgroundColor = itemData.color;
+
+    const name = document.createElement('span');
+    name.className = 'cleaner-legend-name';
+    name.textContent = itemData.name;
+
+    item.appendChild(badge);
+    item.appendChild(name);
+    legend.appendChild(item);
+  });
+}
+
+function opsCalendarRenderReservationCalendar(events, changes) {
+  const calendar = document.getElementById('opsReservationCalendar');
+  const monthLabel = document.getElementById('opsCalendarMonthLabel');
+  if (!calendar || !monthLabel) {
+    return;
+  }
+
+  const monthStart = opsCalendarMonthStart(opsCalCurrentMonth);
+  const dayIndex = opsCalendarBuildDayIndex(events);
+  const cleanerBadgesByDate = opsCalendarBuildCleaningBadgesByDate(changes);
+  const sources = opsCalendarGetSources(events);
+
+  monthLabel.textContent = formatMonthLabel(monthStart);
+  calendar.innerHTML = '';
+
+  const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const corner = document.createElement('div');
+  corner.className = 'calendar-weekday calendar-weekday-corner';
+  calendar.appendChild(corner);
+
+  weekdayNames.forEach((name) => {
+    const header = document.createElement('div');
+    header.className = 'calendar-weekday';
+    header.textContent = name;
+    calendar.appendChild(header);
+  });
+
+  const firstDayOfWeek = monthStart.getUTCDay();
+  const nextMonthStart = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1));
+  const daysInMonth = Math.round((nextMonthStart - monthStart) / 86400000);
+
+  const dayNumbers = [];
+  for (let i = 0; i < firstDayOfWeek; i += 1) {
+    dayNumbers.push(null);
+  }
+  for (let dayNum = 1; dayNum <= daysInMonth; dayNum += 1) {
+    dayNumbers.push(dayNum);
+  }
+  while (dayNumbers.length % 7 !== 0) {
+    dayNumbers.push(null);
+  }
+
+  const daySources = sources.length ? sources : ['Unknown'];
+
+  for (let weekStart = 0; weekStart < dayNumbers.length; weekStart += 7) {
+    if (weekStart === 0) {
+      const labelsCell = document.createElement('div');
+      labelsCell.className = 'calendar-channel-labels';
+
+      daySources.forEach((source) => {
+        const row = document.createElement('div');
+        row.className = 'calendar-channel-label-row';
+
+        const swatch = document.createElement('span');
+        swatch.className = 'calendar-channel-label-swatch';
+        swatch.style.backgroundColor = opsCalendarSourceColor(source);
+
+        const text = document.createElement('span');
+        text.className = 'calendar-channel-label-text';
+        text.textContent = source;
+        text.title = source;
+
+        row.appendChild(swatch);
+        row.appendChild(text);
+        labelsCell.appendChild(row);
+      });
+
+      calendar.appendChild(labelsCell);
+    } else {
+      const spacer = document.createElement('div');
+      spacer.className = 'calendar-channel-labels-spacer';
+      calendar.appendChild(spacer);
+    }
+
+    for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+      const dayNum = dayNumbers[weekStart + dayOffset];
+      if (dayNum === null) {
+        const emptyCell = document.createElement('div');
+        emptyCell.className = 'calendar-day calendar-day-empty';
+        calendar.appendChild(emptyCell);
+        continue;
+      }
+
+      const date = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), dayNum));
+      const key = keyFromUtcDate(date);
+      const dayEntry = dayIndex[key];
+
+      const cell = document.createElement('div');
+      cell.className = 'calendar-day';
+      if (dayEntry && dayEntry.conflict) {
+        cell.classList.add('calendar-day-conflict');
+      }
+      cell.title = buildDayTooltip(dayEntry);
+
+      const num = document.createElement('div');
+      num.className = 'calendar-day-number';
+      num.textContent = String(dayNum);
+      cell.appendChild(num);
+
+      const dayCleanerBadges = cleanerBadgesByDate[key] ? Array.from(cleanerBadgesByDate[key].values()) : [];
+      if (dayCleanerBadges.length) {
+        const cleanersEl = document.createElement('div');
+        cleanersEl.className = 'calendar-day-cleaners';
+        dayCleanerBadges.forEach((badgeInfo) => {
+          const badge = document.createElement('span');
+          badge.className = 'calendar-day-cleaner-badge';
+          badge.textContent = badgeInfo.initials;
+          badge.style.backgroundColor = badgeInfo.color;
+          cleanersEl.appendChild(badge);
+        });
+        cell.appendChild(cleanersEl);
+      }
+
+      const bars = document.createElement('div');
+      bars.className = 'calendar-day-bars';
+
+      daySources.forEach((source) => {
+        const slot = document.createElement('div');
+        slot.className = 'day-bar-slot';
+
+        const bar = document.createElement('div');
+        bar.className = 'day-bar';
+
+        if (!dayEntry) {
+          bar.classList.add('day-bar-empty');
+          slot.appendChild(bar);
+          bars.appendChild(slot);
+          return;
+        }
+
+        const hasCheckout = dayEntry.checkouts.has(source);
+        const hasCheckin = dayEntry.checkins.has(source);
+        const hasStay = dayEntry.stays.has(source);
+        const color = opsCalendarSourceColor(source);
+        const transparentStop = color.length === 7 ? (color + '00') : 'rgba(0,0,0,0)';
+
+        if (hasCheckout && hasCheckin) {
+          const transitionEvents = (dayEntry.checkoutEventsBySource[source] || []).concat(dayEntry.checkinEventsBySource[source] || []);
+          bar.classList.add('day-transition-bar');
+          bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 47%, ' + transparentStop + ' 47% 53%, ' + color + ' 53% 100%)';
+          if (shouldDimBar(transitionEvents, source)) {
+            bar.style.opacity = '0.5';
+          }
+          bar.title = buildBarTooltip(transitionEvents);
+          if (hasDisplayUnavailable(transitionEvents) && !hasReservationEligible(transitionEvents)) {
+            applyUnavailableHatch(bar);
+          }
+        } else if (hasCheckout) {
+          const checkoutEvents = dayEntry.checkoutEventsBySource[source] || [];
+          bar.classList.add('day-transition-bar');
+          bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 68%, ' + transparentStop + ' 68% 100%)';
+          if (shouldDimBar(checkoutEvents, source)) {
+            bar.style.opacity = '0.5';
+          }
+          bar.title = buildBarTooltip(checkoutEvents);
+          if (hasDisplayUnavailable(checkoutEvents) && !hasReservationEligible(checkoutEvents)) {
+            applyUnavailableHatch(bar);
+          }
+        } else if (hasCheckin) {
+          const checkinEvents = dayEntry.checkinEventsBySource[source] || [];
+          bar.classList.add('day-transition-bar');
+          bar.style.background = 'linear-gradient(90deg, ' + transparentStop + ' 0 32%, ' + color + ' 32% 100%)';
+          if (shouldDimBar(checkinEvents, source)) {
+            bar.style.opacity = '0.5';
+          }
+          bar.title = buildBarTooltip(checkinEvents);
+          if (hasDisplayUnavailable(checkinEvents) && !hasReservationEligible(checkinEvents)) {
+            applyUnavailableHatch(bar);
+          }
+        } else if (hasStay) {
+          const stayEvents = dayEntry.stayEventsBySource[source] || [];
+          bar.style.backgroundColor = color;
+          if (shouldDimBar(stayEvents, source)) {
+            bar.style.opacity = '0.5';
+          }
+          bar.title = buildBarTooltip(stayEvents);
+          if (hasDisplayUnavailable(stayEvents) && !hasReservationEligible(stayEvents)) {
+            applyUnavailableHatch(bar);
+          }
+        } else {
+          bar.classList.add('day-bar-empty');
+        }
+
+        slot.appendChild(bar);
+        bars.appendChild(slot);
+      });
+
+      cell.appendChild(bars);
+      calendar.appendChild(cell);
+    }
+  }
+}
+
+async function fetchOpsCalendarListingData(listing, refresh) {
+  const listingId = Number(listing.id);
+  const endpoint = '/api/listings/' + encodeURIComponent(listingId) + '/events' + (refresh ? '/refresh' : '');
+  const res = await fetch(endpoint, refresh ? { method: 'POST' } : undefined);
+
+  if (res.status === 401) {
+    window.location.href = '/';
+    return null;
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || ('Failed to load calendar data for ' + (listing.name || ('Listing #' + listingId)) + '.'));
+  }
+
+  return data;
+}
+
+function syncOpsCalendarSelection() {
+  const checkedBoxes = Array.from(document.querySelectorAll('.ops-calendar-listing-checkbox:checked'));
+  opsCalSelectedListingIds = new Set(checkedBoxes.map((box) => String(box.value)));
+}
+
+async function refreshOpsCalendar(refresh) {
+  const selectedListings = getOpsSelectedListings();
+  const container = document.getElementById('opsReservationCalendar');
+  if (!container) {
+    return;
+  }
+
+  if (!selectedListings.length) {
+    opsCalCurrentEvents = [];
+    opsCalCurrentCleaningChanges = [];
+    opsCalCurrentFetchedAt = null;
+    container.innerHTML = '<p class="cleaning-empty">Select at least one listing to display the calendar.</p>';
+    opsCalendarSetMessage('Select at least one listing to display the calendar.', true);
+    opsCalendarSetFetchedAt(null);
+    return;
+  }
+
+  const requestId = ++opsCalRequestId;
+  opsCalendarSetMessage(refresh ? 'Refreshing calendar...' : 'Loading calendar...', false);
+
+  const results = await Promise.all(selectedListings.map(async (listing) => {
+    try {
+      const data = await fetchOpsCalendarListingData(listing, refresh);
+      return { listing, data };
+    } catch (err) {
+      return { listing, error: err };
+    }
+  }));
+
+  if (requestId !== opsCalRequestId) {
+    return;
+  }
+
+  const events = [];
+  const cleaningChanges = [];
+  const fetchedAts = [];
+  const issues = [];
+
+  results.forEach((result) => {
+    if (result.error) {
+      issues.push((result.listing.name || ('Listing #' + result.listing.id)) + ': ' + (result.error.message || 'Failed to load.'));
+      return;
+    }
+
+    const data = result.data || {};
+    events.push(...(data.events || []));
+    cleaningChanges.push(...(data.cleaningChanges || []));
+    if (data.fetchedAt) {
+      fetchedAts.push(data.fetchedAt);
+    }
+    if (Array.isArray(data.feedErrors)) {
+      data.feedErrors.forEach((feedError) => {
+        issues.push((result.listing.name || ('Listing #' + result.listing.id)) + ': ' + (feedError.error || 'Feed issue'));
+      });
+    }
+  });
+
+  opsCalCurrentEvents = events;
+  opsCalCurrentCleaningChanges = cleaningChanges;
+  opsCalCurrentFetchedAt = fetchedAts.length ? fetchedAts.sort().slice(-1)[0] : null;
+
+  opsCalendarRenderCleanerLegend(cleaningChanges);
+  opsCalendarRenderReservationCalendar(events, cleaningChanges);
+  opsCalendarSetFetchedAt(opsCalCurrentFetchedAt);
+
+  if (issues.length) {
+    opsCalendarSetMessage('Loaded with feed issues: ' + issues.join(' | '), true);
+  } else {
+    opsCalendarSetMessage('Loaded ' + selectedListings.length + ' listing' + (selectedListings.length === 1 ? '' : 's') + '.', false);
+  }
+}
+
+function renderOpsCalendarForCurrentMonth() {
+  opsCalendarRenderCleanerLegend(opsCalCurrentCleaningChanges);
+  opsCalendarRenderReservationCalendar(opsCalCurrentEvents, opsCalCurrentCleaningChanges);
+}
+
 async function updateSchedulePreview() {
   const container = document.getElementById('schedulePreview');
   const daysValue = Number(document.getElementById('cleaningDays').value);
@@ -1890,6 +2601,8 @@ async function fetchListings() {
   currentListings = data.listings || [];
   renderListings(currentListings);
   renderCleaningListings(currentListings);
+  renderOpsCalendarListingSelector(currentListings);
+  await refreshOpsCalendar(false);
 }
 
 async function fetchProperties() {
@@ -2350,6 +3063,29 @@ const _clearNotificationLogBtn = document.getElementById('clearNotificationLogBt
 if (_clearNotificationLogBtn) _clearNotificationLogBtn.addEventListener('click', () => {
   currentNotificationRows = [];
   renderNotificationLog([]);
+});
+
+const _opsCalendarRefreshBtn = document.getElementById('opsCalendarRefreshBtn');
+if (_opsCalendarRefreshBtn) _opsCalendarRefreshBtn.addEventListener('click', async () => {
+  const button = document.getElementById('opsCalendarRefreshBtn');
+  button.disabled = true;
+  try {
+    await refreshOpsCalendar(true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+const _opsCalendarPrevBtn = document.getElementById('opsCalendarPrevBtn');
+if (_opsCalendarPrevBtn) _opsCalendarPrevBtn.addEventListener('click', () => {
+  opsCalCurrentMonth = new Date(Date.UTC(opsCalCurrentMonth.getUTCFullYear(), opsCalCurrentMonth.getUTCMonth() - 1, 1));
+  renderOpsCalendarForCurrentMonth();
+});
+
+const _opsCalendarNextBtn = document.getElementById('opsCalendarNextBtn');
+if (_opsCalendarNextBtn) _opsCalendarNextBtn.addEventListener('click', () => {
+  opsCalCurrentMonth = new Date(Date.UTC(opsCalCurrentMonth.getUTCFullYear(), opsCalCurrentMonth.getUTCMonth() + 1, 1));
+  renderOpsCalendarForCurrentMonth();
 });
 
 document.getElementById('refreshScheduleBtn').addEventListener('click', async () => {

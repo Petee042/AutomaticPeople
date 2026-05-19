@@ -647,6 +647,9 @@ function getCalendarSources(events) {
 function renderReservationCalendar(events) {
   const calendar = document.getElementById('reservationCalendar');
   const monthLabel = document.getElementById('monthLabel');
+  if (!calendar || !monthLabel) {
+    return;
+  }
   const monthStart = monthStartUtc(currentMonthDate);
   const dayIndex = buildDayIndex(events);
   const cleanerBadgesByDate = buildCleaningBadgesByDate(currentCleaningChanges);
@@ -863,6 +866,9 @@ function formatEntityId(value) {
 
 function setCalendarMessage(text, isError) {
   const el = document.getElementById('calendarMessage');
+  if (!el) {
+    return;
+  }
   el.textContent = text;
   el.className = text ? 'message ' + (isError ? 'error' : 'success') : 'message';
 }
@@ -1172,7 +1178,6 @@ async function updateCalendars() {
       initialListingFormState = getListingFormState();
     } else {
       await loadListing();
-      await loadCachedCalendar();
       await fetchListingManagers();
       initialListingFormState = getListingFormState();
     }
@@ -1460,7 +1465,8 @@ document.getElementById('cancelFeedEditBtn').addEventListener('click', () => {
   setListingMessage('', false);
 });
 
-document.getElementById('updateCalendarsBtn').addEventListener('click', updateCalendars);
+const _updateCalendarsBtn = document.getElementById('updateCalendarsBtn');
+if (_updateCalendarsBtn) _updateCalendarsBtn.addEventListener('click', updateCalendars);
 
 document.getElementById('copyIcsUrlBtn').addEventListener('click', async () => {
   const url = document.getElementById('icsExportUrl').value;
@@ -1476,12 +1482,14 @@ document.getElementById('copyIcsUrlBtn').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('prevMonthBtn').addEventListener('click', () => {
+const _prevMonthBtn = document.getElementById('prevMonthBtn');
+if (_prevMonthBtn) _prevMonthBtn.addEventListener('click', () => {
   currentMonthDate = new Date(Date.UTC(currentMonthDate.getUTCFullYear(), currentMonthDate.getUTCMonth() - 1, 1));
   renderReservationCalendar(currentEvents);
 });
 
-document.getElementById('nextMonthBtn').addEventListener('click', () => {
+const _nextMonthBtn = document.getElementById('nextMonthBtn');
+if (_nextMonthBtn) _nextMonthBtn.addEventListener('click', () => {
   currentMonthDate = new Date(Date.UTC(currentMonthDate.getUTCFullYear(), currentMonthDate.getUTCMonth() + 1, 1));
   renderReservationCalendar(currentEvents);
 });
