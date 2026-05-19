@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Configure Charges - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="logged-page">
+  <div class="sticky-page-chrome">
+    <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
+      <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
+    </div>
+  </div>
+
+  <main class="dashboard">
+    <div class="card-container wide">
+      <div class="feed-actions" style="margin-bottom: 0.7rem;">
+        <button id="backBtn" type="button" class="btn secondary">← Back</button>
+      </div>
+      <h2 id="chargeConfigTitle">Configure Charges</h2>
+      <p id="chargeConfigMessage" class="message"></p>
+      <p id="chargeConfigHelp" class="help-text"></p>
+
+      <section class="listing-form-section">
+        <h3>Charge Logic Configuration</h3>
+        <div class="resource-dialog-body">
+          <fieldset class="resource-dialog-fieldset">
+            <legend>Charge Basis</legend>
+            <label class="resource-radio-option" for="chargeBasisDaily">
+              <input id="chargeBasisDaily" type="radio" name="chargeBasis" value="daily" />
+              <span>Daily</span>
+            </label>
+            <label class="resource-radio-option" for="chargeBasisHourly">
+              <input id="chargeBasisHourly" type="radio" name="chargeBasis" value="hourly" />
+              <span>Hourly</span>
+            </label>
+          </fieldset>
+
+          <fieldset id="dailyChargeOptions" class="resource-dialog-fieldset hidden">
+            <legend>Daily Charging</legend>
+            <label class="resource-radio-option" for="dailyChargePer24Hours">
+              <input id="dailyChargePer24Hours" type="radio" name="dailyChargeMode" value="per_24_hours" />
+              <span>Per 24 hours</span>
+            </label>
+            <label class="resource-radio-option" for="dailyChargePerCalendarDay">
+              <input id="dailyChargePerCalendarDay" type="radio" name="dailyChargeMode" value="per_calendar_day" />
+              <span>Per Calendar Day</span>
+            </label>
+            <div id="dailyRateWrap" class="resource-rate-input-wrap">
+              <label for="dailyRate">Daily rate</label>
+              <input id="dailyRate" type="number" min="0" step="0.01" inputmode="decimal" />
+            </div>
+          </fieldset>
+
+          <fieldset id="hourlyChargeOptions" class="resource-dialog-fieldset hidden">
+            <legend>Hourly Charging</legend>
+            <label class="resource-radio-option" for="hourlyChargeSingleRate">
+              <input id="hourlyChargeSingleRate" type="radio" name="hourlyChargeMode" value="single_rate" />
+              <span>Simple numeric rate per hour</span>
+            </label>
+            <div id="singleHourlyRateWrap" class="resource-rate-input-wrap hidden">
+              <label for="singleHourlyRate">Hourly rate</label>
+              <input id="singleHourlyRate" type="number" min="0" step="0.01" inputmode="decimal" />
+            </div>
+
+            <label class="resource-radio-option" for="hourlyChargePerHourOfDay">
+              <input id="hourlyChargePerHourOfDay" type="radio" name="hourlyChargeMode" value="per_hour_of_day" />
+              <span>Separate hourly rate for each of 24 hours</span>
+            </label>
+            <div id="hourlyRateGrid" class="resource-hourly-grid hidden" aria-label="Hourly rates by hour"></div>
+          </fieldset>
+        </div>
+      </section>
+
+      <div class="feed-actions" style="margin-top: 1.5rem;">
+        <button type="button" id="saveChargeConfigBtn" class="btn primary calendar-btn">Save Charge Logic</button>
+        <button type="button" id="cancelChargeConfigBtn" class="btn secondary">Cancel</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="sticky-layout.js"></script>
+  <script src="shared-resource-charge-config.js"></script>
+</body>
+</html>

@@ -9,6 +9,7 @@ let currentProperties = [];
 let currentListings = [];
 let initialSharedResourceFormState = '';
 let suppressBeforeunload = false;
+const SHARED_RESOURCE_DRAFT_KEY = 'sharedResourceDraftState';
 let activePaymentMessageKey = 'free_of_charge';
 let currentPaymentMessages = {
   free_of_charge: '',
@@ -63,6 +64,146 @@ function confirmDiscardSharedResourceChanges() {
 function goBackToConfig() {
   suppressBeforeunload = true;
   window.location.href = '/dashboard.html?tab=panel-config';
+}
+
+function buildSharedResourceDraft() {
+  persistActivePaymentMessage();
+  return {
+    resourceId,
+    isCreateMode,
+    shortDescription: String(document.getElementById('shortDescription').value || ''),
+    resourceType: String(document.getElementById('resourceType').value || ''),
+    fullDescriptionHtml: String(getEditorHtml() || ''),
+    maxUnits: String(document.getElementById('maxUnits').value || ''),
+    maxDaysAdvanceBooking: String(document.getElementById('maxDaysAdvanceBooking').value || ''),
+    propertyId: String(document.getElementById('sharedResourcePropertyId').value || ''),
+    listingId: String(document.getElementById('sharedResourceListingId').value || ''),
+    freeOfCharge: document.getElementById('paymentFreeOfCharge').checked,
+    cashOnSite: document.getElementById('paymentCashOnSite').checked,
+    bankTransfer: document.getElementById('paymentBankTransfer').checked,
+    onlinePayment: document.getElementById('paymentOnlinePayment').checked,
+    activePaymentMessageKey,
+    paymentMessages: {
+      free_of_charge: currentPaymentMessages.free_of_charge || '',
+      cash_on_site: currentPaymentMessages.cash_on_site || '',
+      bank_transfer: currentPaymentMessages.bank_transfer || '',
+      online_payment: currentPaymentMessages.online_payment || ''
+    },
+    chargeConfig: {
+      chargeBasis: currentChargeConfig.chargeBasis,
+      dailyChargeMode: currentChargeConfig.dailyChargeMode,
+      dailyRate: currentChargeConfig.dailyRate,
+      hourlyChargeMode: currentChargeConfig.hourlyChargeMode,
+      hourlyRate: currentChargeConfig.hourlyRate,
+      hourlyRates: ensureHourlyRatesLength(currentChargeConfig.hourlyRates)
+    }
+  };
+}
+
+function saveSharedResourceDraft() {
+  try {
+    sessionStorage.setItem(SHARED_RESOURCE_DRAFT_KEY, JSON.stringify(buildSharedResourceDraft()));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function readSharedResourceDraft() {
+  try {
+    const raw = sessionStorage.getItem(SHARED_RESOURCE_DRAFT_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    if (Boolean(parsed.isCreateMode) !== Boolean(isCreateMode)) {
+      return null;
+    }
+    if (!isCreateMode && Number(parsed.resourceId) !== Number(resourceId)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearSharedResourceDraft() {
+  try {
+    sessionStorage.removeItem(SHARED_RESOURCE_DRAFT_KEY);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function applySharedResourceDraft(draft) {
+  if (!draft) {
+    return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(draft, 'shortDescription')) {
+    document.getElementById('shortDescription').value = String(draft.shortDescription || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'resourceType')) {
+    document.getElementById('resourceType').value = draft.resourceType === 'parking' ? 'parking' : 'undefined';
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'fullDescriptionHtml')) {
+    document.getElementById('fullDescriptionEditor').innerHTML = String(draft.fullDescriptionHtml || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'maxUnits')) {
+    document.getElementById('maxUnits').value = String(draft.maxUnits || '1');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'maxDaysAdvanceBooking')) {
+    document.getElementById('maxDaysAdvanceBooking').value = String(draft.maxDaysAdvanceBooking || '365');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'propertyId')) {
+    document.getElementById('sharedResourcePropertyId').value = String(draft.propertyId || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'listingId')) {
+    renderListingOptions(draft.listingId ? Number(draft.listingId) : null);
+    document.getElementById('sharedResourceListingId').value = String(draft.listingId || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'freeOfCharge')) {
+    document.getElementById('paymentFreeOfCharge').checked = draft.freeOfCharge === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'cashOnSite')) {
+    document.getElementById('paymentCashOnSite').checked = draft.cashOnSite === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'bankTransfer')) {
+    document.getElementById('paymentBankTransfer').checked = draft.bankTransfer === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'onlinePayment')) {
+    document.getElementById('paymentOnlinePayment').checked = draft.onlinePayment === true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(draft, 'paymentMessages')) {
+    currentPaymentMessages = {
+      free_of_charge: (draft.paymentMessages && draft.paymentMessages.free_of_charge) || '',
+      cash_on_site: (draft.paymentMessages && draft.paymentMessages.cash_on_site) || '',
+      bank_transfer: (draft.paymentMessages && draft.paymentMessages.bank_transfer) || '',
+      online_payment: (draft.paymentMessages && draft.paymentMessages.online_payment) || ''
+    };
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'activePaymentMessageKey')) {
+    activePaymentMessageKey = draft.activePaymentMessageKey || 'free_of_charge';
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'chargeConfig')) {
+    currentChargeConfig = {
+      chargeBasis: (draft.chargeConfig && draft.chargeConfig.chargeBasis) || null,
+      dailyChargeMode: (draft.chargeConfig && draft.chargeConfig.dailyChargeMode) || null,
+      dailyRate: (draft.chargeConfig && draft.chargeConfig.dailyRate) || '',
+      hourlyChargeMode: (draft.chargeConfig && draft.chargeConfig.hourlyChargeMode) || null,
+      hourlyRate: (draft.chargeConfig && draft.chargeConfig.hourlyRate) || '',
+      hourlyRates: ensureHourlyRatesLength((draft.chargeConfig && draft.chargeConfig.hourlyRates) || [])
+    };
+  }
+
+  syncPaymentOptionState();
+  setPaymentMessageEditorHtml(currentPaymentMessages[activePaymentMessageKey] || '');
+  renderChargeConfigSummary();
+  return true;
 }
 
 function setSharedResourceMessage(text, isError) {
@@ -703,16 +844,24 @@ async function loadAdminReservations() {
       return;
     }
 
+    const draft = readSharedResourceDraft();
+
     if (isCreateMode) {
       document.getElementById('sharedResourceTitle').textContent = 'Create Facility';
       document.getElementById('deleteSharedResourceBtn').classList.add('hidden');
       document.getElementById('sharedResourceReservationsSection').classList.add('hidden');
       document.getElementById('maxUnits').value = '1';
       document.getElementById('maxDaysAdvanceBooking').value = '365';
+      if (draft) {
+        applySharedResourceDraft(draft);
+      }
       initialSharedResourceFormState = getSharedResourceFormState();
     } else {
       await loadSharedResource();
       await loadAdminReservations();
+      if (draft) {
+        applySharedResourceDraft(draft);
+      }
       initialSharedResourceFormState = getSharedResourceFormState();
     }
   } catch (err) {
@@ -754,8 +903,11 @@ document.getElementById('paymentFreeOfCharge').addEventListener('change', () => 
 });
 
 document.getElementById('openChargeConfigBtn').addEventListener('click', () => {
-  populateChargeDialogFromState();
-  getChargeDialog().showModal();
+  saveSharedResourceDraft();
+  const target = '/shared-resource-charge-config.html' + (isCreateMode
+    ? '?new=1'
+    : ('?id=' + encodeURIComponent(resourceId)));
+  window.location.href = target;
 });
 
 document.getElementById('closeChargeConfigBtn').addEventListener('click', () => {
@@ -967,6 +1119,7 @@ document.getElementById('sharedResourceForm').addEventListener('submit', async (
     if (isCreateMode) {
       const nextResourceId = Number(data && data.resource && data.resource.id);
       if (Number.isInteger(nextResourceId) && nextResourceId > 0) {
+        clearSharedResourceDraft();
         suppressBeforeunload = true;
         goBackToConfig();
         return;
@@ -976,6 +1129,7 @@ document.getElementById('sharedResourceForm').addEventListener('submit', async (
     document.getElementById('sharedResourceTitle').textContent = 'Facility: ' + (data.resource.short_description || '');
     initialSharedResourceFormState = getSharedResourceFormState();
     setSharedResourceMessage('Facility saved.', false);
+    clearSharedResourceDraft();
   } catch {
     setSharedResourceMessage('Network error saving facility.', true);
   } finally {

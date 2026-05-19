@@ -3848,7 +3848,7 @@ async function createSharedResourceForUser(userId, clientAccountId, input) {
         hourly_rate,
         hourly_rates_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
       RETURNING id, user_id, client_account_id, short_description, full_description_html, max_units, max_days_advance_booking, property_id, listing_id, resource_type,
                 free_of_charge, cash_on_site, bank_transfer, online_payment,
               free_of_charge_message_html, cash_on_site_message_html, bank_transfer_message_html, online_payment_message_html,
