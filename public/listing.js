@@ -1327,10 +1327,18 @@ async function saveListingManagerAssignments() {
 }
 
 async function loadCleaners() {
-  const res = await fetch('/api/cleaners');
+  const res = await fetch('/api/access/team');
   if (!res.ok) return [];
   const data = await res.json();
-  const cleaners = data.cleaners || [];
+  const cleaners = (data.team || [])
+    .filter((member) => member && member.role === 'Staff' && Number(member.cleaner_id) > 0)
+    .map((member) => ({
+      id: Number(member.cleaner_id),
+      first_name: member.first_name || '',
+      last_name: member.family_name || '',
+      email: member.email || '',
+      telephone: ''
+    }));
   cleanerNameById = new Map(
     cleaners.map((cleaner) => {
       const fullName = [cleaner.first_name || '', cleaner.last_name || ''].join(' ').trim();

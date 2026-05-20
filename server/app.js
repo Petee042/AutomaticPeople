@@ -2430,7 +2430,10 @@ async function getTeamMembershipsForClientAccount(clientAccountId) {
     return [];
   }
 
-  
+  const ownerUserId = await getClientOwnerUserId(id);
+  if (Number.isInteger(ownerUserId) && ownerUserId > 0) {
+    await ensureCleanerRowsForStaffMembers(id, ownerUserId);
+  }
 
   const result = await pool.query(
     `
@@ -2441,6 +2444,7 @@ async function getTeamMembershipsForClientAccount(clientAccountId) {
              cm.status,
              cm.created_at,
              cm.updated_at,
+             c.id AS cleaner_id,
              u.email,
              u.first_name,
              u.family_name,
@@ -2448,13 +2452,84 @@ async function getTeamMembershipsForClientAccount(clientAccountId) {
              u.is_validated
       FROM client_memberships cm
       JOIN users u ON u.id = cm.user_id
+      LEFT JOIN cleaners c ON c.client_account_id = cm.client_account_id AND c.cleaner_user_id = cm.user_id AND c.user_id = $2
       WHERE cm.client_account_id = $1
         AND cm.role IN ('Manager', 'Staff')
         AND cm.status IN ('active', 'invited')
       ORDER BY cm.role ASC, u.email ASC, cm.id ASC
     `,
-    [id]
+    [id, ownerUserId || null]
   );
+
+  return result.rows;
+}
+
+async function ensureCleanerRowsForStaffMembers(clientAccountId, ownerUserId) {
+  const accountId = Number(clientAccountId);
+  const ownerId = Number(ownerUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(ownerId) || ownerId <= 0) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT cm.user_id,
+             u.first_name,
+             u.family_name,
+             u.email,
+             u.telephone,
+             u.password_hash
+      FROM client_memberships cm
+      JOIN users u ON u.id = cm.user_id
+      LEFT JOIN cleaners c
+        ON c.user_id = $2
+       AND c.client_account_id = cm.client_account_id
+       AND c.cleaner_user_id = cm.user_id
+      WHERE cm.client_account_id = $1
+        AND cm.role = 'Staff'
+        AND cm.status IN ('active', 'invited')
+        AND c.id IS NULL
+      ORDER BY cm.id ASC
+    `,
+    [accountId, ownerId]
+  );
+
+  for (const row of result.rows) {
+    await pool.query(
+      `
+        INSERT INTO cleaners (
+          user_id,
+          client_account_id,
+          cleaner_user_id,
+          first_name,
+          last_name,
+          email,
+          telephone,
+          password_hash
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (user_id, email)
+        DO UPDATE SET
+          client_account_id = EXCLUDED.client_account_id,
+          cleaner_user_id = EXCLUDED.cleaner_user_id,
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name,
+          telephone = EXCLUDED.telephone,
+          password_hash = EXCLUDED.password_hash,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+      [
+        ownerId,
+        accountId,
+        Number(row.user_id),
+        row.first_name || '',
+        row.family_name || '',
+        row.email || '',
+        row.telephone || '',
+        row.password_hash || ''
+      ]
+    );
+  }
 
   return result.rows;
 }
@@ -2614,6 +2689,8 @@ async function setClientTeamRolesForUser(clientAccountId, invitedByUserId, targe
       [revokedManagerMembershipIds]
     );
   }
+
+  await ensureCleanerRowsForStaffMembers(clientAccountId, invitedByUserId);
 
   const membershipsResult = await pool.query(
     `
