@@ -1586,6 +1586,9 @@ async function buildSchedule(selectedListings, days, startDateUtc) {
       return;
     }
     row.changeDate = existing.changeover_date || row.changeDate;
+    if (existing.cleaner_name) {
+      row.cleanerName = String(existing.cleaner_name);
+    }
     row.cleanerId = existing.cleaner_user_id ? Number(existing.cleaner_user_id) : null;
     if (!row.cleanerId && existing.cleaner_id) {
       const fallbackCleaner = (currentCleaners || []).find((cleaner) => Number(cleaner.id) === Number(existing.cleaner_id));
