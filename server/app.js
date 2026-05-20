@@ -1208,12 +1208,6 @@ async function initializeUserStore() {
         [String(cleaner.first_name || '').trim(), String(cleaner.last_name || '').trim(), String(cleaner.telephone || '').trim(), linkedUserId]
       );
 
-      // Requested default staff password for currently configured cleaner-linked users.
-      await pool.query(
-        'UPDATE users SET password_hash = $1 WHERE id = $2',
-        [defaultCleanerPasswordHash, linkedUserId]
-      );
-
       if (cleaner.client_account_id) {
         await pool.query(
           `
