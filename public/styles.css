@@ -73,6 +73,10 @@ body {
   max-width: 560px;
 }
 
+.logged-page .card-container {
+  margin: 1vh auto 0;
+}
+
 /* ── Site title ────────────────────────────────────────────── */
 .site-title-row {
   display: flex;

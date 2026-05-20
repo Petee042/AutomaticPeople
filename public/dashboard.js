@@ -2677,17 +2677,24 @@ async function refreshOpsCalendar(refresh) {
     const listingName = result.listing.name || listingMeta.name || ('Listing #' + result.listing.id);
     const listingColorName = listingMeta.property_name || '';
     const defaultCleanerId = listingMeta.usual_cleaner_id || null;
+    const listingDateBasis = listingMeta.date_basis === 'checkin' ? 'checkin' : 'checkout';
     events.push(...(data.events || []).map((event) => Object.assign({}, event, {
       listingId: result.listing.id,
       listingName,
       listingPropertyName: listingColorName
     })));
-    cleaningChanges.push(...(data.cleaningChanges || []).map((change) => Object.assign({}, change, {
-      listingId: result.listing.id,
-      listingName,
-      default_cleaner_id: defaultCleanerId,
-      default_cleaner_name: getDefaultCleanerNameForListing(defaultCleanerId)
-    })));
+    cleaningChanges.push(...(data.cleaningChanges || []).map((change) => {
+      const checkinKey = toDateKey(change.reservation_checkin_date);
+      const checkoutKey = toDateKey(change.reservation_checkout_date);
+      const fallbackChangeDate = listingDateBasis === 'checkin' ? checkinKey : checkoutKey;
+      return Object.assign({}, change, {
+        listingId: result.listing.id,
+        listingName,
+        changeover_date: toDateKey(change.changeover_date) || fallbackChangeDate,
+        default_cleaner_id: defaultCleanerId,
+        default_cleaner_name: getDefaultCleanerNameForListing(defaultCleanerId)
+      });
+    }));
     if (data.fetchedAt) {
       fetchedAts.push(data.fetchedAt);
     }
