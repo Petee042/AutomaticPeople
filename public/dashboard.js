@@ -236,17 +236,18 @@ function renderTeamMembers(team) {
   currentTeamMembers = Array.isArray(team) ? team : [];
 
   const tbody = document.getElementById('teamTableBody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
 
   if (!currentTeamMembers.length) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = 5;
-    cell.textContent = 'No team members found.';
-    row.appendChild(cell);
-    tbody.appendChild(row);
-    closeTeamMemberEditor();
+    if (tbody) {
+      tbody.innerHTML = '';
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.textContent = 'No team members found.';
+      row.appendChild(cell);
+      tbody.appendChild(row);
+      closeTeamMemberEditor();
+    }
     renderConfigRows('configTeamList', [], 'No team members yet.');
     return;
   }
@@ -279,13 +280,16 @@ function renderTeamMembers(team) {
     });
 
   if (!groupedByUser.size) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = 5;
-    cell.textContent = 'No team members found.';
-    row.appendChild(cell);
-    tbody.appendChild(row);
-    closeTeamMemberEditor();
+    if (tbody) {
+      tbody.innerHTML = '';
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.textContent = 'No team members found.';
+      row.appendChild(cell);
+      tbody.appendChild(row);
+      closeTeamMemberEditor();
+    }
     renderConfigRows('configTeamList', [], 'No team members yet.');
     return;
   }
@@ -304,6 +308,12 @@ function renderTeamMembers(team) {
     }),
     'No team members yet.'
   );
+
+  if (!tbody) {
+    return;
+  }
+
+  tbody.innerHTML = '';
 
   groupedMembers.forEach((member) => {
     const row = document.createElement('tr');
