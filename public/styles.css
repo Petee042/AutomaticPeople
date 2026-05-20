@@ -797,11 +797,19 @@ textarea:focus {
   display: flex;
   gap: 0.6rem;
   justify-content: flex-end;
-  margin-top: 0.7rem;
+}
+
+.schedule-actions-panel {
+  padding-bottom: 0.55rem;
+}
+
+.schedule-export-panel {
+  border-top: 1px solid #dbe1ef;
+  padding-top: 0.6rem;
+  margin-top: 0.55rem;
 }
 
 .schedule-export-row {
-  margin-top: 0.6rem;
   display: flex;
   gap: 0.7rem;
   align-items: center;
@@ -821,6 +829,29 @@ textarea:focus {
   border-radius: 4px;
   font-size: 0.9rem;
   background: #fff;
+}
+
+.schedule-email-label {
+  font-weight: 500;
+  font-size: 0.93rem;
+  white-space: nowrap;
+}
+
+.schedule-email-input {
+  flex: 1 1 180px;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #dbe1ef;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background: #fff;
+}
+
+.schedule-email-input:focus {
+  outline: none;
+  border-color: #4361ee;
+  box-shadow: 0 0 0 2px rgba(67, 97, 238, 0.1);
 }
 
 .schedule-action-icon {
@@ -889,9 +920,7 @@ textarea:focus {
 }
 
 .schedule-table-footer {
-  border-top: 1px solid #dbe1ef;
   margin-top: 0.65rem;
-  padding-top: 0.55rem;
 }
 
 .schedule-preview .calendar-table {
@@ -1407,6 +1436,11 @@ textarea:focus {
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
+  }
+
+  .schedule-email-input {
+    max-width: none;
+    flex: 1 1 220px;
   }
 
   .schedule-email-btn {
