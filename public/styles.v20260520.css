@@ -930,6 +930,20 @@ textarea:focus {
   min-width: 0;
 }
 
+/* Undo the 110px label rule for nested listing-row labels inside the box */
+.calendar-source-row .cleaning-listings label {
+  width: auto;
+  flex-shrink: 1;
+}
+
+/* Align the listings box to the top of its row rather than centring it */
+.calendar-source-row:has(.cleaning-listings) {
+  align-items: flex-start;
+}
+.calendar-source-row:has(.cleaning-listings) > label {
+  padding-top: 0.5rem;
+}
+
 .cleaning-actions-row {
   display: flex;
   align-items: end;
