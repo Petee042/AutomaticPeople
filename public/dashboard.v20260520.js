@@ -3543,6 +3543,7 @@ document.getElementById('bankDetailsForm').addEventListener('submit', async (e) 
 });
 
 
+document.getElementById('startStripeConnectBtn').addEventListener('click', async () => {
   const button = document.getElementById('startStripeConnectBtn');
   button.disabled = true;
   setStripeConnectStatus('Opening Stripe onboarding...', false);
