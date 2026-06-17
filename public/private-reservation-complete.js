@@ -15,7 +15,10 @@
   }
 
   if (mode === 'bank-transfer') {
-    msgEl.textContent = 'Reservation saved. Payment request email has been sent to the guest with your bank details.';
+    const warning = String(new URLSearchParams(window.location.search).get('warning') || '').trim();
+    msgEl.textContent = warning === 'email-unavailable'
+      ? 'Reservation saved, but email delivery is not configured on this server. The reservation was still recorded.'
+      : 'Reservation saved. Payment request email has been sent to the guest with your bank details.';
     msgEl.className = 'message success';
     return;
   }

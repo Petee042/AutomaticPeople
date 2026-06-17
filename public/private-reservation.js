@@ -208,7 +208,10 @@ document.getElementById('privateReservationForm').addEventListener('submit', asy
     }
 
     if (data.nextUrl) {
-      window.location.href = data.nextUrl;
+      const warning = data.message && data.message.includes('logged') && paymentMethod === 'Bank Transfer'
+        ? '&warning=email-unavailable'
+        : '';
+      window.location.href = data.nextUrl + warning;
       return;
     }
 

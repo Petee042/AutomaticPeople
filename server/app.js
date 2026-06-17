@@ -9113,8 +9113,12 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
         textBody: textLines.join('\n')
       });
 
-      if (!emailResult.ok) {
+      if (!emailResult.ok && !String(emailResult.error || '').includes('not configured')) {
         return res.status(502).json({ error: emailResult.error || 'Failed to send payment request email.' });
+      }
+
+      if (!emailResult.ok) {
+        console.warn('Bank transfer email was not sent because email delivery is not configured. Reservation will still be recorded.');
       }
     }
 
