@@ -38,7 +38,29 @@
       <!-- ── Dashboard tab ──────────────────────────────────── -->
       <div id="panel-dashboard" class="dashboard-tab-panel" role="tabpanel">
 
-
+        <section class="listing-form-section">
+          <h3>Private Reservations</h3>
+          <p id="privateReservationsMessage" class="message"></p>
+          <div class="table-wrap">
+            <table class="calendar-table" aria-label="Private reservations">
+              <thead>
+                <tr>
+                  <th>Guest</th>
+                  <th>Arrival</th>
+                  <th>Nights</th>
+                  <th>Amount</th>
+                  <th>Payment Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="privateReservationsTableBody">
+                <tr>
+                  <td colspan="6">Loading private reservations...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
       </div><!-- /panel-dashboard -->
 

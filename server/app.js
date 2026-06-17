@@ -3628,6 +3628,92 @@ function mapReservationActivityRowToEvent(row) {
   };
 }
 
+function getPrivateReservationPaymentStatusLabel(row) {
+  const paymentMethod = String(row && row.payment_method || '').trim();
+  const status = String(row && row.status || '').trim().toLowerCase();
+
+  if (paymentMethod === 'No Charge') {
+    return 'no charge';
+  }
+  if (paymentMethod === 'Bank Transfer') {
+    return status === 'awaiting_bank_transfer' ? 'outstanding' : 'paid';
+  }
+  if (paymentMethod === 'Online Payment') {
+    return 'paid';
+  }
+  return 'paid';
+}
+
+function canConfirmPrivateReservationPayment(row) {
+  const paymentMethod = String(row && row.payment_method || '').trim();
+  const status = String(row && row.status || '').trim().toLowerCase();
+  return paymentMethod === 'Bank Transfer' && status === 'awaiting_bank_transfer';
+}
+
+function mapPrivateReservationRow(row) {
+  const firstName = String(row && row.first_name || '').trim();
+  const familyName = String(row && row.family_name || '').trim();
+  const guestName = [firstName, familyName].filter(Boolean).join(' ').trim() || 'Direct Guest';
+  const reservationAmount = row && row.reservation_amount !== null && row.reservation_amount !== undefined
+    ? Number(row.reservation_amount)
+    : null;
+  const stayNights = Number(row && row.stay_nights || 0);
+
+  return {
+    id: Number(row && row.id || 0),
+    listingId: Number(row && row.listing_id || 0),
+    listingName: String(row && row.listing_name || '').trim() || '',
+    guestName,
+    arrivalDate: String(row && row.reservation_checkin_date || '').trim(),
+    departureDate: String(row && row.reservation_checkout_date || '').trim(),
+    stayNights: Number.isInteger(stayNights) && stayNights > 0 ? stayNights : 0,
+    amount: Number.isFinite(reservationAmount) ? reservationAmount : null,
+    paymentMethod: String(row && row.payment_method || '').trim(),
+    status: String(row && row.status || '').trim(),
+    paymentStatus: getPrivateReservationPaymentStatusLabel(row),
+    canConfirmPayment: canConfirmPrivateReservationPayment(row),
+    createdAt: row && row.created_at ? String(row.created_at) : ''
+  };
+}
+
+async function getPrivateReservationsForScope(req) {
+  const listings = await getListingsForUser(req.accessContext.effectiveOwnerUserId);
+  const allowedListingIds = listings
+    .filter((listing) => isListingAllowedByScope(req, listing))
+    .map((listing) => Number(listing.id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (!allowedListingIds.length) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT ra.id,
+             ra.listing_id,
+             l.name AS listing_name,
+             ra.reservation_checkin_date::text AS reservation_checkin_date,
+             ra.reservation_checkout_date::text AS reservation_checkout_date,
+             ra.first_name,
+             ra.family_name,
+             ra.reservation_amount,
+             ra.payment_method,
+             ra.status,
+             ra.created_at,
+             (ra.reservation_checkout_date - ra.reservation_checkin_date) AS stay_nights
+      FROM reservation_activity ra
+      JOIN listings l ON l.id = ra.listing_id
+      WHERE ra.client_account_id = $1
+        AND ra.listing_id = ANY($2::int[])
+        AND ra.status <> ALL($3::text[])
+      ORDER BY ra.reservation_checkin_date DESC, ra.id DESC
+    `,
+    [req.accessContext.activeClientAccountId, allowedListingIds, ['cancelled', 'expired']]
+  );
+
+  return result.rows.map((row) => mapPrivateReservationRow(row));
+}
+
 async function getDirectReservationEventsForListing(listingId) {
   const id = Number(listingId);
   if (!Number.isInteger(id) || id <= 0) {
@@ -9023,6 +9109,99 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
 });
 
 // POST /api/private-reservations — create a direct reservation activity entry
+app.get('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const reservations = await getPrivateReservationsForScope(req);
+    return res.json({ reservations });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load private reservations.' });
+  }
+});
+
+app.post('/api/private-reservations/:id/confirm-payment', requireScopedRole('Manager'), async (req, res) => {
+  const reservationId = Number(req.params.id || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        SELECT ra.id,
+               ra.client_account_id,
+               ra.listing_id,
+               ra.reservation_checkin_date::text AS reservation_checkin_date,
+               ra.reservation_checkout_date::text AS reservation_checkout_date,
+               ra.first_name,
+               ra.family_name,
+               ra.reservation_amount,
+               ra.payment_method,
+               ra.status,
+               ra.created_at,
+               l.name AS listing_name,
+               (ra.reservation_checkout_date - ra.reservation_checkin_date) AS stay_nights
+        FROM reservation_activity ra
+        JOIN listings l ON l.id = ra.listing_id
+        WHERE ra.id = $1
+          AND ra.client_account_id = $2
+        LIMIT 1
+      `,
+      [reservationId, req.accessContext.activeClientAccountId]
+    );
+
+    const existing = result.rows[0] || null;
+    if (!existing) {
+      return res.status(404).json({ error: 'Private reservation not found.' });
+    }
+
+    const listing = await getListingByIdForUser(existing.listing_id, req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Private reservation not found.' });
+    }
+
+    if (String(existing.payment_method || '').trim() !== 'Bank Transfer') {
+      return res.status(400).json({ error: 'Only bank transfer reservations can be confirmed.' });
+    }
+
+    if (String(existing.status || '').trim().toLowerCase() !== 'awaiting_bank_transfer') {
+      return res.json({ reservation: mapPrivateReservationRow(existing) });
+    }
+
+    const updateResult = await pool.query(
+      `
+        UPDATE reservation_activity
+        SET status = 'confirmed',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        RETURNING id,
+                  listing_id,
+                  reservation_checkin_date::text AS reservation_checkin_date,
+                  reservation_checkout_date::text AS reservation_checkout_date,
+                  first_name,
+                  family_name,
+                  reservation_amount,
+                  payment_method,
+                  status,
+                  created_at,
+                  (reservation_checkout_date - reservation_checkin_date) AS stay_nights
+      `,
+      [reservationId]
+    );
+
+    const updated = updateResult.rows[0] || null;
+    return res.json({
+      reservation: mapPrivateReservationRow({
+        ...updated,
+        listing_name: existing.listing_name
+      })
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to confirm private reservation payment.' });
+  }
+});
+
 app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
   const arrivalDate = normaliseDateKey(req.body.arrivalDate);
   const departureDate = normaliseDateKey(req.body.departureDate);

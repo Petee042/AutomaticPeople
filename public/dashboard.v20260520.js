@@ -2989,6 +2989,7 @@ async function loadDashboardData() {
   await fetchGuests();
   await fetchStripeConnectStatus();
   await fetchBankDetails();
+  await loadPrivateReservations();
 
   const managerSelect = document.getElementById('managerAssignmentMembership');
   if (managerSelect) {
@@ -3501,6 +3502,144 @@ function setBankDetailsMessage(text, isError) {
   if (!el) return;
   el.textContent = text || '';
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setPrivateReservationsMessage(text, isError) {
+  const el = document.getElementById('privateReservationsMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function formatPrivateReservationArrival(dateValue) {
+  const value = String(dateValue || '').trim();
+  if (!value) {
+    return '—';
+  }
+  const parsed = new Date(value + 'T00:00:00');
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleDateString([], { dateStyle: 'medium' });
+}
+
+function formatPrivateReservationAmount(amount) {
+  const numeric = Number(amount);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : '—';
+}
+
+async function confirmPrivateReservationPayment(reservationId, button) {
+  const id = Number(reservationId || 0);
+  if (!Number.isInteger(id) || id <= 0) {
+    setPrivateReservationsMessage('Select a valid reservation first.', true);
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+  }
+  setPrivateReservationsMessage('Confirming payment...', false);
+
+  try {
+    const res = await fetch('/api/private-reservations/' + encodeURIComponent(String(id)) + '/confirm-payment', {
+      method: 'POST'
+    });
+    if (res.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to confirm payment.');
+    }
+
+    await loadPrivateReservations();
+    setPrivateReservationsMessage('Payment confirmed.', false);
+  } catch (err) {
+    setPrivateReservationsMessage(err.message || 'Failed to confirm payment.', true);
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
+async function loadPrivateReservations() {
+  const tbody = document.getElementById('privateReservationsTableBody');
+  if (!tbody) {
+    return;
+  }
+
+  tbody.innerHTML = '<tr><td colspan="6">Loading private reservations...</td></tr>';
+  setPrivateReservationsMessage('', false);
+
+  try {
+    const res = await fetch('/api/private-reservations');
+    if (res.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+    if (res.status === 403) {
+      tbody.innerHTML = '<tr><td colspan="6">Access restricted.</td></tr>';
+      return;
+    }
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to load private reservations.');
+    }
+
+    const reservations = Array.isArray(data.reservations) ? data.reservations : [];
+    if (!reservations.length) {
+      tbody.innerHTML = '<tr><td colspan="6">No private reservations found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    reservations.forEach((reservation) => {
+      const tr = document.createElement('tr');
+
+      const guestCell = document.createElement('td');
+      guestCell.textContent = reservation.guestName || '—';
+
+      const arrivalCell = document.createElement('td');
+      arrivalCell.textContent = formatPrivateReservationArrival(reservation.arrivalDate);
+
+      const nightsCell = document.createElement('td');
+      nightsCell.textContent = String(Number(reservation.stayNights || 0) || 0);
+
+      const amountCell = document.createElement('td');
+      amountCell.textContent = formatPrivateReservationAmount(reservation.amount);
+
+      const paymentStatusCell = document.createElement('td');
+      paymentStatusCell.textContent = reservation.paymentStatus || '—';
+
+      const actionCell = document.createElement('td');
+      if (reservation.canConfirmPayment) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn primary';
+        button.textContent = 'Confirm Payment';
+        button.addEventListener('click', () => {
+          confirmPrivateReservationPayment(reservation.id, button);
+        });
+        actionCell.appendChild(button);
+      } else {
+        actionCell.textContent = '—';
+      }
+
+      tr.appendChild(guestCell);
+      tr.appendChild(arrivalCell);
+      tr.appendChild(nightsCell);
+      tr.appendChild(amountCell);
+      tr.appendChild(paymentStatusCell);
+      tr.appendChild(actionCell);
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="6">Failed to load private reservations.</td></tr>';
+    setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
+  }
 }
 
 async function fetchBankDetails() {
