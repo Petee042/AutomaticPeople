@@ -3531,7 +3531,7 @@ function formatPrivateReservationAmount(amount) {
 function createPrivateReservationActionButton(symbol, title, className, onClick) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'btn secondary ' + className;
+  button.className = 'btn secondary config-icon-btn private-res-action-btn ' + className;
   button.textContent = symbol;
   button.title = title;
   button.setAttribute('aria-label', title);
@@ -3627,7 +3627,7 @@ async function loadPrivateReservations() {
     return;
   }
 
-  tbody.innerHTML = '<tr><td colspan="5">Loading private reservations...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7">Loading private reservations...</td></tr>';
   setPrivateReservationsMessage('', false);
 
   try {
@@ -3637,7 +3637,7 @@ async function loadPrivateReservations() {
       return;
     }
     if (res.status === 403) {
-      tbody.innerHTML = '<tr><td colspan="5">Access restricted.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7">Access restricted.</td></tr>';
       return;
     }
 
@@ -3648,7 +3648,7 @@ async function loadPrivateReservations() {
 
     const reservations = Array.isArray(data.reservations) ? data.reservations : [];
     if (!reservations.length) {
-      tbody.innerHTML = '<tr><td colspan="5">No private reservations found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7">No private reservations found.</td></tr>';
       return;
     }
 
@@ -3656,8 +3656,14 @@ async function loadPrivateReservations() {
     reservations.forEach((reservation) => {
       const tr = document.createElement('tr');
 
+      const reservationIdCell = document.createElement('td');
+      reservationIdCell.textContent = reservation.reservationIdentifier || '—';
+
       const guestCell = document.createElement('td');
       guestCell.textContent = reservation.guestName || '—';
+
+      const listingCell = document.createElement('td');
+      listingCell.textContent = reservation.listingName || '—';
 
       const arrivalCell = document.createElement('td');
       arrivalCell.textContent = formatPrivateReservationArrival(reservation.arrivalDate);
@@ -3685,7 +3691,9 @@ async function loadPrivateReservations() {
       }
       actionCell.appendChild(actionsWrap);
 
+      tr.appendChild(reservationIdCell);
       tr.appendChild(guestCell);
+      tr.appendChild(listingCell);
       tr.appendChild(arrivalCell);
       tr.appendChild(nightsCell);
       tr.appendChild(amountCell);
@@ -3693,7 +3701,7 @@ async function loadPrivateReservations() {
       tbody.appendChild(tr);
     });
   } catch (err) {
-    tbody.innerHTML = '<tr><td colspan="5">Failed to load private reservations.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7">Failed to load private reservations.</td></tr>';
     setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
   }
 }

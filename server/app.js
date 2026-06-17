@@ -785,6 +785,7 @@ async function initializeUserStore() {
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       client_account_id BIGINT NOT NULL REFERENCES client_accounts(id) ON DELETE CASCADE,
       listing_id BIGINT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      reservation_identifier TEXT,
       reservation_checkin_date DATE NOT NULL,
       reservation_checkout_date DATE NOT NULL,
       first_name TEXT NOT NULL DEFAULT '',
@@ -803,6 +804,11 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS reservation_identifier TEXT
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_reservation_activity_listing_dates
     ON reservation_activity (listing_id, reservation_checkin_date, reservation_checkout_date)
   `);
@@ -810,6 +816,37 @@ async function initializeUserStore() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_reservation_activity_client_created
     ON reservation_activity (client_account_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reservation_activity_identifier_unique
+    ON reservation_activity (reservation_identifier)
+    WHERE reservation_identifier IS NOT NULL
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reservation_identifier_registry (
+      id BIGSERIAL PRIMARY KEY,
+      reservation_identifier TEXT NOT NULL UNIQUE,
+      reservation_type TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    INSERT INTO reservation_identifier_registry (reservation_identifier, reservation_type)
+    SELECT DISTINCT reservation_identifier, 'shared_resource_reservation'
+    FROM shared_resource_reservations
+    WHERE reservation_identifier ~ '^[0-9]{8}$'
+    ON CONFLICT (reservation_identifier) DO NOTHING
+  `);
+
+  await pool.query(`
+    INSERT INTO reservation_identifier_registry (reservation_identifier, reservation_type)
+    SELECT DISTINCT reservation_identifier, 'private_reservation'
+    FROM reservation_activity
+    WHERE reservation_identifier ~ '^[0-9]{8}$'
+    ON CONFLICT (reservation_identifier) DO NOTHING
   `);
 
   await pool.query(`
@@ -1605,6 +1642,28 @@ function formatDateTimeForMessage(value) {
     return String(value || '');
   }
   return date.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
+async function generateGlobalReservationIdentifier(reservationType) {
+  const type = String(reservationType || 'reservation').trim().slice(0, 50) || 'reservation';
+
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const value = String(Math.floor(10000000 + Math.random() * 90000000));
+    const result = await pool.query(
+      `
+        INSERT INTO reservation_identifier_registry (reservation_identifier, reservation_type)
+        VALUES ($1, $2)
+        ON CONFLICT (reservation_identifier) DO NOTHING
+        RETURNING reservation_identifier
+      `,
+      [value, type]
+    );
+    if (result.rows[0] && result.rows[0].reservation_identifier) {
+      return String(result.rows[0].reservation_identifier);
+    }
+  }
+
+  throw new Error('Failed to generate unique reservation identifier.');
 }
 
 function normaliseSharedResourcePaymentOptions(input) {
@@ -3798,6 +3857,7 @@ function mapPrivateReservationRow(row) {
 
   return {
     id: Number(row && row.id || 0),
+    reservationIdentifier: String(row && row.reservation_identifier || '').trim(),
     listingId: Number(row && row.listing_id || 0),
     listingName: String(row && row.listing_name || '').trim() || '',
     guestName,
@@ -3829,6 +3889,7 @@ async function getPrivateReservationsForScope(req) {
   const result = await pool.query(
     `
       SELECT ra.id,
+              ra.reservation_identifier,
              ra.listing_id,
              l.name AS listing_name,
              ra.reservation_checkin_date::text AS reservation_checkin_date,
@@ -3890,6 +3951,7 @@ async function createReservationActivityForListing(input) {
         user_id,
         client_account_id,
         listing_id,
+        reservation_identifier,
         reservation_checkin_date,
         reservation_checkout_date,
         first_name,
@@ -3908,12 +3970,14 @@ async function createReservationActivityForListing(input) {
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15,
+        $16,
         CURRENT_TIMESTAMP
       )
       RETURNING id,
                 user_id,
                 client_account_id,
                 listing_id,
+                reservation_identifier,
                 reservation_checkin_date::text AS reservation_checkin_date,
                 reservation_checkout_date::text AS reservation_checkout_date,
                 first_name,
@@ -3933,6 +3997,7 @@ async function createReservationActivityForListing(input) {
       input.userId,
       input.clientAccountId,
       input.listingId,
+      input.reservationIdentifier,
       input.checkinDate,
       input.checkoutDate,
       input.firstName,
@@ -7794,7 +7859,7 @@ app.post('/api/public/shared-resources/:resourceId/online-payment/prepare', asyn
       return res.status(409).json({ error: 'Not fully available for your requested dates.' });
     }
 
-    const reservationIdentifier = 'SR-' + resourceId + '-' + Date.now();
+    const reservationIdentifier = await generateGlobalReservationIdentifier('shared_resource_reservation');
     const reservation = await createSharedResourceReservation({
       userId: resource.user_id,
       sharedResourceId: resourceId,
@@ -7986,7 +8051,7 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
     const reservation = await createSharedResourceReservation({
       userId: resource.user_id,
       sharedResourceId: resourceId,
-      reservationIdentifier: 'SR-' + resourceId + '-' + Date.now(),
+      reservationIdentifier: await generateGlobalReservationIdentifier('shared_resource_reservation'),
       listingId: matchingListingId,
       reservationCheckinDate: checkinDate,
       reservationCheckoutDate: checkoutDate,
@@ -9348,6 +9413,7 @@ app.post('/api/private-reservations/:id/confirm-payment', requireScopedRole('Man
     const result = await pool.query(
       `
         SELECT ra.id,
+           ra.reservation_identifier,
                ra.client_account_id,
                ra.listing_id,
                ra.reservation_checkin_date::text AS reservation_checkin_date,
@@ -9405,6 +9471,7 @@ app.post('/api/private-reservations/:id/confirm-payment', requireScopedRole('Man
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING id,
+                  reservation_identifier,
                   listing_id,
                   reservation_checkin_date::text AS reservation_checkin_date,
                   reservation_checkout_date::text AS reservation_checkout_date,
@@ -9491,6 +9558,7 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
 
     const nowMs = Date.now();
     const holdUntilAt = new Date(nowMs + holdHours * 60 * 60 * 1000).toISOString();
+    const reservationIdentifier = await generateGlobalReservationIdentifier('private_reservation');
     const nextStatus = paymentMethod === 'No Charge'
       ? 'confirmed'
       : paymentMethod === 'Bank Transfer'
@@ -9515,6 +9583,7 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
       const textLines = [
         'Payment Request For Accommodation',
         '',
+        'Reservation ID: ' + reservationIdentifier,
         'Guest: ' + firstName + ' ' + familyName,
         'Number of guests: ' + String(guestCount),
         'Arrival date: ' + arrivalDate,
@@ -9550,6 +9619,7 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
       userId: req.accessContext.effectiveOwnerUserId,
       clientAccountId: req.accessContext.activeClientAccountId,
       listingId,
+      reservationIdentifier,
       checkinDate: arrivalDate,
       checkoutDate: departureDate,
       firstName,
@@ -9565,6 +9635,27 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
     });
 
     if (paymentMethod === 'No Charge') {
+      const noChargeEmail = await sendAppEmail({
+        to: emailAddress,
+        subject: 'Reservation Confirmation',
+        textBody: [
+          'Reservation Confirmation',
+          '',
+          'Reservation ID: ' + reservationIdentifier,
+          'Guest: ' + firstName + ' ' + familyName,
+          'Arrival date: ' + arrivalDate,
+          'Departure date: ' + departureDate,
+          'Number of guests: ' + String(guestCount),
+          'Property: ' + String(listing.property_name || '').trim(),
+          'Listing: ' + String(listing.name || '').trim()
+        ].join('\n')
+      });
+
+      if (!noChargeEmail.ok) {
+        emailDeliveryReason = String(noChargeEmail.error || '').trim();
+        emailDeliveryWarning = true;
+      }
+
       await ensureGuestSiteUserForClientAccount({
         clientAccountId: req.accessContext.activeClientAccountId,
         ownerUserId: req.accessContext.effectiveOwnerUserId,
@@ -9576,15 +9667,9 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
       });
     }
 
-    const mode = paymentMethod === 'No Charge'
-      ? 'no-charge'
-      : paymentMethod === 'Bank Transfer'
-        ? 'bank-transfer'
-        : 'online-payment';
-
     return res.json({
       reservation,
-      nextUrl: '/private-reservation-complete.html?mode=' + encodeURIComponent(mode) + '&id=' + encodeURIComponent(String(reservation.id)),
+      nextUrl: '/dashboard.html?tab=panel-dashboard',
       emailDeliveryWarning,
       emailDeliveryReason,
       message: paymentMethod === 'No Charge'
