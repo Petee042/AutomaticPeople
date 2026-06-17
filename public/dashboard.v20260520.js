@@ -4230,12 +4230,12 @@ async function loadAllReservations() {
 
       const statusText = String(row.status || '').trim();
       if (statusText === 'cash') {
-        const confirmCashBtn = createSharedReservationActionButton('◍◍', 'Register Cash Payment Received', 'resource-pay-cash-btn', () => {
+        const confirmCashBtn = createSharedReservationActionButton('◍◍$', 'Register Cash Payment Received', 'resource-pay-cash-btn', () => {
           confirmSharedReservationPayment(row.shared_resource_id, row.id, 'Cash Received', confirmCashBtn);
         });
         actionsWrap.appendChild(confirmCashBtn);
       } else if (statusText === 'Awaiting Bank Transfer') {
-        const confirmBankBtn = createSharedReservationActionButton('▭→▭', 'Register Bank Transfer Received', 'resource-pay-bank-btn', () => {
+        const confirmBankBtn = createSharedReservationActionButton('⌂⇄', 'Register Bank Transfer Received', 'resource-pay-bank-btn', () => {
           confirmSharedReservationPayment(row.shared_resource_id, row.id, 'Bank Transfer Confirmed', confirmBankBtn);
         });
         actionsWrap.appendChild(confirmBankBtn);
