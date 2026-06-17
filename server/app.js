@@ -9384,7 +9384,13 @@ app.delete('/api/private-reservations/:id', requireScopedRole('Manager'), async 
     const existingResult = await pool.query(
       `
         SELECT id,
+               first_name,
+               family_name,
+               email_address,
                listing_id,
+               reservation_checkin_date::text AS reservation_checkin_date,
+               reservation_checkout_date::text AS reservation_checkout_date,
+               status,
                client_account_id
         FROM reservation_activity
         WHERE id = $1
@@ -9412,6 +9418,34 @@ app.delete('/api/private-reservations/:id', requireScopedRole('Manager'), async 
       `,
       [reservationId, req.accessContext.activeClientAccountId]
     );
+
+    const guestEmail = normaliseOptionalEmail(existing.email_address);
+    if (guestEmail) {
+      const guestName = [
+        String(existing.first_name || '').trim(),
+        String(existing.family_name || '').trim()
+      ].filter(Boolean).join(' ').trim() || 'Guest';
+      const isProvisional = String(existing.status || '').trim().toLowerCase().startsWith('awaiting_');
+      const subject = isProvisional ? 'Provisional Reservation Cancelled' : 'Reservation Cancelled';
+      const textBody = [
+        subject,
+        '',
+        'Guest: ' + guestName,
+        'Property: ' + String(listing.property_name || '').trim(),
+        'Listing: ' + String(listing.name || '').trim(),
+        'Arrival date: ' + String(existing.reservation_checkin_date || '').trim(),
+        'Departure date: ' + String(existing.reservation_checkout_date || '').trim()
+      ].join('\n');
+
+      const emailResult = await sendAppEmail({
+        to: guestEmail,
+        subject,
+        textBody
+      });
+      if (!emailResult.ok) {
+        console.warn('Failed to send private reservation cancellation email to guest.', emailResult.error || 'unknown email error');
+      }
+    }
 
     return res.json({ deleted: true, id: reservationId });
   } catch (err) {
