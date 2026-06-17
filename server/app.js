@@ -9384,6 +9384,7 @@ app.delete('/api/private-reservations/:id', requireScopedRole('Manager'), async 
     const existingResult = await pool.query(
       `
         SELECT id,
+           reservation_identifier,
                first_name,
                family_name,
                email_address,
@@ -9427,7 +9428,8 @@ app.delete('/api/private-reservations/:id', requireScopedRole('Manager'), async 
       ].filter(Boolean).join(' ').trim() || 'Guest';
       const isProvisional = String(existing.status || '').trim().toLowerCase().startsWith('awaiting_');
       const subject = isProvisional ? 'Provisional Reservation Cancelled' : 'Reservation Cancelled';
-      const textBody = [
+      const reservationIdentifier = String(existing.reservation_identifier || '').trim();
+      const messageLines = [
         subject,
         '',
         'Guest: ' + guestName,
@@ -9435,7 +9437,14 @@ app.delete('/api/private-reservations/:id', requireScopedRole('Manager'), async 
         'Listing: ' + String(listing.name || '').trim(),
         'Arrival date: ' + String(existing.reservation_checkin_date || '').trim(),
         'Departure date: ' + String(existing.reservation_checkout_date || '').trim()
-      ].join('\n');
+      ];
+      if (isProvisional) {
+        if (reservationIdentifier) {
+          messageLines.unshift('Reservation ID: ' + reservationIdentifier, '');
+        }
+        messageLines.push('', 'This accommodation is no longer held for you');
+      }
+      const textBody = messageLines.join('\n');
 
       const emailResult = await sendAppEmail({
         to: guestEmail,
