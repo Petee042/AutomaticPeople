@@ -3056,9 +3056,8 @@ function restorePersistedScheduleControls() {
   const daysInput = document.getElementById('cleaningDays');
   const formatInput = document.getElementById('cleaningFormat');
 
-  if (startDateInput && savedDashboardState && savedDashboardState.cleaningStartDate) {
-    startDateInput.value = savedDashboardState.cleaningStartDate;
-  } else if (startDateInput && !startDateInput.value) {
+  // Always default start date to today (local date) on page load
+  if (startDateInput) {
     const today = new Date();
     startDateInput.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
   }
