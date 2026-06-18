@@ -248,12 +248,38 @@ function applyStateUpdate(state) {
   renderCalendar(state);
 }
 
+function replaceImportedEvents(state, importedEvents) {
+  const localOnly = state.events.filter((event) => event.source !== 'imported');
+  state.events = [...localOnly, ...importedEvents]
+    .map(normalizeEvent)
+    .filter(Boolean)
+    .sort((a, b) => (a.start + a.end).localeCompare(b.start + b.end));
+}
+
+async function importFromUrl(state, url) {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error('Unable to fetch ICS URL (HTTP ' + response.status + ').');
+  }
+
+  const text = await response.text();
+  const imported = parseIcsEvents(text);
+  if (!imported.length) {
+    throw new Error('No valid events found in ICS.');
+  }
+
+  replaceImportedEvents(state, imported);
+  applyStateUpdate(state);
+  return imported.length;
+}
+
 function attachCalendarHandlers(state) {
   const createBtn = state.rootEl.querySelector('[data-action="create"]');
   const deleteBtn = state.rootEl.querySelector('[data-action="delete"]');
   const prevBtn = state.rootEl.querySelector('[data-action="prev-month"]');
   const nextBtn = state.rootEl.querySelector('[data-action="next-month"]');
   const importLink = state.rootEl.querySelector('[data-action="import-ics"]');
+  const syncBtn = state.rootEl.querySelector('[data-action="sync-ics"]');
 
   createBtn.addEventListener('click', () => {
     const start = String(state.createStartEl.value || '').trim();
@@ -296,32 +322,39 @@ function attachCalendarHandlers(state) {
 
   importLink.addEventListener('click', async (event) => {
     event.preventDefault();
-    const url = window.prompt('Paste ICS URL to import into Calendar ' + state.id + ':', '');
+    const url = window.prompt('Paste ICS URL to import into Calendar ' + state.id + ':', state.importUrl || '');
     if (!url) {
       return;
     }
 
     try {
-      const response = await fetch(url, { cache: 'no-store' });
-      if (!response.ok) {
-        throw new Error('Unable to fetch ICS URL (HTTP ' + response.status + ').');
-      }
-      const text = await response.text();
-      const imported = parseIcsEvents(text);
-      if (!imported.length) {
-        setCalendarStatus(state, 'No valid events found in ICS.', true);
-        return;
-      }
-
-      state.events.push(...imported);
-      state.events = state.events
-        .map(normalizeEvent)
-        .filter(Boolean)
-        .sort((a, b) => (a.start + a.end).localeCompare(b.start + b.end));
-      applyStateUpdate(state);
-      setCalendarStatus(state, 'Imported ' + imported.length + ' reservation(s). Imported reservations are shown in red.', false);
+      state.importUrl = url;
+      const importedCount = await importFromUrl(state, url);
+      setCalendarStatus(state, 'Imported ' + importedCount + ' reservation(s). Imported reservations are shown in red.', false);
     } catch (err) {
       setCalendarStatus(state, err.message || 'Failed to import ICS.', true);
+    }
+  });
+
+  syncBtn.addEventListener('click', async () => {
+    let url = String(state.importUrl || '').trim();
+    if (!url) {
+      const prompted = window.prompt('Paste ICS URL to sync into Calendar ' + state.id + ':', '');
+      if (!prompted) {
+        return;
+      }
+      url = String(prompted).trim();
+      if (!url) {
+        return;
+      }
+      state.importUrl = url;
+    }
+
+    try {
+      const importedCount = await importFromUrl(state, url);
+      setCalendarStatus(state, 'Sync complete: ' + importedCount + ' imported reservation(s) refreshed.', false);
+    } catch (err) {
+      setCalendarStatus(state, err.message || 'Failed to sync ICS.', true);
     }
   });
 }
@@ -343,7 +376,8 @@ function registerCalendar(rootEl) {
     createEndEl: rootEl.querySelector('#createEnd' + id),
     deleteStartEl: rootEl.querySelector('#deleteStart' + id),
     deleteEndEl: rootEl.querySelector('#deleteEnd' + id),
-    exportUrl: null
+    exportUrl: null,
+    importUrl: ''
   };
 
   calendarStates[id] = state;
