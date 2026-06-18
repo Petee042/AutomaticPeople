@@ -9207,6 +9207,52 @@ function buildIcsEventSummary(listing, event) {
   return 'Reservation';
 }
 
+function buildAdvanceBlockEventForListing(listing) {
+  const blockAdvanceDays = listing && listing.block_advance_days !== null && listing.block_advance_days !== undefined
+    ? Number(listing.block_advance_days) : null;
+  if (!Number.isInteger(blockAdvanceDays) || blockAdvanceDays <= 0) {
+    return null;
+  }
+
+  const now = new Date();
+  const blockStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  blockStart.setUTCDate(blockStart.getUTCDate() + blockAdvanceDays + 1);
+
+  const blockEnd = new Date(blockStart.getTime());
+  blockEnd.setUTCFullYear(blockEnd.getUTCFullYear() + 5);
+
+  const toIsoDate = (value) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return String(value.getUTCFullYear()) + '-' + pad(value.getUTCMonth() + 1) + '-' + pad(value.getUTCDate());
+  };
+
+  return {
+    isReservation: false,
+    isUnavailableBlock: true,
+    source: 'AutomaticPeople',
+    start: toIsoDate(blockStart),
+    end: toIsoDate(blockEnd),
+    title: 'Not available',
+    description: 'Blocked: beyond advance booking limit',
+    location: null,
+    raw: null
+  };
+}
+
+function appendAdvanceBlockEvent(listing, events) {
+  const baseEvents = Array.isArray(events) ? events : [];
+  const advanceBlockEvent = buildAdvanceBlockEventForListing(listing);
+  if (!advanceBlockEvent) {
+    return baseEvents;
+  }
+
+  return [...baseEvents, advanceBlockEvent].sort((a, b) => {
+    const aTime = a.start ? new Date(a.start).getTime() : Number.NEGATIVE_INFINITY;
+    const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
+    return aTime - bTime;
+  });
+}
+
 function buildIcsCalendar(listing, events) {
   const now = buildIcsDateString(new Date().toISOString());
   const prodId = '-//AutomaticPeople//Listing ' + listing.id + '//EN';
@@ -9463,6 +9509,7 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
       const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
       return aTime - bTime;
     });
+    const eventsWithAdvanceBlock = appendAdvanceBlockEvent(listing, mergedEvents);
 
     const fetchedAt = cached.length
       ? cached.map((c) => c.fetched_at).sort().pop()
@@ -9484,7 +9531,7 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
       cleaner_name: row.cleaner_id ? (cleanerNameById.get(Number(row.cleaner_id)) || 'Unallocated') : 'Unallocated'
     }));
 
-    return res.json({ listing, events: mergedEvents, feedErrors, fetchedAt, cleaningChanges });
+    return res.json({ listing, events: eventsWithAdvanceBlock, feedErrors, fetchedAt, cleaningChanges });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load listing events.' });
@@ -9536,6 +9583,7 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
       const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
       return aTime - bTime;
     });
+    const eventsWithAdvanceBlock = appendAdvanceBlockEvent(listing, mergedEvents);
 
     const fetchedAt = cached.length
       ? cached.map((c) => c.fetched_at).sort().pop()
@@ -9557,7 +9605,7 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
       cleaner_name: row.cleaner_id ? (cleanerNameById.get(Number(row.cleaner_id)) || 'Unallocated') : 'Unallocated'
     }));
 
-    return res.json({ listing, events: mergedEvents, feedErrors, fetchedAt, cleaningChanges });
+    return res.json({ listing, events: eventsWithAdvanceBlock, feedErrors, fetchedAt, cleaningChanges });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to refresh listing events.' });
