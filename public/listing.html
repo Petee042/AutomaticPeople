@@ -119,17 +119,15 @@
       <section class="listing-form-section" id="listingAvailabilitySection">
         <h3>Manage Availability</h3>
         <div class="calendar-source-row">
-          <div class="availability-inline-label">
-            <label for="listingBlockAdvanceDays" style="width:auto;white-space:nowrap;">Block Reservations more than</label>
-            <button
-              type="button"
-              class="btn circular-icon-btn availability-info-btn"
-              title="When set, dates beyond this many days from today will be exported as blocked in the ICS calendar and shown with a dark grey outline on the reservation calendar below."
-              aria-label="Block Reservations help"
-            >i</button>
-          </div>
+          <label for="listingBlockAdvanceDays" style="width:auto;white-space:nowrap;">Block Reservations more than</label>
           <input id="listingBlockAdvanceDays" type="number" min="1" max="3650" placeholder="e.g. 365" style="width:5.5rem;flex:none;" />
           <span style="white-space:nowrap;font-size:0.9rem;color:#444;">days in advance</span>
+          <button
+            type="button"
+            class="btn circular-icon-btn availability-info-btn"
+            title="When set, dates beyond this many days from today will be exported as blocked in the ICS calendar and shown with a dark grey outline on the reservation calendar below."
+            aria-label="Block Reservations help"
+          >i</button>
         </div>
         <div class="calendar-source-row availability-no-change-label-row">
           <div class="availability-inline-label">
