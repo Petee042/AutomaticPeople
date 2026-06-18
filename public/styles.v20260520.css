@@ -1054,6 +1054,29 @@ textarea:focus {
   padding-bottom: 0.55rem;
 }
 
+.schedule-export-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #133070;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.schedule-export-group .schedule-export-label {
+  margin: 0;
+}
+
+.schedule-export-group select {
+  min-width: 70px;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid #dbe1ef;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: #fff;
+}
+
 .schedule-export-panel {
   border-top: 1px solid #dbe1ef;
   padding-top: 0.6rem;

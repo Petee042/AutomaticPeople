@@ -2997,21 +2997,20 @@ async function loadDashboardData() {
 }
 
 function restorePersistedScheduleControls() {
-  if (!savedDashboardState) {
-    return;
-  }
-
   const startDateInput = document.getElementById('cleaningStartDate');
   const daysInput = document.getElementById('cleaningDays');
   const formatInput = document.getElementById('cleaningFormat');
 
-  if (startDateInput && savedDashboardState.cleaningStartDate) {
+  if (startDateInput && savedDashboardState && savedDashboardState.cleaningStartDate) {
     startDateInput.value = savedDashboardState.cleaningStartDate;
+  } else if (startDateInput && !startDateInput.value) {
+    const today = new Date();
+    startDateInput.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
   }
-  if (daysInput && savedDashboardState.cleaningDays) {
+  if (daysInput && savedDashboardState && savedDashboardState.cleaningDays) {
     daysInput.value = String(savedDashboardState.cleaningDays);
   }
-  if (formatInput && savedDashboardState.cleaningFormat) {
+  if (formatInput && savedDashboardState && savedDashboardState.cleaningFormat) {
     formatInput.value = savedDashboardState.cleaningFormat;
   }
 }
