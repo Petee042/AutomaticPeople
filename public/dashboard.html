@@ -146,14 +146,14 @@
       <div id="panel-ops" class="dashboard-tab-panel hidden" role="tabpanel">
 
         <section class="listing-form-section" id="opsCalendarSection">
-          <h3>Reservation Calendar</h3>
+          <div class="ops-section-header">
+            <h3>Reservation Calendar</h3>
+            <button type="button" id="opsCalendarRefreshBtn" class="btn primary calendar-refresh-btn schedule-action-icon schedule-refresh-icon" aria-label="Refresh Calendar" title="Refresh Calendar"></button>
+          </div>
           <div id="opsCalendarListings" class="cleaning-listings ops-calendar-listings" aria-label="Select listings to display">
             <p class="cleaning-empty">Loading listings...</p>
           </div>
-          <div class="ops-calendar-controls">
-            <button type="button" id="opsCalendarRefreshBtn" class="btn primary calendar-btn">Refresh</button>
-            <span id="opsCalendarFetchedAt" class="calendar-fetched-at"></span>
-          </div>
+          <span id="opsCalendarFetchedAt" class="calendar-fetched-at"></span>
           <p id="opsCalendarMessage" class="message"></p>
           <div class="calendar-month-header">
             <button type="button" id="opsCalendarPrevBtn" class="btn secondary">Prev</button>
@@ -167,7 +167,10 @@
         </section>
 
         <section class="listing-form-section">
-          <h3>Schedule</h3>
+          <div class="ops-section-header">
+            <h3>Changeover Schedule</h3>
+            <button id="refreshScheduleBtn" type="button" class="btn primary schedule-refresh-btn schedule-action-icon schedule-refresh-icon" aria-label="Refresh Schedule" title="Refresh Schedule"></button>
+          </div>
           <form id="cleaningScheduleForm" novalidate>
             <div class="cleaning-actions-row">
               <label for="cleaningStartDate">Start date</label>
@@ -185,7 +188,6 @@
               <div class="schedule-table-footer">
                 <div class="schedule-actions-panel">
                   <div class="schedule-actions-row">
-                  <button id="refreshScheduleBtn" type="button" class="btn primary schedule-refresh-btn schedule-action-icon schedule-refresh-icon" aria-label="Refresh Schedule" title="Refresh Schedule">Refresh Schedule</button>
                   <button id="saveScheduleChangesBtn" type="button" class="btn primary schedule-save-btn schedule-action-icon schedule-tick-icon" aria-label="Save Changes to Changeover Staff and Date" title="Save Changes to Changeover Staff and Date">Save Changes</button>
                 </div>
                 </div>
