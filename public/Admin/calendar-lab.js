@@ -8,6 +8,43 @@ const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const calendarStates = {};
 
+function getCalendarStorageKey(calendarId) {
+  return 'calendarLabState-' + String(calendarId || '');
+}
+
+function loadPersistedCalendarState(calendarId) {
+  const key = getCalendarStorageKey(calendarId);
+  try {
+    const raw = String(localStorage.getItem(key) || '').trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function persistCalendarState(state) {
+  if (!state || !state.id) return;
+  const key = getCalendarStorageKey(state.id);
+  const payload = {
+    events: (state.events || []).map((event) => ({
+      start: String(event.start || ''),
+      end: String(event.end || ''),
+      source: event.source === 'imported' ? 'imported' : 'local'
+    })),
+    importUrl: String(state.importUrl || ''),
+    viewDate: state.viewDate instanceof Date ? state.viewDate.toISOString() : null
+  };
+
+  try {
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota/access failures.
+  }
+}
+
 function setPageMessage(text, isError) {
   const el = document.getElementById('calendarLabMessage');
   if (!el) return;
@@ -287,6 +324,7 @@ function applyDeleteRange(events, deleteStart, deleteEnd) {
 function applyStateUpdate(state) {
   updateExportLink(state);
   renderCalendar(state);
+  persistCalendarState(state);
 }
 
 function replaceImportedEvents(state, importedEvents) {
@@ -425,6 +463,23 @@ function registerCalendar(rootEl) {
     exportKey: getOrCreateExportKey(id),
     importUrl: ''
   };
+
+  const persisted = loadPersistedCalendarState(id);
+  if (persisted) {
+    const restoredEvents = Array.isArray(persisted.events)
+      ? persisted.events.map(normalizeEvent).filter(Boolean)
+      : [];
+    state.events = restoredEvents;
+    state.importUrl = String(persisted.importUrl || '').trim();
+    if (state.importUrlInput) {
+      state.importUrlInput.value = state.importUrl;
+    }
+
+    const restoredViewDate = new Date(String(persisted.viewDate || ''));
+    if (!Number.isNaN(restoredViewDate.getTime())) {
+      state.viewDate = monthStartUtc(restoredViewDate);
+    }
+  }
 
   calendarStates[id] = state;
   attachCalendarHandlers(state);
