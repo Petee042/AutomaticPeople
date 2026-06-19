@@ -100,10 +100,17 @@ function buildIcs(state) {
   return lines.join('\r\n') + '\r\n';
 }
 
+function encodeUtf8Base64Url(text) {
+  const utf8 = unescape(encodeURIComponent(String(text || '')));
+  const base64 = btoa(utf8);
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 function updateExportLink(state) {
   if (!state || !state.exportUrlInput) return;
   const icsText = buildIcs(state);
-  const url = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(icsText);
+  const payload = encodeUtf8Base64Url(icsText);
+  const url = window.location.origin + '/api/admin/calendar-lab/export.ics?payload=' + encodeURIComponent(payload);
   state.exportUrlInput.value = url;
 }
 

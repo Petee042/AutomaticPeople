@@ -6714,6 +6714,32 @@ app.get('/api/admin/me', (req, res) => {
   return res.status(401).json({ error: 'Admin unauthorised' });
 });
 
+// GET /api/admin/calendar-lab/export.ics — serve ICS payload from URL for admin calendar test lab
+app.get('/api/admin/calendar-lab/export.ics', requireAdminAuth, (req, res) => {
+  const rawPayload = String(req.query.payload || '').trim();
+  if (!rawPayload) {
+    return res.status(400).send('Missing payload.');
+  }
+
+  try {
+    const normalised = rawPayload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalised + '='.repeat((4 - (normalised.length % 4)) % 4);
+    const utf8Text = Buffer.from(padded, 'base64').toString('utf8');
+
+    if (!utf8Text || !utf8Text.includes('BEGIN:VCALENDAR')) {
+      return res.status(400).send('Invalid payload.');
+    }
+
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="calendar-lab.ics"');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    return res.send(utf8Text);
+  } catch (err) {
+    console.error(err);
+    return res.status(400).send('Invalid payload.');
+  }
+});
+
 // GET /api/admin/users
 app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
   try {
