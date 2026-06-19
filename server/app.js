@@ -15,6 +15,7 @@ const { Pool } = require('pg');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const calendarLabExportStore = new Map();
 const SALT_ROUNDS = 12;
 const SESSION_SECRET = String(process.env.SESSION_SECRET || '').trim();
 const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '').trim();
@@ -6712,6 +6713,44 @@ app.get('/api/admin/me', (req, res) => {
     return res.json({ username: req.session.adminUsername || ADMIN_USERNAME });
   }
   return res.status(401).json({ error: 'Admin unauthorised' });
+});
+
+// POST /api/admin/calendar-lab/publish — publish latest ICS snapshot for stable export URL
+app.post('/api/admin/calendar-lab/publish', requireAdminAuth, (req, res) => {
+  const key = String(req.body && req.body.key || '').trim();
+  const icsText = String(req.body && req.body.icsText || '');
+
+  if (!/^[a-zA-Z0-9_-]{16,120}$/.test(key)) {
+    return res.status(400).json({ error: 'Invalid export key.' });
+  }
+  if (!icsText || !icsText.includes('BEGIN:VCALENDAR')) {
+    return res.status(400).json({ error: 'Invalid ICS payload.' });
+  }
+
+  calendarLabExportStore.set(key, {
+    icsText,
+    updatedAt: Date.now()
+  });
+
+  return res.json({ message: 'Published.', key });
+});
+
+// GET /api/calendar-lab/export.ics — public stable ICS export for calendar lab
+app.get('/api/calendar-lab/export.ics', (req, res) => {
+  const key = String(req.query.key || '').trim();
+  if (!/^[a-zA-Z0-9_-]{16,120}$/.test(key)) {
+    return res.status(400).send('Invalid key.');
+  }
+
+  const entry = calendarLabExportStore.get(key);
+  if (!entry || !entry.icsText) {
+    return res.status(404).send('Export not found.');
+  }
+
+  res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="calendar-lab.ics"');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.send(entry.icsText);
 });
 
 // GET /api/admin/calendar-lab/export.ics — serve ICS payload from URL for admin calendar test lab

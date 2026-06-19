@@ -100,18 +100,60 @@ function buildIcs(state) {
   return lines.join('\r\n') + '\r\n';
 }
 
-function encodeUtf8Base64Url(text) {
-  const utf8 = unescape(encodeURIComponent(String(text || '')));
-  const base64 = btoa(utf8);
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+function makeRandomHex(length) {
+  const size = Math.max(8, Number(length) || 32);
+  const bytes = new Uint8Array(Math.ceil(size / 2));
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, size);
+}
+
+function getOrCreateExportKey(calendarId) {
+  const storageKey = 'calendarLabExportKey-' + String(calendarId || '');
+  let key = '';
+  try {
+    key = String(localStorage.getItem(storageKey) || '').trim();
+  } catch {
+    key = '';
+  }
+
+  if (!/^[a-zA-Z0-9_-]{16,120}$/.test(key)) {
+    key = String(calendarId || '').toLowerCase() + '-' + makeRandomHex(32);
+    try {
+      localStorage.setItem(storageKey, key);
+    } catch {
+      // Ignore storage failures; key will be ephemeral for this session.
+    }
+  }
+
+  return key;
+}
+
+async function publishCalendarExport(state, icsText) {
+  const key = String(state && state.exportKey || '').trim();
+  if (!key) {
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/admin/calendar-lab/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, icsText })
+    });
+    if (!res.ok) {
+      setCalendarStatus(state, 'Unable to publish latest ICS snapshot.', true);
+    }
+  } catch {
+    setCalendarStatus(state, 'Unable to publish latest ICS snapshot.', true);
+  }
 }
 
 function updateExportLink(state) {
   if (!state || !state.exportUrlInput) return;
   const icsText = buildIcs(state);
-  const payload = encodeUtf8Base64Url(icsText);
-  const url = window.location.origin + '/api/admin/calendar-lab/export.ics?payload=' + encodeURIComponent(payload);
+  const url = window.location.origin + '/api/calendar-lab/export.ics?key=' + encodeURIComponent(state.exportKey);
   state.exportUrlInput.value = url;
+  publishCalendarExport(state, icsText);
 }
 
 function parseIcsEvents(icsText) {
@@ -380,6 +422,7 @@ function registerCalendar(rootEl) {
     createEndEl: rootEl.querySelector('#createEnd' + id),
     deleteStartEl: rootEl.querySelector('#deleteStart' + id),
     deleteEndEl: rootEl.querySelector('#deleteEnd' + id),
+    exportKey: getOrCreateExportKey(id),
     importUrl: ''
   };
 
