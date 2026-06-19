@@ -62,9 +62,14 @@
       <section id="listingFeedsSection" class="calendar-section">
         <div class="config-block-header">
           <h3>Calendar Feeds</h3>
-          <button type="submit" id="saveFeedBtn" form="feedForm" class="btn circular-icon-btn" title="Add Feed" aria-label="Add Feed">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </button>
+          <div class="feed-header-actions">
+            <button type="submit" id="saveFeedBtn" form="feedForm" class="btn circular-icon-btn" title="Save Feed" aria-label="Save Feed">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+            </button>
+            <button type="button" id="cancelFeedEditBtn" class="btn circular-icon-btn hidden" title="Delete Feed" aria-label="Delete Feed">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+            </button>
+          </div>
         </div>
         <div class="table-wrap">
           <table class="calendar-table" aria-label="Calendar feeds">
@@ -92,11 +97,6 @@
           <div class="calendar-source-row">
             <label for="feedUrl">Feed URL</label>
             <input id="feedUrl" type="url" placeholder="https://...ics" required />
-          </div>
-          <div class="feed-actions">
-            <button type="button" id="cancelFeedEditBtn" class="btn circular-icon-btn hidden" title="Delete Feed" aria-label="Delete Feed">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-            </button>
           </div>
         </form>
 

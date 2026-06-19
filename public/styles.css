@@ -738,6 +738,13 @@ textarea:focus {
   margin-bottom: 0;
 }
 
+.feed-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
 .config-icon-btn {
   width: 2rem;
   height: 2rem;

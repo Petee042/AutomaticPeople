@@ -34,7 +34,6 @@ const sourceColorMap = {};
 const sourcePalette = ['#ff5a5f', '#003580', '#2a9d8f', '#e76f51', '#264653', '#f4a261', '#8a5cf6'];
 const cleanerBadgePalette = ['#0f766e', '#1d4ed8', '#b45309', '#be123c', '#4338ca', '#166534', '#92400e', '#0369a1'];
 const weekdayValueSet = new Set(['0', '1', '2', '3', '4', '5', '6']);
-const FEED_ADD_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const FEED_SAVE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
 
 function getListingFormState() {
@@ -1016,6 +1015,15 @@ function applyListingAccess(role) {
     });
   }
 
+  const saveFeedBtn = document.getElementById('saveFeedBtn');
+  if (saveFeedBtn) {
+    saveFeedBtn.disabled = !canEditListing;
+  }
+  const deleteFeedBtn = document.getElementById('cancelFeedEditBtn');
+  if (deleteFeedBtn) {
+    deleteFeedBtn.disabled = !canEditListing;
+  }
+
   if (updateCalendarsBtn) {
     updateCalendarsBtn.disabled = !canEditListing;
   }
@@ -1084,13 +1092,14 @@ function clearFeedEditMode() {
   document.getElementById('feedLabel').value = '';
   document.getElementById('feedUrl').value = '';
   const saveBtn = document.getElementById('saveFeedBtn');
-  saveBtn.title = 'Add Feed';
-  saveBtn.setAttribute('aria-label', 'Add Feed');
-  saveBtn.innerHTML = FEED_ADD_ICON;
+  saveBtn.title = 'Save Feed';
+  saveBtn.setAttribute('aria-label', 'Save Feed');
+  saveBtn.innerHTML = FEED_SAVE_ICON;
   document.getElementById('cancelFeedEditBtn').classList.add('hidden');
 }
 
 bindNoChangeDayCheckboxValidation();
+clearFeedEditMode();
 
 function hasValidListingId() {
   return Number.isInteger(listingId) && listingId > 0;
