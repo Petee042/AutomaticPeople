@@ -6120,6 +6120,18 @@ async function fetchEventsFromCalendarUrl(calendarUrl) {
         if (!upstream.ok) {
           lastStatus = upstream.status;
           const bodyText = await upstream.text().catch(() => '');
+          const preview = previewBodyText(bodyText);
+
+          const isCalendarLabExportUrl = (() => {
+            const lower = String(candidateUrl || '').toLowerCase();
+            return lower.includes('/api/calendar-lab/export.ics');
+          })();
+
+          // Calendar Lab exports are ephemeral in-memory snapshots.
+          // If a key has no published snapshot (e.g. after restart), treat as empty feed.
+          if (isCalendarLabExportUrl && upstream.status === 404 && String(preview).toLowerCase().includes('export not found')) {
+            return { events: [] };
+          }
 
           if (isBookingInvalidTokenError(candidateUrl, upstream.status, bodyText)) {
             return {
@@ -6127,7 +6139,7 @@ async function fetchEventsFromCalendarUrl(calendarUrl) {
             };
           }
 
-          lastPreview = previewBodyText(bodyText);
+          lastPreview = preview;
           continue;
         }
 
