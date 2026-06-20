@@ -804,11 +804,17 @@ function renderReservationCalendar(events) {
       const date = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), dayNum));
       const key = keyFromUtcDate(date);
       const dayEntry = dayIndex[key];
+      const dayHasUnavailableOnly = Boolean(dayEntry)
+        && hasDisplayUnavailable(dayEntry.events)
+        && !hasReservationEligible(dayEntry.events);
 
       const cell = document.createElement('div');
       cell.className = 'calendar-day';
       if (dayEntry && dayEntry.conflict) {
         cell.classList.add('calendar-day-conflict');
+      }
+      if (dayHasUnavailableOnly) {
+        cell.classList.add('calendar-day-policy-blocked');
       }
       if (advanceCutoff && date >= advanceCutoff) {
         cell.classList.add('calendar-day-advance-blocked');
@@ -864,46 +870,70 @@ function renderReservationCalendar(events) {
 
         if (hasCheckout && hasCheckin) {
           const transitionEvents = (dayEntry.checkoutEventsBySource[source] || []).concat(dayEntry.checkinEventsBySource[source] || []);
+          const unavailableOnly = hasDisplayUnavailable(transitionEvents) && !hasReservationEligible(transitionEvents);
           bar.classList.add('day-transition-bar');
           // Same-channel checkout + checkin on one day: show a thin center split/gap.
-          bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 47%, ' + transparentStop + ' 47% 53%, ' + color + ' 53% 100%)';
-          if (shouldDimBar(transitionEvents, source)) {
+          if (unavailableOnly) {
+            bar.classList.add('day-bar-policy-block');
+            bar.style.background = 'linear-gradient(90deg, #6b7280 0 47%, rgba(107,114,128,0) 47% 53%, #6b7280 53% 100%)';
+          } else {
+            bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 47%, ' + transparentStop + ' 47% 53%, ' + color + ' 53% 100%)';
+          }
+          if (!unavailableOnly && shouldDimBar(transitionEvents, source)) {
             bar.style.opacity = '0.5';
           }
           bar.title = buildBarTooltip(transitionEvents);
-          if (hasDisplayUnavailable(transitionEvents) && !hasReservationEligible(transitionEvents)) {
+          if (unavailableOnly) {
             applyUnavailableHatch(bar);
           }
         } else if (hasCheckout) {
           const checkoutEvents = dayEntry.checkoutEventsBySource[source] || [];
+          const unavailableOnly = hasDisplayUnavailable(checkoutEvents) && !hasReservationEligible(checkoutEvents);
           bar.classList.add('day-transition-bar');
-          bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 50%, ' + transparentStop + ' 50% 100%)';
-          if (shouldDimBar(checkoutEvents, source)) {
+          if (unavailableOnly) {
+            bar.classList.add('day-bar-policy-block');
+            bar.style.background = 'linear-gradient(90deg, #6b7280 0 50%, rgba(107,114,128,0) 50% 100%)';
+          } else {
+            bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 50%, ' + transparentStop + ' 50% 100%)';
+          }
+          if (!unavailableOnly && shouldDimBar(checkoutEvents, source)) {
             bar.style.opacity = '0.5';
           }
           bar.title = buildBarTooltip(checkoutEvents);
-          if (hasDisplayUnavailable(checkoutEvents) && !hasReservationEligible(checkoutEvents)) {
+          if (unavailableOnly) {
             applyUnavailableHatch(bar);
           }
         } else if (hasCheckin) {
           const checkinEvents = dayEntry.checkinEventsBySource[source] || [];
+          const unavailableOnly = hasDisplayUnavailable(checkinEvents) && !hasReservationEligible(checkinEvents);
           bar.classList.add('day-transition-bar');
-          bar.style.background = 'linear-gradient(90deg, ' + transparentStop + ' 0 50%, ' + color + ' 50% 100%)';
-          if (shouldDimBar(checkinEvents, source)) {
+          if (unavailableOnly) {
+            bar.classList.add('day-bar-policy-block');
+            bar.style.background = 'linear-gradient(90deg, rgba(107,114,128,0) 0 50%, #6b7280 50% 100%)';
+          } else {
+            bar.style.background = 'linear-gradient(90deg, ' + transparentStop + ' 0 50%, ' + color + ' 50% 100%)';
+          }
+          if (!unavailableOnly && shouldDimBar(checkinEvents, source)) {
             bar.style.opacity = '0.5';
           }
           bar.title = buildBarTooltip(checkinEvents);
-          if (hasDisplayUnavailable(checkinEvents) && !hasReservationEligible(checkinEvents)) {
+          if (unavailableOnly) {
             applyUnavailableHatch(bar);
           }
         } else if (hasStay) {
           const stayEvents = dayEntry.stayEventsBySource[source] || [];
-          bar.style.backgroundColor = color;
-          if (shouldDimBar(stayEvents, source)) {
+          const unavailableOnly = hasDisplayUnavailable(stayEvents) && !hasReservationEligible(stayEvents);
+          if (unavailableOnly) {
+            bar.classList.add('day-bar-policy-block');
+            bar.style.backgroundColor = '#6b7280';
+          } else {
+            bar.style.backgroundColor = color;
+          }
+          if (!unavailableOnly && shouldDimBar(stayEvents, source)) {
             bar.style.opacity = '0.5';
           }
           bar.title = buildBarTooltip(stayEvents);
-          if (hasDisplayUnavailable(stayEvents) && !hasReservationEligible(stayEvents)) {
+          if (unavailableOnly) {
             applyUnavailableHatch(bar);
           }
         } else {

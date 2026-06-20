@@ -1607,6 +1607,11 @@ textarea:focus {
   border: 1px solid rgba(255, 255, 255, 0.45);
 }
 
+.day-bar-policy-block {
+  border: 1px solid rgba(31, 41, 55, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
 .day-bar-hatch {
   position: absolute;
   inset: 0;
@@ -1624,6 +1629,11 @@ textarea:focus {
 .calendar-day-conflict {
   background: #ffe9e9;
   border-color: #ef8f8f;
+}
+
+.calendar-day-policy-blocked {
+  background: #eef2f7;
+  border-color: #9ca3af;
 }
 
 .calendar-day-advance-blocked {
