@@ -2078,7 +2078,11 @@ function opsCalendarSetDebugMessage(text, isError) {
 }
 
 function opsCalendarCanRunDebugActions() {
-  return Boolean(currentAccessContext && currentAccessContext.activeRole === 'Manager');
+  if (!currentAccessContext) {
+    return false;
+  }
+  const role = String(currentAccessContext.activeRole || '').trim().toLowerCase();
+  return role === 'manager' || role === 'client';
 }
 
 function applyOpsCalendarDebugAccess() {
@@ -2092,7 +2096,7 @@ function applyOpsCalendarDebugAccess() {
     });
 
   if (!canDebug) {
-    opsCalendarSetDebugMessage('Debug controls are available to Managers only.', true);
+    opsCalendarSetDebugMessage('Debug controls are available to Manager/Client roles only.', true);
   } else {
     opsCalendarSetDebugMessage('', false);
   }
