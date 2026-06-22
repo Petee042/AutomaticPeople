@@ -623,6 +623,28 @@ async function initializeUserStore() {
     ON listing_event_log (listing_id, created_at DESC)
   `);
 
+  // ── ICS transaction log: records every ICS fetch attempt for admin diagnostics
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ics_transaction_log (
+      id BIGSERIAL PRIMARY KEY,
+      logged_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      listing_id BIGINT,
+      channel_id BIGINT,
+      importing_channel_label TEXT NOT NULL DEFAULT '',
+      exporting_channel_label TEXT NOT NULL DEFAULT '',
+      import_url TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'success',
+      event_count INTEGER NOT NULL DEFAULT 0,
+      raw_payload TEXT NOT NULL DEFAULT '',
+      error_text TEXT
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ics_transaction_log_logged_at
+    ON ics_transaction_log (logged_at DESC)
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS booked_in_changes (
       id BIGSERIAL PRIMARY KEY,
@@ -6316,6 +6338,49 @@ async function writeEventLog(entry) {
   }
 }
 
+
+async function logIcsTransaction(opts) {
+  const { listingId, channelId, importingChannelLabel, exportingChannelLabel, importUrl, status, eventCount, rawPayload, errorText } = opts || {};
+  try {
+    await pool.query(
+      `INSERT INTO ics_transaction_log
+         (listing_id, channel_id, importing_channel_label, exporting_channel_label,
+          import_url, status, event_count, raw_payload, error_text)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        listingId || null,
+        channelId || null,
+        String(importingChannelLabel || ''),
+        String(exportingChannelLabel || ''),
+        String(importUrl || ''),
+        String(status || 'success'),
+        Number(eventCount || 0),
+        String(rawPayload || '').slice(0, 65536),
+        errorText || null
+      ]
+    );
+  } catch (logErr) {
+    console.error('[IcsTransactionLog] Failed to log transaction:', logErr && logErr.message);
+  }
+}
+
+async function findExportingChannelLabel(importUrl) {
+  if (!importUrl) return '';
+  try {
+    const result = await pool.query(
+      `SELECT label FROM listing_channels
+       WHERE NULLIF(TRIM(export_url), '') IS NOT NULL AND export_url = $1
+       LIMIT 1`,
+      [importUrl]
+    );
+    if (result.rows[0]) return String(result.rows[0].label || '');
+    const parsed = new URL(importUrl);
+    return parsed.hostname;
+  } catch (_e) {
+    return String(importUrl).slice(0, 120);
+  }
+}
+
 // Import rules pipeline — structured for future channel-specific rules.
 // Each rule: { id: string, apply(rawEvent, channel, listing) => event | null }
 const CALENDAR_IMPORT_RULES = [];
@@ -6369,8 +6434,13 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
   const fetched = await fetchEventsFromCalendarUrl(importUrl);
   if (fetched.error) {
     console.error(`[CalendarSync] Listing ${listingId} channel "${channel.label}": ${fetched.error}`);
+    const exportingLabelErr = await findExportingChannelLabel(importUrl);
+    await logIcsTransaction({ listingId, channelId, importingChannelLabel: channel.label, exportingChannelLabel: exportingLabelErr, importUrl, status: 'error', eventCount: 0, rawPayload: '', errorText: fetched.error });
     return;
   }
+
+  const exportingLabel = await findExportingChannelLabel(importUrl);
+  await logIcsTransaction({ listingId, channelId, importingChannelLabel: channel.label, exportingChannelLabel: exportingLabel, importUrl, status: 'success', eventCount: fetched.events.length, rawPayload: fetched.rawText || '', errorText: null });
 
   const now = new Date().toISOString();
 
@@ -6655,7 +6725,7 @@ async function fetchEventsFromCalendarUrl(calendarUrl) {
           .filter((event) => event.start || event.end || event.title || event.description || event.location)
           .slice(0, 500);
 
-        return { events };
+        return { events, rawText: icsText };
       }
     }
 
@@ -11390,6 +11460,34 @@ app.post('/api/admin/stay/request', requireAdminAuth, async (req, res) => {
     return res.status(502).json({ error: 'Failed to execute Stay API request.' });
   } finally {
     clearTimeout(timeout);
+  }
+});
+
+// GET /api/admin/ics-log — ICS transaction log for admin diagnostics
+app.get('/api/admin/ics-log', requireAdminAuth, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 200, 1000);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const result = await pool.query(
+      `SELECT id, logged_at, listing_id, channel_id,
+              importing_channel_label, exporting_channel_label,
+              import_url, status, event_count,
+              raw_payload, error_text
+       FROM ics_transaction_log
+       ORDER BY logged_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    const countResult = await pool.query('SELECT COUNT(*)::int AS total FROM ics_transaction_log');
+    return res.json({
+      entries: result.rows,
+      total: Number(countResult.rows[0].total || 0),
+      limit,
+      offset
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load ICS transaction log.' });
   }
 });
 
