@@ -11005,6 +11005,94 @@ app.get('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   }
 });
 
+// GET /api/event-log/:entryId/details — detailed data for one dashboard event-log entry
+app.get('/api/event-log/:entryId/details', requireScopedRole('Manager'), async (req, res) => {
+  const entryId = Number(req.params.entryId);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).json({ error: 'Invalid event log entry id.' });
+  }
+
+  try {
+    const entryResult = await pool.query(
+      `SELECT lel.id, lel.listing_id, l.name AS listing_name,
+              lel.entry_type, lel.channel_label, lel.description,
+              lel.old_start_date::text AS old_start_date, lel.old_end_date::text AS old_end_date,
+              lel.new_start_date::text AS new_start_date, lel.new_end_date::text AS new_end_date,
+              lel.affected_event_id, lel.conflicting_event_id, lel.created_at
+       FROM listing_event_log lel
+       JOIN listings l ON l.id = lel.listing_id
+       WHERE lel.id = $1
+         AND lel.client_account_id = $2
+       LIMIT 1`,
+      [entryId, req.accessContext.activeClientAccountId]
+    );
+
+    const entry = entryResult.rows[0] || null;
+    if (!entry) {
+      return res.status(404).json({ error: 'Event log entry not found.' });
+    }
+
+    let conflictEvents = [];
+    if (String(entry.entry_type || '').trim() === 'conflict') {
+      const overlapStart = String(entry.new_start_date || entry.old_start_date || '').slice(0, 10) || null;
+      const overlapEnd = String(entry.new_end_date || entry.old_end_date || '').slice(0, 10) || null;
+      const seedEventIds = [entry.affected_event_id, entry.conflicting_event_id]
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0);
+
+      const conflictResult = await pool.query(
+        `SELECT lce.id,
+                lce.start_date::text AS start_date,
+                lce.end_date::text AS end_date,
+                lce.event_type,
+                lce.is_in_conflict,
+                COALESCE(NULLIF(TRIM(lce.ics_summary), ''), CASE WHEN lce.event_type = 'local' THEN 'Local Reservation' ELSE 'Reservation' END) AS summary,
+                COALESCE(NULLIF(TRIM(lc.label), ''), CASE WHEN lce.event_type = 'local' THEN 'Local Reservation' ELSE 'Unknown Channel' END) AS channel_label
+         FROM listing_calendar_events lce
+         LEFT JOIN listing_channels lc ON lc.id = lce.channel_id
+         WHERE lce.listing_id = $1
+           AND lce.event_type IN ('local', 'remote')
+           AND (
+             lce.id = ANY($2::bigint[])
+             OR (
+               $3::date IS NOT NULL AND $4::date IS NOT NULL
+               AND lce.start_date < $4::date
+               AND lce.end_date > $3::date
+             )
+           )
+         ORDER BY lce.start_date ASC, lce.end_date ASC, lce.id ASC`,
+        [entry.listing_id, seedEventIds, overlapStart, overlapEnd]
+      );
+
+      const seenEventIds = new Set();
+      conflictEvents = conflictResult.rows
+        .filter((row) => {
+          const id = Number(row.id);
+          if (!Number.isInteger(id) || id <= 0 || seenEventIds.has(id)) {
+            return false;
+          }
+          seenEventIds.add(id);
+          return true;
+        })
+        .map((row) => ({
+          id: Number(row.id),
+          listing_name: entry.listing_name || '',
+          start_date: String(row.start_date || '').slice(0, 10),
+          end_date: String(row.end_date || '').slice(0, 10),
+          event_type: String(row.event_type || '').trim(),
+          channel_label: String(row.channel_label || '').trim(),
+          summary: String(row.summary || '').trim(),
+          is_in_conflict: row.is_in_conflict === true
+        }));
+    }
+
+    return res.json({ entry, conflictEvents });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load event log details.' });
+  }
+});
+
 // DELETE /api/event-log — clear dashboard event log entries for active client account
 app.delete('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   try {

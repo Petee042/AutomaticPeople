@@ -4752,19 +4752,70 @@ function formatEventLogDateRange(entry) {
   };
 }
 
-function buildEventLogDetailsText(entry) {
+function formatEventLogDescription(entry) {
+  let text = String(entry && entry.description || '—');
+  const listingName = String(entry && entry.listing_name || '').trim();
+  if (listingName && String(entry && entry.entry_type || '').trim() === 'conflict') {
+    text = text.replace(/listing\s+\d+/ig, 'listing "' + listingName + '"');
+  }
+  return text;
+}
+
+function buildEventLogDetailsText(entry, conflictEvents) {
   const dateRange = formatEventLogDateRange(entry);
-  return [
+  const lines = [
     'Type: ' + formatEventLogType(entry && entry.entry_type),
-    'Listing: ' + String(entry && (entry.listing_name || ('Listing #' + entry.listing_id)) || '—'),
+    'Listing: ' + String(entry && entry.listing_name || '—'),
     'Channel: ' + String(entry && (entry.channel_label || entry.channel_id) || '—'),
     'Start Date: ' + dateRange.startDate,
     'End Date: ' + dateRange.endDate,
-    'Description: ' + String(entry && entry.description || '—')
-  ].join('\n');
+    'Description: ' + formatEventLogDescription(entry)
+  ];
+
+  if (String(entry && entry.entry_type || '').trim() === 'conflict') {
+    lines.push('');
+    lines.push('All Events In This Conflict: ' + String(Array.isArray(conflictEvents) ? conflictEvents.length : 0));
+    if (Array.isArray(conflictEvents) && conflictEvents.length) {
+      conflictEvents.forEach((event, index) => {
+        lines.push(
+          String(index + 1) + '. '
+          + 'Summary: ' + String(event && event.summary || 'Reservation')
+          + ' | Channel: ' + String(event && event.channel_label || 'Unknown')
+          + ' | Listing: ' + String(event && event.listing_name || (entry && entry.listing_name) || '—')
+          + ' | Start: ' + String(event && event.start_date || '—')
+          + ' | End: ' + String(event && event.end_date || '—')
+        );
+      });
+    } else {
+      lines.push('No related conflict events found.');
+    }
+  }
+
+  return lines.join('\n');
 }
 
-function openEventLogDetailsTab(entry) {
+async function fetchEventLogDetails(entryId) {
+  const id = Number(entryId || 0);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { entry: null, conflictEvents: [] };
+  }
+
+  const res = await fetch('/api/event-log/' + id + '/details');
+  if (res.status === 401) {
+    window.location.href = '/';
+    throw new Error('Your session expired. Please log in again.');
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(payload.error || 'Failed to load event details.');
+  }
+  return {
+    entry: payload && payload.entry ? payload.entry : null,
+    conflictEvents: Array.isArray(payload && payload.conflictEvents) ? payload.conflictEvents : []
+  };
+}
+
+async function openEventLogDetailsTab(entry) {
   const tab = window.open('about:blank', '_blank');
   if (!tab) {
     setEventLogMessage('Popup blocked by browser. Allow popups to view event details.', true);
@@ -4772,7 +4823,39 @@ function openEventLogDetailsTab(entry) {
   }
 
   const escapedTitle = escapeHtml('Calendar Event Log Details');
-  const escapedText = escapeHtml(buildEventLogDetailsText(entry));
+  tab.document.open();
+  tab.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapedTitle}</title>
+  <style>
+    body { margin: 0; padding: 1rem; font-family: Consolas, 'Courier New', monospace; background: #0f172a; color: #e2e8f0; }
+    h1 { margin: 0 0 0.8rem; font-size: 1rem; font-family: Segoe UI, Arial, sans-serif; color: #bfdbfe; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 1rem; max-height: calc(100vh - 4rem); overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>${escapedTitle}</h1>
+  <pre>Loading...</pre>
+</body>
+</html>`);
+  tab.document.close();
+
+  let detailsEntry = entry;
+  let conflictEvents = [];
+  try {
+    const details = await fetchEventLogDetails(entry && entry.id);
+    if (details.entry) {
+      detailsEntry = details.entry;
+    }
+    conflictEvents = details.conflictEvents;
+  } catch (err) {
+    setEventLogMessage(err.message || 'Failed to load event details.', true);
+  }
+
+  const escapedText = escapeHtml(buildEventLogDetailsText(detailsEntry, conflictEvents));
   tab.document.open();
   tab.document.write(`<!DOCTYPE html>
 <html lang="en">
