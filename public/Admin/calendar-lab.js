@@ -108,7 +108,11 @@ function normalizeEvent(event) {
   if (!event) return null;
   const start = String(event.start || '').trim();
   const end = String(event.end || '').trim();
-  const source = event.source === 'imported' ? 'imported' : 'local';
+  const rawSource = String(event.source || '').trim().toLowerCase();
+  const rawOrigin = String(event.eventOrigin || '').trim().toLowerCase();
+  const source = rawSource === 'imported'
+    ? 'imported'
+    : (rawSource === 'local' ? 'local' : (rawOrigin === 'remote' ? 'imported' : 'local'));
   const eventType = String(event.eventType || '').trim().toLowerCase() === 'block' ? 'Block' : 'Reservation';
   const eventSource = String(event.eventSource || '').trim();
   const eventOrigin = String(event.eventOrigin || '').trim() || (source === 'local' ? 'Local' : 'Remote');
@@ -206,7 +210,13 @@ function buildIcs(state) {
     'X-WR-CALNAME:Calendar ' + state.id
   ];
 
-  const exportEvents = (state.events || []).filter((event) => event && event.source !== 'imported');
+  const exportEvents = (state.events || []).filter((event) => {
+    if (!event) return false;
+    const source = String(event.source || '').trim().toLowerCase();
+    const origin = String(event.eventOrigin || '').trim().toLowerCase();
+    // Only export events created locally in the lab; never re-export remote/imported events.
+    return source === 'local' && origin !== 'remote';
+  });
 
   exportEvents.forEach((event, idx) => {
     const start = event.start.replace(/-/g, '');
@@ -469,7 +479,11 @@ function applyStateUpdate(state) {
 }
 
 function replaceImportedEvents(state, importedEvents) {
-  const localOnly = state.events.filter((event) => event.source !== 'imported');
+  const localOnly = state.events.filter((event) => {
+    const source = String(event && event.source || '').trim().toLowerCase();
+    const origin = String(event && event.eventOrigin || '').trim().toLowerCase();
+    return source === 'local' && origin !== 'remote';
+  });
   state.events = [...localOnly, ...importedEvents]
     .map(normalizeEvent)
     .filter(Boolean)
