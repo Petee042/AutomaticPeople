@@ -4453,6 +4453,7 @@ async function writeDetectedReservationConflictsToEventLog(listing, events) {
   }
 
   const conflictPairs = buildReservationConflictPairs(events);
+  const emailConflictLines = [];
   for (const pair of conflictPairs) {
     const overlapStart = pair.overlapStart;
     const overlapEnd = pair.overlapEnd;
@@ -4486,6 +4487,22 @@ async function writeDetectedReservationConflictsToEventLog(listing, events) {
       newEndDate: overlapEnd,
       affectedEventId: getConflictEventIdentifier(pair.left),
       conflictingEventId: getConflictEventIdentifier(pair.right)
+    });
+
+    const leftChannel = String(pair.left && pair.left.source || 'Unknown').trim();
+    const rightChannel = String(pair.right && pair.right.source || 'Unknown').trim();
+    emailConflictLines.push(
+      `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${leftChannel} vs ${rightChannel}, Summary: ${leftTitle} vs ${rightTitle}`
+    );
+  }
+
+  if (emailConflictLines.length) {
+    await notifyManagersOfCalendarConflict({
+      clientAccountId,
+      listingId,
+      subject: `Calendar Conflict - Listing ${listingId}`,
+      introText: `A reservation conflict was detected on listing ${listingId}.`,
+      extraConflictLines: emailConflictLines
     });
   }
 }
@@ -6521,6 +6538,100 @@ async function writeEventLog(entry) {
   }
 }
 
+async function getManagerEmailsForClientAccount(clientAccountId) {
+  const accountId = Number(clientAccountId);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `SELECT DISTINCT LOWER(TRIM(u.email)) AS email
+     FROM client_memberships cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.client_account_id = $1
+       AND cm.role = 'Manager'
+       AND cm.status IN ('active', 'invited')
+       AND NULLIF(TRIM(u.email), '') IS NOT NULL`,
+    [accountId]
+  );
+
+  return result.rows
+    .map((row) => normaliseOptionalEmail(row.email))
+    .filter(Boolean);
+}
+
+async function getConflictEventDetailLinesForListing(listingId) {
+  const id = Number(listingId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `SELECT lce.start_date::text AS start_date,
+            lce.end_date::text AS end_date,
+            COALESCE(NULLIF(TRIM(lc.label), ''), CASE WHEN lce.event_type = 'local' THEN 'Local Reservation' ELSE 'Unknown' END) AS channel_label,
+            COALESCE(NULLIF(TRIM(lce.ics_summary), ''), 'Reservation') AS summary
+     FROM listing_calendar_events lce
+     LEFT JOIN listing_channels lc ON lc.id = lce.channel_id
+     WHERE lce.listing_id = $1
+       AND lce.is_in_conflict = TRUE
+       AND lce.event_type IN ('local', 'remote')
+     ORDER BY lce.start_date ASC, lce.end_date ASC, lce.id ASC
+     LIMIT 200`,
+    [id]
+  );
+
+  return result.rows.map((row, idx) => {
+    const startDate = String(row.start_date || '').slice(0, 10) || 'Unknown';
+    const endDate = String(row.end_date || '').slice(0, 10) || 'Unknown';
+    const channel = String(row.channel_label || 'Unknown').trim();
+    const summary = String(row.summary || 'Reservation').trim();
+    return `${idx + 1}. Start: ${startDate}, End: ${endDate}, Listing: ${id}, Channel: ${channel}, Summary: ${summary}`;
+  });
+}
+
+async function notifyManagersOfCalendarConflict(opts) {
+  const clientAccountId = Number(opts && opts.clientAccountId || 0);
+  const listingId = Number(opts && opts.listingId || 0);
+  if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || !Number.isInteger(listingId) || listingId <= 0) {
+    return;
+  }
+
+  const recipients = await getManagerEmailsForClientAccount(clientAccountId);
+  if (!recipients.length) {
+    return;
+  }
+
+  const listingNameResult = await pool.query('SELECT name FROM listings WHERE id = $1 LIMIT 1', [listingId]);
+  const listingName = String(listingNameResult.rows[0] && listingNameResult.rows[0].name || ('Listing ' + listingId)).trim();
+  const subject = String(opts && opts.subject || `Calendar Conflict - ${listingName}`).trim() || `Calendar Conflict - ${listingName}`;
+  const intro = String(opts && opts.introText || `A calendar conflict was detected for ${listingName}.`).trim();
+  const extraLines = Array.isArray(opts && opts.extraConflictLines) ? opts.extraConflictLines.filter(Boolean) : [];
+  const tableConflictLines = await getConflictEventDetailLinesForListing(listingId);
+
+  const sections = [intro, ''];
+  if (tableConflictLines.length) {
+    sections.push('Conflicting calendar events:');
+    sections.push(...tableConflictLines);
+    sections.push('');
+  }
+  if (extraLines.length) {
+    sections.push('Detected conflict overlaps:');
+    sections.push(...extraLines);
+    sections.push('');
+  }
+  sections.push('Please log in to review and resolve conflicts.');
+  const textBody = sections.join('\n');
+
+  await Promise.all(recipients.map(async (email) => {
+    try {
+      await sendAppEmail({ to: email, subject, textBody });
+    } catch (err) {
+      console.error('[CalendarSync] Conflict email failed:', err && err.message);
+    }
+  }));
+}
+
 
 async function logIcsTransaction(opts) {
   const { listingId, channelId, importingChannelLabel, exportingChannelLabel, importUrl, status, eventCount, rawPayload, errorText } = opts || {};
@@ -6769,22 +6880,12 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         });
       }
 
-      // Email conflict alert to the listing manager
-      const mgr = await pool.query(
-        `SELECT p.manager_email FROM listings l
-         JOIN properties p ON p.id = l.property_id
-         WHERE l.id = $1 AND NULLIF(TRIM(p.manager_email), '') IS NOT NULL LIMIT 1`,
-        [listingId]
-      );
-      if (mgr.rows[0] && mgr.rows[0].manager_email) {
-        sendAppEmail({
-          to: mgr.rows[0].manager_email,
-          subject: `Calendar Conflict – Listing ${listingId}`,
-          textBody: conflictDesc + '\n\nPlease log in to review and resolve this conflict.'
-        }).catch((e) => {
-          console.error('[CalendarSync] Conflict email failed:', e && e.message);
-        });
-      }
+      await notifyManagersOfCalendarConflict({
+        clientAccountId,
+        listingId,
+        subject: `Calendar Conflict - Listing ${listingId}`,
+        introText: conflictDesc
+      });
     }
   }
 }
@@ -10900,6 +11001,20 @@ app.get('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load event log.' });
+  }
+});
+
+// DELETE /api/event-log — clear dashboard event log entries for active client account
+app.delete('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM listing_event_log WHERE client_account_id = $1',
+      [req.accessContext.activeClientAccountId]
+    );
+    return res.json({ ok: true, deletedCount: Number(result.rowCount || 0) });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to clear event log.' });
   }
 });
 

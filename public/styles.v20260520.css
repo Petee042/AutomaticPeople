@@ -774,6 +774,21 @@ textarea:focus {
   outline: none;
 }
 
+.event-log-clear-btn {
+  border-radius: 999px;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: lowercase;
+}
+
 .source-airbnb {
   color: #ff5a5f;
   font-weight: 600;

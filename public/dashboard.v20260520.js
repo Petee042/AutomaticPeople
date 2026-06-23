@@ -4868,12 +4868,40 @@ async function loadEventLog() {
   }
 }
 
-const _eventLogRefreshBtn = document.getElementById('eventLogRefreshBtn');
-if (_eventLogRefreshBtn) _eventLogRefreshBtn.addEventListener('click', async () => {
-  _eventLogRefreshBtn.disabled = true;
+const _eventLogClearBtn = document.getElementById('eventLogClearBtn');
+if (_eventLogClearBtn) _eventLogClearBtn.addEventListener('click', async () => {
+  const confirmed = window.confirm('Clear all Calendar Event Log entries for this account? This cannot be undone.');
+  if (!confirmed) {
+    return;
+  }
+
+  _eventLogClearBtn.disabled = true;
+  setEventLogMessage('Clearing event log...', false);
   try {
+    const res = await fetch('/api/event-log', {
+      method: 'DELETE'
+    });
+
+    if (res.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+    if (res.status === 403) {
+      setEventLogMessage('Access restricted.', true);
+      return;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setEventLogMessage(data.error || 'Failed to clear event log.', true);
+      return;
+    }
+
+    setEventLogMessage('Event log cleared (' + String(Number(data.deletedCount || 0)) + ' entries removed).', false);
     await loadEventLog();
+  } catch {
+    setEventLogMessage('Failed to clear event log.', true);
   } finally {
-    _eventLogRefreshBtn.disabled = false;
+    _eventLogClearBtn.disabled = false;
   }
 });
