@@ -4353,6 +4353,143 @@ async function getReservationEventsForListing(listingId) {
     .filter((event) => event && event.isReservation !== false);
 }
 
+function getNormalisedConflictRangeForEvent(event) {
+  const startKey = getDateKeyFromEventDateTime(event && event.start);
+  const rawEndKey = getDateKeyFromEventDateTime(event && event.end);
+  if (!startKey) {
+    return null;
+  }
+
+  let endKey = rawEndKey || addDaysToDateKey(startKey, 1);
+  if (!endKey || endKey <= startKey) {
+    endKey = addDaysToDateKey(startKey, 1);
+  }
+  return { startKey, endKey };
+}
+
+function isConflictCandidateReservation(event) {
+  return Boolean(event && event.isReservation !== false && event.isUnavailableBlock !== true);
+}
+
+function doConflictRangesOverlap(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  return left.startKey < right.endKey && left.endKey > right.startKey;
+}
+
+function annotateReservationEventConflicts(events) {
+  const list = Array.isArray(events) ? events : [];
+  const ranges = list.map((event) => getNormalisedConflictRangeForEvent(event));
+  const conflictIndexes = new Set();
+
+  for (let i = 0; i < list.length; i += 1) {
+    if (!isConflictCandidateReservation(list[i])) continue;
+    for (let j = i + 1; j < list.length; j += 1) {
+      if (!isConflictCandidateReservation(list[j])) continue;
+      if (doConflictRangesOverlap(ranges[i], ranges[j])) {
+        conflictIndexes.add(i);
+        conflictIndexes.add(j);
+      }
+    }
+  }
+
+  return list.map((event, index) => {
+    if (!event || typeof event !== 'object') {
+      return event;
+    }
+    const alreadyFlagged = event.isInConflict === true;
+    if (!alreadyFlagged && !conflictIndexes.has(index)) {
+      return event;
+    }
+    return { ...event, isInConflict: true };
+  });
+}
+
+function buildReservationConflictPairs(events) {
+  const list = Array.isArray(events) ? events : [];
+  const pairs = [];
+  const ranges = list.map((event) => getNormalisedConflictRangeForEvent(event));
+
+  for (let i = 0; i < list.length; i += 1) {
+    if (!isConflictCandidateReservation(list[i])) continue;
+    for (let j = i + 1; j < list.length; j += 1) {
+      if (!isConflictCandidateReservation(list[j])) continue;
+      if (!doConflictRangesOverlap(ranges[i], ranges[j])) continue;
+
+      const overlapStart = ranges[i].startKey > ranges[j].startKey ? ranges[i].startKey : ranges[j].startKey;
+      const overlapEnd = ranges[i].endKey < ranges[j].endKey ? ranges[i].endKey : ranges[j].endKey;
+      if (!overlapStart || !overlapEnd || overlapEnd <= overlapStart) continue;
+
+      pairs.push({
+        left: list[i],
+        right: list[j],
+        overlapStart,
+        overlapEnd
+      });
+    }
+  }
+
+  return pairs;
+}
+
+function getConflictEventIdentifier(event) {
+  const reservationActivityId = Number(event && event.reservationActivityId || 0);
+  if (Number.isInteger(reservationActivityId) && reservationActivityId > 0) {
+    return reservationActivityId;
+  }
+  const calendarEventId = Number(event && event.calendarEventId || 0);
+  if (Number.isInteger(calendarEventId) && calendarEventId > 0) {
+    return calendarEventId;
+  }
+  return null;
+}
+
+async function writeDetectedReservationConflictsToEventLog(listing, events) {
+  const listingId = Number(listing && listing.id || 0);
+  const clientAccountId = Number(listing && listing.client_account_id || 0);
+  if (!Number.isInteger(listingId) || listingId <= 0 || !Number.isInteger(clientAccountId) || clientAccountId <= 0) {
+    return;
+  }
+
+  const conflictPairs = buildReservationConflictPairs(events);
+  for (const pair of conflictPairs) {
+    const overlapStart = pair.overlapStart;
+    const overlapEnd = pair.overlapEnd;
+    const leftTitle = String(pair.left && pair.left.title || pair.left && pair.left.source || 'Reservation A').trim();
+    const rightTitle = String(pair.right && pair.right.title || pair.right && pair.right.source || 'Reservation B').trim();
+
+    const duplicateCheck = await pool.query(
+      `SELECT id
+       FROM listing_event_log
+       WHERE client_account_id = $1
+         AND listing_id = $2
+         AND entry_type = 'conflict'
+         AND channel_label = 'Conflict Detector'
+         AND new_start_date = $3::date
+         AND new_end_date = $4::date
+         AND created_at >= (NOW() - INTERVAL '6 hours')
+       LIMIT 1`,
+      [clientAccountId, listingId, overlapStart, overlapEnd]
+    );
+    if (duplicateCheck.rows[0]) {
+      continue;
+    }
+
+    await writeEventLog({
+      clientAccountId,
+      listingId,
+      entryType: 'conflict',
+      channelLabel: 'Conflict Detector',
+      description: `CONFLICT on listing ${listingId}: "${leftTitle}" overlaps "${rightTitle}" (${overlapStart} to ${overlapEnd}).`,
+      newStartDate: overlapStart,
+      newEndDate: overlapEnd,
+      affectedEventId: getConflictEventIdentifier(pair.left),
+      conflictingEventId: getConflictEventIdentifier(pair.right)
+    });
+  }
+}
+
 async function findMatchingCalendarListingId(listingIds, checkinDate, checkoutDate) {
   for (const listingId of listingIds) {
     const events = await getReservationEventsForListing(listingId);
@@ -10603,7 +10740,8 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
       const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
       return aTime - bTime;
     });
-    const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEvents);
+    const mergedEventsWithConflicts = annotateReservationEventConflicts(mergedEvents);
+    const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEventsWithConflicts);
 
     const fetchedAt = cached.length
       ? cached.map((c) => c.fetched_at).sort().pop()
@@ -10677,7 +10815,9 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
       const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
       return aTime - bTime;
     });
-    const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEvents);
+    const mergedEventsWithConflicts = annotateReservationEventConflicts(mergedEvents);
+    await writeDetectedReservationConflictsToEventLog(listing, mergedEventsWithConflicts);
+    const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEventsWithConflicts);
 
     const fetchedAt = cached.length
       ? cached.map((c) => c.fetched_at).sort().pop()

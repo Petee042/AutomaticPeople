@@ -2401,6 +2401,8 @@ function buildBarTooltip(events) {
     return '';
   }
 
+  const hasConflict = hasConflictInOpsEventSet(events);
+
   return events.map((event) => {
     const metadata = parseApMetadataFromDescription(event && event.description);
     const eventType = deriveOpsEventType(event, metadata);
@@ -2411,6 +2413,7 @@ function buildBarTooltip(events) {
     return 'Type: ' + eventType
       + '\nSource: ' + eventSource
       + '\nOrigin: ' + eventOrigin
+      + '\nConflict: ' + ((hasConflict || (event && event.isInConflict === true)) ? 'YES' : 'No')
       + '\nSummary: ' + (event.title || (event.raw && event.raw.SUMMARY) || '(untitled)')
       + '\nCheck-in: ' + checkin
       + '\nCheck-out: ' + checkout;
@@ -2424,6 +2427,48 @@ function formatDateKeyForTooltip(key) {
   const date = utcDateFromKey(key);
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return date.getUTCDate() + ' ' + monthNames[date.getUTCMonth()] + ' ' + date.getUTCFullYear();
+}
+
+function getOpsEventRange(event) {
+  const startKey = toDateKey(event && event.start);
+  const rawEndKey = toDateKey(event && event.end);
+  if (!startKey) {
+    return null;
+  }
+
+  let endKey = rawEndKey || keyFromUtcDate(addUtcDays(utcDateFromKey(startKey), 1));
+  if (!endKey || endKey <= startKey) {
+    endKey = keyFromUtcDate(addUtcDays(utcDateFromKey(startKey), 1));
+  }
+  return { startKey, endKey };
+}
+
+function isOpsConflictCandidate(event) {
+  return Boolean(event && event.isReservation !== false && event.isUnavailableBlock !== true);
+}
+
+function hasConflictInOpsEventSet(events) {
+  const list = Array.isArray(events) ? events : [];
+  const ranges = list.map((event) => getOpsEventRange(event));
+
+  for (let i = 0; i < list.length; i += 1) {
+    const left = list[i];
+    if (!isOpsConflictCandidate(left)) continue;
+    if (left && left.isInConflict === true) return true;
+
+    for (let j = i + 1; j < list.length; j += 1) {
+      const right = list[j];
+      if (!isOpsConflictCandidate(right)) continue;
+      const leftRange = ranges[i];
+      const rightRange = ranges[j];
+      if (!leftRange || !rightRange) continue;
+      if (leftRange.startKey < rightRange.endKey && leftRange.endKey > rightRange.startKey) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function getOpsEventSummary(event) {
@@ -2534,6 +2579,7 @@ function opsCalendarBuildDayIndex(events) {
       day.listings.set(listingKey, {
         name: listingName,
         color,
+        conflict: false,
         stays: new Set(),
         checkins: new Set(),
         checkouts: new Set(),
@@ -2585,6 +2631,18 @@ function opsCalendarBuildDayIndex(events) {
       listingEntry.stayEvents.push(event);
       listingEntry.events.push(event);
     }
+  });
+
+  Object.values(index).forEach((day) => {
+    let dayConflict = false;
+    day.listings.forEach((listingEntry) => {
+      const listingConflict = hasConflictInOpsEventSet(listingEntry.events || []);
+      listingEntry.conflict = listingConflict;
+      if (listingConflict) {
+        dayConflict = true;
+      }
+    });
+    day.conflict = dayConflict || hasConflictInOpsEventSet(day.events || []);
   });
 
   return index;
