@@ -4371,6 +4371,15 @@ function isConflictCandidateReservation(event) {
   return Boolean(event && event.isReservation !== false && event.isUnavailableBlock !== true);
 }
 
+function isDynamicLocalPolicyBlock(event) {
+  if (!isBlockEvent(event)) {
+    return false;
+  }
+  const source = String(event && event.source || '').trim().toLowerCase();
+  const origin = String(event && event.eventOrigin || '').trim().toLowerCase();
+  return source === 'automaticpeople' || origin === 'local';
+}
+
 function doConflictRangesOverlap(left, right) {
   if (!left || !right) {
     return false;
@@ -4390,6 +4399,16 @@ function annotateReservationEventConflicts(events) {
       if (doConflictRangesOverlap(ranges[i], ranges[j])) {
         conflictIndexes.add(i);
         conflictIndexes.add(j);
+      }
+    }
+  }
+
+  for (let i = 0; i < list.length; i += 1) {
+    if (!isConflictCandidateReservation(list[i])) continue;
+    for (let j = 0; j < list.length; j += 1) {
+      if (!isDynamicLocalPolicyBlock(list[j])) continue;
+      if (doConflictRangesOverlap(ranges[i], ranges[j])) {
+        conflictIndexes.add(i);
       }
     }
   }
@@ -4433,6 +4452,33 @@ function buildReservationConflictPairs(events) {
   return pairs;
 }
 
+function buildReservationDynamicBlockConflictPairs(events) {
+  const list = Array.isArray(events) ? events : [];
+  const pairs = [];
+  const ranges = list.map((event) => getNormalisedConflictRangeForEvent(event));
+
+  for (let i = 0; i < list.length; i += 1) {
+    if (!isConflictCandidateReservation(list[i])) continue;
+    for (let j = 0; j < list.length; j += 1) {
+      if (!isDynamicLocalPolicyBlock(list[j])) continue;
+      if (!doConflictRangesOverlap(ranges[i], ranges[j])) continue;
+
+      const overlapStart = ranges[i].startKey > ranges[j].startKey ? ranges[i].startKey : ranges[j].startKey;
+      const overlapEnd = ranges[i].endKey < ranges[j].endKey ? ranges[i].endKey : ranges[j].endKey;
+      if (!overlapStart || !overlapEnd || overlapEnd <= overlapStart) continue;
+
+      pairs.push({
+        reservation: list[i],
+        block: list[j],
+        overlapStart,
+        overlapEnd
+      });
+    }
+  }
+
+  return pairs;
+}
+
 function getConflictEventIdentifier(event) {
   const reservationActivityId = Number(event && event.reservationActivityId || 0);
   if (Number.isInteger(reservationActivityId) && reservationActivityId > 0) {
@@ -4453,6 +4499,7 @@ async function writeDetectedReservationConflictsToEventLog(listing, events, expl
   }
 
   const conflictPairs = buildReservationConflictPairs(events);
+  const dynamicBlockPairs = buildReservationDynamicBlockConflictPairs(events);
   const emailConflictLines = [];
   for (const pair of conflictPairs) {
     const overlapStart = pair.overlapStart;
@@ -4493,6 +4540,47 @@ async function writeDetectedReservationConflictsToEventLog(listing, events, expl
     const rightChannel = String(pair.right && pair.right.source || 'Unknown').trim();
     emailConflictLines.push(
       `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${leftChannel} vs ${rightChannel}, Summary: ${leftTitle} vs ${rightTitle}`
+    );
+  }
+
+  for (const pair of dynamicBlockPairs) {
+    const overlapStart = pair.overlapStart;
+    const overlapEnd = pair.overlapEnd;
+    const reservationTitle = String(pair.reservation && pair.reservation.title || pair.reservation && pair.reservation.source || 'Reservation').trim();
+    const blockReason = String(pair.block && (pair.block.description || pair.block.title) || 'Dynamic policy block').trim();
+
+    const duplicateCheck = await pool.query(
+      `SELECT id
+       FROM listing_event_log
+       WHERE client_account_id = $1
+         AND listing_id = $2
+         AND entry_type = 'conflict'
+         AND channel_label = 'Conflict Detector'
+         AND new_start_date = $3::date
+         AND new_end_date = $4::date
+         AND created_at >= (NOW() - INTERVAL '6 hours')
+       LIMIT 1`,
+      [clientAccountId, listingId, overlapStart, overlapEnd]
+    );
+    if (duplicateCheck.rows[0]) {
+      continue;
+    }
+
+    await writeEventLog({
+      clientAccountId,
+      listingId,
+      entryType: 'conflict',
+      channelLabel: 'Conflict Detector',
+      description: `CONFLICT on listing ${listingId}: "${reservationTitle}" overlaps dynamic block (${blockReason}) (${overlapStart} to ${overlapEnd}).`,
+      newStartDate: overlapStart,
+      newEndDate: overlapEnd,
+      affectedEventId: getConflictEventIdentifier(pair.reservation),
+      conflictingEventId: null
+    });
+
+    const reservationChannel = String(pair.reservation && pair.reservation.source || 'Unknown').trim();
+    emailConflictLines.push(
+      `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${reservationChannel} vs Dynamic Block, Summary: ${reservationTitle} vs ${blockReason}`
     );
   }
 
@@ -10923,9 +11011,9 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
       const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
       return aTime - bTime;
     });
-    const mergedEventsWithConflicts = annotateReservationEventConflicts(mergedEvents);
+    const eventsWithPolicyBlocks = appendAvailabilityPolicyBlockEvents(listing, mergedEvents);
+    const mergedEventsWithConflicts = annotateReservationEventConflicts(eventsWithPolicyBlocks);
     await writeDetectedReservationConflictsToEventLog(listing, mergedEventsWithConflicts, req.accessContext.activeClientAccountId);
-    const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEventsWithConflicts);
 
     const fetchedAt = cached.length
       ? cached.map((c) => c.fetched_at).sort().pop()
@@ -10947,7 +11035,7 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
       cleaner_name: row.cleaner_id ? (cleanerNameById.get(Number(row.cleaner_id)) || 'Unallocated') : 'Unallocated'
     }));
 
-    return res.json({ listing, events: eventsWithAdvanceBlock, feedErrors, fetchedAt, cleaningChanges });
+    return res.json({ listing, events: mergedEventsWithConflicts, feedErrors, fetchedAt, cleaningChanges });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load listing events.' });
@@ -10999,9 +11087,9 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
       const bTime = b.start ? new Date(b.start).getTime() : Number.NEGATIVE_INFINITY;
       return aTime - bTime;
     });
-    const mergedEventsWithConflicts = annotateReservationEventConflicts(mergedEvents);
+    const eventsWithPolicyBlocks = appendAvailabilityPolicyBlockEvents(listing, mergedEvents);
+    const mergedEventsWithConflicts = annotateReservationEventConflicts(eventsWithPolicyBlocks);
     await writeDetectedReservationConflictsToEventLog(listing, mergedEventsWithConflicts, req.accessContext.activeClientAccountId);
-    const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEventsWithConflicts);
 
     const fetchedAt = cached.length
       ? cached.map((c) => c.fetched_at).sort().pop()
@@ -11023,7 +11111,7 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
       cleaner_name: row.cleaner_id ? (cleanerNameById.get(Number(row.cleaner_id)) || 'Unallocated') : 'Unallocated'
     }));
 
-    return res.json({ listing, events: eventsWithAdvanceBlock, feedErrors, fetchedAt, cleaningChanges });
+    return res.json({ listing, events: mergedEventsWithConflicts, feedErrors, fetchedAt, cleaningChanges });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to refresh listing events.' });
