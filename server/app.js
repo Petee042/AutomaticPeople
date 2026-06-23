@@ -4445,9 +4445,9 @@ function getConflictEventIdentifier(event) {
   return null;
 }
 
-async function writeDetectedReservationConflictsToEventLog(listing, events) {
+async function writeDetectedReservationConflictsToEventLog(listing, events, explicitClientAccountId) {
   const listingId = Number(listing && listing.id || 0);
-  const clientAccountId = Number(listing && listing.client_account_id || 0);
+  const clientAccountId = Number(explicitClientAccountId || (listing && listing.client_account_id) || 0);
   if (!Number.isInteger(listingId) || listingId <= 0 || !Number.isInteger(clientAccountId) || clientAccountId <= 0) {
     return;
   }
@@ -5425,7 +5425,7 @@ async function getListingByIdForUser(listingId, userId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.client_account_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.id = $1 AND l.user_id = $2
@@ -10843,6 +10843,7 @@ app.get('/api/listings/:listingId/events', requireScopedRole('Staff'), async (re
       return aTime - bTime;
     });
     const mergedEventsWithConflicts = annotateReservationEventConflicts(mergedEvents);
+    await writeDetectedReservationConflictsToEventLog(listing, mergedEventsWithConflicts, req.accessContext.activeClientAccountId);
     const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEventsWithConflicts);
 
     const fetchedAt = cached.length
@@ -10918,7 +10919,7 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
       return aTime - bTime;
     });
     const mergedEventsWithConflicts = annotateReservationEventConflicts(mergedEvents);
-    await writeDetectedReservationConflictsToEventLog(listing, mergedEventsWithConflicts);
+    await writeDetectedReservationConflictsToEventLog(listing, mergedEventsWithConflicts, req.accessContext.activeClientAccountId);
     const eventsWithAdvanceBlock = appendAvailabilityPolicyBlockEvents(listing, mergedEventsWithConflicts);
 
     const fetchedAt = cached.length
