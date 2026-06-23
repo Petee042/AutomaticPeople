@@ -1383,6 +1383,7 @@ async function updateCalendars() {
       initialListingFormState = getListingFormState();
     } else {
       await loadListing();
+      await loadCachedCalendar();
       await fetchListingManagers();
       initialListingFormState = getListingFormState();
     }
@@ -1637,6 +1638,7 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
     }
 
     await loadListing();
+    await loadCachedCalendar();
     document.getElementById('listingTitle').textContent = 'Listing: ' + data.listing.name;
     initialListingFormState = getListingFormState();
     setListingMessage('Listing updated.', false);
