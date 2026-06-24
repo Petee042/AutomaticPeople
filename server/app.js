@@ -567,7 +567,7 @@ async function initializeUserStore() {
       is_modified BOOLEAN NOT NULL DEFAULT FALSE,
       ics_uid TEXT,
       ics_summary TEXT NOT NULL DEFAULT '',
-      reservation_activity_id BIGINT REFERENCES reservation_activity(id) ON DELETE SET NULL,
+      reservation_activity_id BIGINT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_synced_at TIMESTAMPTZ
     )
@@ -965,6 +965,19 @@ async function initializeUserStore() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_reservation_activity_identifier_unique
     ON reservation_activity (reservation_identifier)
     WHERE reservation_identifier IS NOT NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE listing_calendar_events
+    DROP CONSTRAINT IF EXISTS listing_calendar_events_reservation_activity_id_fkey
+  `);
+
+  await pool.query(`
+    ALTER TABLE listing_calendar_events
+    ADD CONSTRAINT listing_calendar_events_reservation_activity_id_fkey
+    FOREIGN KEY (reservation_activity_id)
+    REFERENCES reservation_activity(id)
+    ON DELETE SET NULL
   `);
 
   await pool.query(`
