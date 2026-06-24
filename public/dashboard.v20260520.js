@@ -38,6 +38,7 @@ let opsCalCurrentCleaningChanges = [];
 let opsCalCurrentFetchedAt = null;
 let opsCalSelectedListingIds = new Set();
 let opsCalRequestId = 0;
+let dashboardActivityRequestId = 0;
 let savedDashboardState = null;
 
 const opsCalSourceColorMap = {};
@@ -1476,6 +1477,249 @@ function toDateKey(value) {
 function formatMonthLabel(date) {
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   return monthNames[date.getUTCMonth()] + ' ' + date.getUTCFullYear();
+}
+
+function setDashboardActivityStatus(text) {
+  const el = document.getElementById('dashboardActivityStatus');
+  if (!el) {
+    return;
+  }
+  el.textContent = String(text || '').trim();
+}
+
+function formatActivityDayHeader(dayKey) {
+  const date = utcDateFromKey(dayKey);
+  return WEEKDAY_NAMES[date.getUTCDay()] + ' ' + date.getUTCDate() + ' ' + MONTH_SHORT_NAMES[date.getUTCMonth()];
+}
+
+function getActivityGuestName(event) {
+  const explicit = String(
+    event && (
+      event.guestName
+      || event.guest_name
+      || event.guest
+      || event.reservationGuestName
+      || event.reservation_guest_name
+      || ''
+    )
+  ).trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const description = String(event && event.description ? event.description : '');
+  if (description) {
+    const guestMatch = description.match(/guest\s*:\s*([^\n\r]+)/i);
+    if (guestMatch && guestMatch[1]) {
+      return String(guestMatch[1]).trim();
+    }
+  }
+
+  return '';
+}
+
+function renderDashboardActivityRows(dayKeys, activityByDay) {
+  const container = document.getElementById('dashboardActivityRows');
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+
+  dayKeys.forEach((dayKey) => {
+    const dayRow = document.createElement('div');
+    dayRow.className = 'activity-day-row';
+
+    const dayHeader = document.createElement('div');
+    dayHeader.className = 'activity-day-header';
+    dayHeader.textContent = formatActivityDayHeader(dayKey);
+    dayRow.appendChild(dayHeader);
+
+    const entries = activityByDay.get(dayKey) || [];
+    entries.forEach((entry) => {
+      const itemRow = document.createElement('div');
+      itemRow.className = 'activity-item-row';
+
+      const title = document.createElement('div');
+      title.className = 'activity-item-title';
+      title.textContent = entry.type;
+
+      const details = document.createElement('div');
+      details.className = 'activity-item-details';
+
+      const parts = [
+        entry.propertyName || 'Unknown property',
+        entry.listingName || 'Unknown listing'
+      ];
+      if (entry.changeoverName) {
+        parts.push('Changeover: ' + entry.changeoverName);
+      }
+      if (entry.guestName) {
+        parts.push('Guest: ' + entry.guestName);
+      }
+
+      parts.forEach((part) => {
+        const chip = document.createElement('span');
+        chip.className = 'activity-item-chip';
+        chip.textContent = part;
+        details.appendChild(chip);
+      });
+
+      itemRow.appendChild(title);
+      itemRow.appendChild(details);
+      dayRow.appendChild(itemRow);
+    });
+
+    container.appendChild(dayRow);
+  });
+}
+
+async function refreshDashboardActivity() {
+  const container = document.getElementById('dashboardActivityRows');
+  if (!container) {
+    return;
+  }
+
+  const requestId = ++dashboardActivityRequestId;
+  const now = new Date();
+  const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const dayKeys = [];
+  for (let i = 0; i < 7; i += 1) {
+    dayKeys.push(keyFromUtcDate(addUtcDays(todayUtc, i)));
+  }
+
+  const listings = Array.isArray(currentListings) ? currentListings.filter((listing) => Number(listing.id) > 0) : [];
+  if (!listings.length) {
+    setDashboardActivityStatus('');
+    renderDashboardActivityRows(dayKeys, new Map(dayKeys.map((key) => [key, []])));
+    return;
+  }
+
+  setDashboardActivityStatus('Loading activity...');
+
+  const results = await Promise.all(listings.map(async (listing) => {
+    try {
+      const data = await fetchOpsCalendarListingData(listing, false);
+      return { listing, data };
+    } catch (err) {
+      return { listing, error: err };
+    }
+  }));
+
+  if (requestId !== dashboardActivityRequestId) {
+    return;
+  }
+
+  const events = [];
+  const cleaningChanges = [];
+  const issues = [];
+
+  results.forEach((result) => {
+    if (result.error) {
+      issues.push((result.listing.name || ('Listing #' + result.listing.id)) + ': ' + (result.error.message || 'Failed to load activity.'));
+      return;
+    }
+
+    const data = result.data || {};
+    const listingMeta = getListingMetaById(result.listing.id) || {};
+    const listingName = result.listing.name || listingMeta.name || ('Listing #' + result.listing.id);
+    const propertyName = listingMeta.property_name || '';
+
+    events.push(...(data.events || []).map((event) => Object.assign({}, event, {
+      listingId: result.listing.id,
+      listingName,
+      listingPropertyName: propertyName
+    })));
+
+    cleaningChanges.push(...(data.cleaningChanges || []).map((change) => Object.assign({}, change, {
+      listingId: result.listing.id,
+      listingName,
+      reservation_checkin_date: toDateKey(change.reservation_checkin_date),
+      reservation_checkout_date: toDateKey(change.reservation_checkout_date),
+      changeover_date: toDateKey(change.changeover_date)
+    })));
+  });
+
+  const normalizedChanges = cleaningChanges.concat(buildOpsDefaultCleaningChanges(events, cleaningChanges));
+  const cleanerByReservationKey = new Map();
+  normalizedChanges.forEach((change) => {
+    const listingId = Number(change.listingId || change.listing_id || 0);
+    const checkinKey = toDateKey(change.reservation_checkin_date);
+    const checkoutKey = toDateKey(change.reservation_checkout_date);
+    if (!Number.isInteger(listingId) || listingId <= 0 || !checkinKey || !checkoutKey) {
+      return;
+    }
+
+    const cleanerName = resolveCleanerNameFromChange(change, currentCleaners);
+    if (!cleanerName || cleanerName === 'Unallocated') {
+      return;
+    }
+
+    const key = reservationChangeKey(listingId, checkinKey, checkoutKey);
+    if (!cleanerByReservationKey.has(key)) {
+      cleanerByReservationKey.set(key, cleanerName);
+    }
+  });
+
+  const dayKeySet = new Set(dayKeys);
+  const activityByDay = new Map(dayKeys.map((key) => [key, []]));
+  (events || []).forEach((event) => {
+    if (event && event.isReservation === false) {
+      return;
+    }
+
+    const listingId = Number(event && (event.listingId || event.listing_id || 0));
+    const listingMeta = getListingMetaById(listingId) || {};
+    const listingName = String(event && event.listingName ? event.listingName : listingMeta.name || ('Listing #' + listingId)).trim();
+    const propertyName = String(event && event.listingPropertyName ? event.listingPropertyName : listingMeta.property_name || '').trim() || 'Unknown property';
+    const checkinKey = toDateKey(event && event.start);
+    const checkoutKey = toDateKey(event && event.end);
+    const guestName = getActivityGuestName(event);
+    const dateBasis = listingMeta.date_basis === 'checkin' ? 'checkin' : 'checkout';
+    const reservationKeyValue = reservationChangeKey(listingId, checkinKey, checkoutKey);
+    const changeoverName = cleanerByReservationKey.get(reservationKeyValue) || '';
+
+    if (checkinKey && dayKeySet.has(checkinKey)) {
+      activityByDay.get(checkinKey).push({
+        type: 'Check-in',
+        propertyName,
+        listingName,
+        changeoverName: dateBasis === 'checkin' ? changeoverName : '',
+        guestName
+      });
+    }
+
+    if (checkoutKey && dayKeySet.has(checkoutKey)) {
+      activityByDay.get(checkoutKey).push({
+        type: 'Check-out',
+        propertyName,
+        listingName,
+        changeoverName: dateBasis === 'checkout' ? changeoverName : '',
+        guestName
+      });
+    }
+  });
+
+  dayKeys.forEach((dayKey) => {
+    const entries = activityByDay.get(dayKey) || [];
+    entries.sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === 'Check-out' ? -1 : 1;
+      }
+      const propertySort = String(a.propertyName || '').localeCompare(String(b.propertyName || ''));
+      if (propertySort !== 0) {
+        return propertySort;
+      }
+      return String(a.listingName || '').localeCompare(String(b.listingName || ''));
+    });
+  });
+
+  renderDashboardActivityRows(dayKeys, activityByDay);
+  if (issues.length) {
+    setDashboardActivityStatus('Loaded with some feed issues.');
+  } else {
+    setDashboardActivityStatus('');
+  }
 }
 
 function renderCleaningListings(listings) {
@@ -3091,6 +3335,7 @@ async function fetchListings() {
   renderCleaningListings(currentListings);
   renderOpsCalendarListingSelector(currentListings);
   await refreshOpsCalendar(false);
+  await refreshDashboardActivity();
 }
 
 async function fetchProperties() {
