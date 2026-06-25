@@ -3360,7 +3360,8 @@ async function getTeamMemberRemovalImpact(clientAccountId, targetUserId) {
 
   return {
     removedRoles: removableRolesResult.rows.map((row) => row.role),
-    deletedFromSite: !remainingMemberships.rows.length
+    willBeReassignedToDeleted: true,
+    willBePermanentlyDeletedAfterReassignment: !remainingMemberships.rows.length
   };
 }
 
@@ -8590,7 +8591,7 @@ app.put('/api/admin/site-users/:userId', requireAdminAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/admin/users/:userId
+// DELETE /api/admin/users/:userId — delete site user globally; for each client membership, resources are reassigned to that client's Deleted user; site user is removed if unreferenced after all reassignments
 app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -8975,7 +8976,7 @@ app.put('/api/access/team/:userId', requireScopedRole('Client'), async (req, res
   }
 });
 
-// DELETE /api/access/team/:userId — remove site user from current client team and delete site user if no memberships remain
+// DELETE /api/access/team/:userId — remove site user from current client team; resources are reassigned to Deleted user; site user deleted globally if no other memberships exist
 app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -9001,7 +9002,7 @@ app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, 
   }
 });
 
-// GET /api/access/team/:userId/delete-impact — preview whether deletion is scope-only or site-wide
+// GET /api/access/team/:userId/delete-impact — preview removal impact: resources will be reassigned to client's Deleted user; site user may also be deleted if no other memberships exist
 app.get('/api/access/team/:userId/delete-impact', requireScopedRole('Client'), async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -10914,7 +10915,7 @@ app.put('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req,
   }
 });
 
-// DELETE /api/access/guests/:guestId — delete one guest record in active client account
+// DELETE /api/access/guests/:guestId — delete one guest from client account; guest references are reassigned to Deleted user; guest site user may be deleted if no other client relationships exist
 app.delete('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req, res) => {
   const guestId = Number(req.params.guestId);
   if (!Number.isInteger(guestId) || guestId <= 0) {
