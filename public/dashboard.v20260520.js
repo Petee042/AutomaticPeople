@@ -2801,36 +2801,6 @@ function opsCalendarBuildDayIndex(events) {
   return index;
 }
 
-function opsCalendarBuildCleaningBadgesByDate(changes) {
-  const byDate = {};
-  (changes || []).forEach((change) => {
-    const cleanKey = toDateKey(change.changeover_date);
-    if (!cleanKey) {
-      return;
-    }
-
-    const initials = opsCalendarGetCleanerInitials(change);
-    if (!initials) {
-      return;
-    }
-    const cleanerKey = opsCalendarGetCleanerKey(change);
-    const badgeColor = opsCalendarGetCleanerColor(change);
-
-    if (!byDate[cleanKey]) {
-      byDate[cleanKey] = new Map();
-    }
-    const key = cleanerKey || ('initials:' + initials);
-    if (!byDate[cleanKey].has(key)) {
-      byDate[cleanKey].set(key, {
-        initials,
-        color: badgeColor
-      });
-    }
-  });
-
-  return byDate;
-}
-
 function opsCalendarBuildReservationCleanerBadgeMap(changes) {
   const map = new Map();
 
@@ -2838,8 +2808,9 @@ function opsCalendarBuildReservationCleanerBadgeMap(changes) {
     const listingId = Number(change && (change.listingId || change.listing_id) || 0);
     const checkinKey = toDateKey(change && change.reservation_checkin_date);
     const checkoutKey = toDateKey(change && change.reservation_checkout_date);
+    const changeoverDateKey = toDateKey(change && change.changeover_date);
     const initials = opsCalendarGetCleanerInitials(change);
-    if (!Number.isInteger(listingId) || listingId <= 0 || !checkinKey || !checkoutKey || !initials) {
+    if (!Number.isInteger(listingId) || listingId <= 0 || !checkinKey || !checkoutKey || !changeoverDateKey || !initials) {
       return;
     }
 
@@ -2848,7 +2819,8 @@ function opsCalendarBuildReservationCleanerBadgeMap(changes) {
       map.set(key, {
         initials,
         color: opsCalendarGetCleanerColor(change),
-        name: opsCalendarGetCleanerDisplayName(change)
+        name: opsCalendarGetCleanerDisplayName(change),
+        changeoverDate: changeoverDateKey
       });
     }
   });
@@ -2924,7 +2896,6 @@ function opsCalendarRenderReservationCalendar(events, changes) {
 
   const monthStart = opsCalendarMonthStart(opsCalCurrentMonth);
   const dayIndex = opsCalendarBuildDayIndex(events);
-  const cleanerBadgesByDate = opsCalendarBuildCleaningBadgesByDate(changes);
   const reservationCleanerBadgeMap = opsCalendarBuildReservationCleanerBadgeMap(changes);
   const listings = getOpsCalendarListings(events);
 
@@ -3012,22 +2983,6 @@ function opsCalendarRenderReservationCalendar(events, changes) {
       num.textContent = String(dayNum);
       cell.appendChild(num);
 
-      const dayCleanerBadgeMap = cleanerBadgesByDate[key] ? new Map(cleanerBadgesByDate[key]) : new Map();
-
-      const dayCleanerBadges = Array.from(dayCleanerBadgeMap.values());
-      if (dayCleanerBadges.length) {
-        const cleanersEl = document.createElement('div');
-        cleanersEl.className = 'calendar-day-cleaners';
-        dayCleanerBadges.forEach((badgeInfo) => {
-          const badge = document.createElement('span');
-          badge.className = 'calendar-day-cleaner-badge';
-          badge.textContent = badgeInfo.initials;
-          badge.style.backgroundColor = badgeInfo.color;
-          cleanersEl.appendChild(badge);
-        });
-        cell.appendChild(cleanersEl);
-      }
-
       const bars = document.createElement('div');
       bars.className = 'calendar-day-bars';
 
@@ -3111,7 +3066,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
         if (!bar.classList.contains('day-bar-empty') && hasReservationEligible(activeBarEvents)) {
           const reservationEvent = (activeBarEvents || []).find((event) => event && event.isReservation !== false) || null;
           const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(reservationEvent, reservationCleanerBadgeMap);
-          if (cleanerBadge && cleanerBadge.initials) {
+          if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === key) {
             const initialsEl = document.createElement('span');
             initialsEl.className = 'day-bar-initials';
             initialsEl.textContent = cleanerBadge.initials;
