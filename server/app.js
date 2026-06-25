@@ -3325,6 +3325,9 @@ async function getTeamMemberRemovalImpact(clientAccountId, targetUserId) {
   if (!user) {
     return { error: 'Site user not found.' };
   }
+  if (isDeletedSiteUserRecord(user)) {
+    return { error: 'Deleted placeholder users cannot be deleted.' };
+  }
 
   const removableRolesResult = await pool.query(
     `
@@ -8988,6 +8991,14 @@ app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, 
   }
 
   try {
+    const targetUser = await getUserById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Site user not found.' });
+    }
+    if (isDeletedSiteUserRecord(targetUser)) {
+      return res.status(400).json({ error: 'Deleted placeholder users cannot be deleted.' });
+    }
+
     const result = await removeTeamMemberFromClientScope(
       req.accessContext.activeClientAccountId,
       userId
@@ -9014,6 +9025,14 @@ app.get('/api/access/team/:userId/delete-impact', requireScopedRole('Client'), a
   }
 
   try {
+    const targetUser = await getUserById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Site user not found.' });
+    }
+    if (isDeletedSiteUserRecord(targetUser)) {
+      return res.status(400).json({ error: 'Deleted placeholder users cannot be deleted.' });
+    }
+
     const impact = await getTeamMemberRemovalImpact(
       req.accessContext.activeClientAccountId,
       userId
@@ -10923,6 +10942,14 @@ app.delete('/api/access/guests/:guestId', requireScopedRole('Manager'), async (r
   }
 
   try {
+    const guestUser = await getUserById(guestId);
+    if (!guestUser) {
+      return res.status(404).json({ error: 'Guest not found.' });
+    }
+    if (isDeletedSiteUserRecord(guestUser)) {
+      return res.status(400).json({ error: 'Deleted placeholder users cannot be deleted.' });
+    }
+
     const result = await deleteGuestForClientAccount(req.accessContext.activeClientAccountId, guestId);
     if (result.error === 'Guest not found.') {
       return res.status(404).json({ error: result.error });
