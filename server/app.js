@@ -3265,6 +3265,11 @@ async function removeTeamMemberFromClientScope(clientAccountId, targetUserId) {
     return { error: 'Site user not found.' };
   }
 
+  const deletedUser = await reassignCleanerReferencesForClientAccount(Number(clientAccountId), userId);
+  if (deletedUser && deletedUser.error) {
+    return deletedUser;
+  }
+
   const revokeResult = await pool.query(
     `
       UPDATE client_memberships
@@ -3298,30 +3303,13 @@ async function removeTeamMemberFromClientScope(clientAccountId, targetUserId) {
     );
   }
 
-  const remainingMemberships = await pool.query(
-    `
-      SELECT id
-      FROM client_memberships
-      WHERE user_id = $1
-        AND status IN ('active', 'invited')
-        AND (
-          role = 'Client'
-          OR (role IN ('Manager', 'Staff') AND client_account_id <> $2)
-        )
-      LIMIT 1
-    `,
-    [userId, Number(clientAccountId)]
-  );
-
-  let deletedFromSite = false;
-  if (!remainingMemberships.rows.length) {
-    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
-    deletedFromSite = true;
-  }
+  const cleanupResult = await removeSiteUserIfUnreferenced(userId);
+  const deletedFromSite = cleanupResult.deleted === true;
 
   return {
     removedRoles: revokeResult.rows.map((row) => row.role),
-    deletedFromSite
+    deletedFromSite,
+    reassignedToDeletedUserId: deletedUser ? deletedUser.deletedUserId : null
   };
 }
 
@@ -5368,13 +5356,39 @@ async function resolvePropertyForListing(userId, propertyId) {
   return ensureDefaultPropertyForUser(userId);
 }
 
-async function getAllUsers() {
-  
+function buildDeletedSiteUserUsername(clientAccountId) {
+  return 'deleted-client-' + String(clientAccountId || '').trim();
+}
 
-  const result = await pool.query(
-    'SELECT id, email, created_at FROM users ORDER BY email ASC'
-  );
-  return result.rows;
+function buildDeletedSiteUserEmail(clientAccountId) {
+  return 'deleted+client-' + String(clientAccountId || '').trim() + '@automaticpeople.local';
+}
+
+function isDeletedSiteUserRecord(user) {
+  const username = String(user && user.username || '').trim().toLowerCase();
+  const email = String(user && user.email || '').trim().toLowerCase();
+  return username.startsWith('deleted-client-') || (email.startsWith('deleted+client-') && email.endsWith('@automaticpeople.local'));
+}
+
+function filterVisibleSiteUsers(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (isDeletedSiteUserRecord(row)) {
+      return false;
+    }
+    return Array.isArray(row.memberships) && row.memberships.some((membership) => {
+      const status = String(membership && membership.status || '').trim();
+      return status === 'active' || status === 'invited';
+    });
+  });
+}
+
+async function getAllUsers() {
+  const users = await getAllSiteUsersWithMemberships();
+  return users.map((row) => ({
+    id: Number(row.id),
+    email: row.email,
+    created_at: row.created_at
+  }));
 }
 
 async function getAllSiteUsersWithMemberships() {
@@ -5412,11 +5426,11 @@ async function getAllSiteUsersWithMemberships() {
     `
   );
 
-  return result.rows.map((row) => ({
+  return filterVisibleSiteUsers(result.rows.map((row) => ({
     ...row,
     id: Number(row.id),
     memberships: Array.isArray(row.memberships) ? row.memberships : []
-  }));
+  })));
 }
 
 async function getSiteUserForAdmin(userId) {
@@ -5515,15 +5529,444 @@ async function updateSiteUserForAdmin(userId, input) {
   return { user: updated };
 }
 
-async function deleteUserAndData(userId) {
-  
+async function ensureDeletedSiteUserForClientAccount(clientAccountId) {
+  const accountId = Number(clientAccountId);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    return { error: 'Client account is required.' };
+  }
 
-  const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [userId]);
-  if (!result.rows[0]) {
+  const ownerUserId = await getClientOwnerUserId(accountId);
+  const ownerUser = ownerUserId ? await getUserById(ownerUserId) : null;
+  const familyName = String(ownerUser && ownerUser.family_name || '').trim() || ('Client ' + String(accountId));
+  const username = buildDeletedSiteUserUsername(accountId);
+  const email = buildDeletedSiteUserEmail(accountId);
+
+  let deletedUser = await findUserByEmail(email);
+  if (!deletedUser) {
+    const passwordHash = await bcrypt.hash(randomUUID() + 'Aa1!', SALT_ROUNDS);
+    const created = await pool.query(
+      `
+        INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
+        VALUES ($1, $2, $3, 'Deleted', $4, '', TRUE)
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
+      `,
+      [username, email, passwordHash, familyName]
+    );
+    deletedUser = created.rows[0] || null;
+  } else {
+    await pool.query(
+      `
+        UPDATE users
+        SET first_name = 'Deleted',
+            family_name = $2,
+            is_validated = TRUE
+        WHERE id = $1
+      `,
+      [Number(deletedUser.id), familyName]
+    );
+    deletedUser = await getUserById(Number(deletedUser.id));
+  }
+
+  if (!deletedUser || !Number.isInteger(Number(deletedUser.id)) || Number(deletedUser.id) <= 0) {
+    return { error: 'Failed to resolve Deleted site user.' };
+  }
+
+  for (const role of ['Manager', 'Staff', 'Guest']) {
+    await pool.query(
+      `
+        INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+        VALUES ($1, $2, $3, 'active', $4)
+        ON CONFLICT (client_account_id, user_id, role)
+        DO UPDATE SET status = 'active', updated_at = CURRENT_TIMESTAMP
+      `,
+      [accountId, Number(deletedUser.id), role, ownerUserId || null]
+    );
+  }
+
+  let deletedCleanerId = null;
+  if (ownerUserId) {
+    await ensureCleanerRowsForStaffMembers(accountId, ownerUserId);
+    const cleanerResult = await pool.query(
+      `
+        SELECT id
+        FROM cleaners
+        WHERE user_id = $1
+          AND client_account_id = $2
+          AND cleaner_user_id = $3
+        ORDER BY id ASC
+        LIMIT 1
+      `,
+      [ownerUserId, accountId, Number(deletedUser.id)]
+    );
+    deletedCleanerId = cleanerResult.rows[0] ? Number(cleanerResult.rows[0].id) : null;
+  }
+
+  return {
+    deletedUserId: Number(deletedUser.id),
+    deletedCleanerId,
+    deletedEmail: email,
+    deletedFirstName: 'Deleted',
+    deletedFamilyName: familyName,
+    ownerUserId: ownerUserId || null
+  };
+}
+
+async function removeSiteUserIfUnreferenced(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { deleted: false };
+  }
+
+  const referenceResult = await pool.query(
+    `
+      SELECT (
+        EXISTS(SELECT 1 FROM client_memberships WHERE user_id = $1 AND status IN ('active', 'invited'))
+        OR EXISTS(SELECT 1 FROM guest_relationships WHERE guest_user_id = $1)
+        OR EXISTS(SELECT 1 FROM cleaners WHERE cleaner_user_id = $1)
+        OR EXISTS(SELECT 1 FROM booked_in_changes WHERE cleaner_user_id = $1)
+        OR EXISTS(SELECT 1 FROM listing_calendar_events WHERE guest_user_id = $1)
+      ) AS in_use
+    `,
+    [id]
+  );
+
+  if (referenceResult.rows[0] && referenceResult.rows[0].in_use === true) {
+    return { deleted: false };
+  }
+
+  const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+  return { deleted: Boolean(result.rows[0]) };
+}
+
+async function reassignCleanerReferencesForClientAccount(clientAccountId, targetUserId) {
+  const accountId = Number(clientAccountId);
+  const targetId = Number(targetUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(targetId) || targetId <= 0) {
+    return { error: 'Invalid scope or site user.' };
+  }
+
+  const deleted = await ensureDeletedSiteUserForClientAccount(accountId);
+  if (deleted.error) {
+    return deleted;
+  }
+
+  const targetCleanerRows = await pool.query(
+    `
+      SELECT id
+      FROM cleaners
+      WHERE client_account_id = $1
+        AND cleaner_user_id = $2
+    `,
+    [accountId, targetId]
+  );
+  const targetCleanerIds = targetCleanerRows.rows
+    .map((row) => Number(row.id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (deleted.deletedCleanerId) {
+    if (targetCleanerIds.length) {
+      await pool.query(
+        `
+          UPDATE listings
+          SET usual_cleaner_id = $1
+          WHERE client_account_id = $2
+            AND usual_cleaner_id = ANY($3::bigint[])
+        `,
+        [deleted.deletedCleanerId, accountId, targetCleanerIds]
+      );
+    }
+
+    await pool.query(
+      `
+        UPDATE booked_in_changes
+        SET cleaner_user_id = $1,
+            cleaner_id = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $3
+          AND (
+            cleaner_user_id = $4
+            OR cleaner_id = ANY($5::bigint[])
+          )
+      `,
+      [deleted.deletedUserId, deleted.deletedCleanerId, accountId, targetId, targetCleanerIds]
+    );
+  } else {
+    await pool.query(
+      `
+        UPDATE listings
+        SET usual_cleaner_id = NULL
+        WHERE client_account_id = $1
+          AND usual_cleaner_id = ANY($2::bigint[])
+      `,
+      [accountId, targetCleanerIds]
+    );
+
+    await pool.query(
+      `
+        UPDATE booked_in_changes
+        SET cleaner_user_id = NULL,
+            cleaner_id = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $1
+          AND (
+            cleaner_user_id = $2
+            OR cleaner_id = ANY($3::bigint[])
+          )
+      `,
+      [accountId, targetId, targetCleanerIds]
+    );
+  }
+
+  if (targetCleanerIds.length) {
+    await pool.query('DELETE FROM cleaners WHERE id = ANY($1::bigint[])', [targetCleanerIds]);
+  }
+
+  return deleted;
+}
+
+async function reassignGuestReferencesForClientAccount(clientAccountId, targetUserId) {
+  const accountId = Number(clientAccountId);
+  const targetId = Number(targetUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(targetId) || targetId <= 0) {
+    return { error: 'Invalid scope or site user.' };
+  }
+
+  const deleted = await ensureDeletedSiteUserForClientAccount(accountId);
+  if (deleted.error) {
+    return deleted;
+  }
+
+  const targetUser = await getUserById(targetId);
+  const targetEmail = String(targetUser && targetUser.email || '').trim().toLowerCase();
+
+  await pool.query(
+    `
+      UPDATE guest_relationships
+      SET guest_user_id = $1,
+          guest_email = $2,
+          guest_first_name = $3,
+          guest_family_name = $4,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE client_account_id = $5
+        AND guest_user_id = $6
+    `,
+    [deleted.deletedUserId, deleted.deletedEmail, deleted.deletedFirstName, deleted.deletedFamilyName, accountId, targetId]
+  );
+
+  await pool.query(
+    `
+      UPDATE listing_calendar_events lce
+      SET guest_user_id = $1
+      FROM listings l
+      WHERE l.id = lce.listing_id
+        AND l.client_account_id = $2
+        AND lce.guest_user_id = $3
+    `,
+    [deleted.deletedUserId, accountId, targetId]
+  );
+
+  if (targetEmail) {
+    await pool.query(
+      `
+        UPDATE reservation_activity
+        SET first_name = $1,
+            family_name = $2,
+            email_address = $3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $4
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $5
+      `,
+      [deleted.deletedFirstName, deleted.deletedFamilyName, deleted.deletedEmail, accountId, targetEmail]
+    );
+
+    await pool.query(
+      `
+        UPDATE shared_resource_reservations
+        SET first_name = $1,
+            family_name = $2,
+            email_address = $3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $4
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $5
+      `,
+      [deleted.deletedFirstName, deleted.deletedFamilyName, deleted.deletedEmail, accountId, targetEmail]
+    );
+  }
+
+  return deleted;
+}
+
+async function removeGuestSiteUserFromClientScope(clientAccountId, targetUserId) {
+  const accountId = Number(clientAccountId);
+  const userId = Number(targetUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(userId) || userId <= 0) {
+    return { error: 'Invalid guest site user.' };
+  }
+
+  const deleted = await reassignGuestReferencesForClientAccount(accountId, userId);
+  if (deleted.error) {
+    return deleted;
+  }
+
+  await pool.query(
+    `
+      UPDATE client_memberships
+      SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+      WHERE client_account_id = $1
+        AND user_id = $2
+        AND role = 'Guest'
+        AND status IN ('active', 'invited')
+    `,
+    [accountId, userId]
+  );
+
+  await removeSiteUserIfUnreferenced(userId);
+  return { deletedGuestUserId: userId, reassignedToDeletedUserId: deleted.deletedUserId };
+}
+
+async function deleteClientAccountAndScopedData(clientAccountId) {
+  const accountId = Number(clientAccountId);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    return { error: 'Invalid client account.' };
+  }
+
+  const impactedUsersResult = await pool.query(
+    `
+      SELECT DISTINCT user_id
+      FROM client_memberships
+      WHERE client_account_id = $1
+      UNION
+      SELECT DISTINCT guest_user_id AS user_id
+      FROM guest_relationships
+      WHERE client_account_id = $1
+        AND guest_user_id IS NOT NULL
+    `,
+    [accountId]
+  );
+  const impactedUserIds = impactedUsersResult.rows
+    .map((row) => Number(row.user_id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  const managerMembershipIdsResult = await pool.query(
+    `
+      SELECT id
+      FROM client_memberships
+      WHERE client_account_id = $1
+        AND role = 'Manager'
+    `,
+    [accountId]
+  );
+  const managerMembershipIds = managerMembershipIdsResult.rows
+    .map((row) => Number(row.id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (managerMembershipIds.length) {
+    await pool.query('DELETE FROM manager_property_assignments WHERE manager_membership_id = ANY($1::bigint[])', [managerMembershipIds]);
+    await pool.query('DELETE FROM manager_listing_assignments WHERE manager_membership_id = ANY($1::bigint[])', [managerMembershipIds]);
+  }
+
+  await pool.query('DELETE FROM listing_event_log WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM reservation_activity WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM booked_in_changes WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM shared_resource_reservations WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM shared_resources WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM guest_relationships WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM cleaners WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM feed_source_colors WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM listings WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM properties WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM client_memberships WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM client_accounts WHERE id = $1', [accountId]);
+
+  for (const impactedUserId of impactedUserIds) {
+    await removeSiteUserIfUnreferenced(impactedUserId);
+  }
+
+  return { deletedClientAccountId: accountId };
+}
+
+async function deleteUserAndData(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { error: 'Invalid user id.' };
+  }
+
+  const user = await getUserById(id);
+  if (!user) {
     return { error: 'User not found.' };
   }
 
-  return { deletedUserId: Number(result.rows[0].id) };
+  const processedClientIds = new Set();
+  const ownerAccountsResult = await pool.query(
+    `
+      SELECT client_account_id
+      FROM client_memberships
+      WHERE user_id = $1
+        AND role = 'Client'
+        AND status IN ('active', 'invited')
+      ORDER BY client_account_id ASC
+    `,
+    [id]
+  );
+
+  for (const row of ownerAccountsResult.rows) {
+    const clientAccountId = Number(row.client_account_id);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || processedClientIds.has(clientAccountId)) {
+      continue;
+    }
+    processedClientIds.add(clientAccountId);
+    await deleteClientAccountAndScopedData(clientAccountId);
+  }
+
+  const teamAccountsResult = await pool.query(
+    `
+      SELECT DISTINCT client_account_id
+      FROM client_memberships
+      WHERE user_id = $1
+        AND role IN ('Manager', 'Staff')
+        AND status IN ('active', 'invited')
+      ORDER BY client_account_id ASC
+    `,
+    [id]
+  );
+  for (const row of teamAccountsResult.rows) {
+    const clientAccountId = Number(row.client_account_id);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || processedClientIds.has(clientAccountId)) {
+      continue;
+    }
+    processedClientIds.add(clientAccountId);
+    await removeTeamMemberFromClientScope(clientAccountId, id);
+  }
+
+  const guestAccountsResult = await pool.query(
+    `
+      SELECT DISTINCT client_account_id
+      FROM (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = $1
+          AND role = 'Guest'
+          AND status IN ('active', 'invited')
+        UNION
+        SELECT client_account_id
+        FROM guest_relationships
+        WHERE guest_user_id = $1
+      ) scoped
+      ORDER BY client_account_id ASC
+    `,
+    [id]
+  );
+  for (const row of guestAccountsResult.rows) {
+    const clientAccountId = Number(row.client_account_id);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || processedClientIds.has(clientAccountId)) {
+      continue;
+    }
+    processedClientIds.add(clientAccountId);
+    await removeGuestSiteUserFromClientScope(clientAccountId, id);
+  }
+
+  await removeSiteUserIfUnreferenced(id);
+  return { deletedUserId: id };
 }
 
 async function getListingsForUser(userId) {
@@ -5967,6 +6410,19 @@ async function updateGuestForClientAccount(clientAccountId, guestId, payload) {
 }
 
 async function deleteGuestForClientAccount(clientAccountId, guestId) {
+  const guest = await getGuestByIdForClientAccount(clientAccountId, guestId);
+  if (!guest) {
+    return { error: 'Guest not found.' };
+  }
+
+  const guestUserId = Number(guest.guest_user_id || 0);
+  if (Number.isInteger(guestUserId) && guestUserId > 0) {
+    const removal = await removeGuestSiteUserFromClientScope(clientAccountId, guestUserId);
+    if (removal.error) {
+      return removal;
+    }
+  }
+
   const result = await pool.query(
     `
       DELETE FROM guest_relationships
