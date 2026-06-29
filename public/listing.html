@@ -159,6 +159,18 @@
         <div id="listingManagersContainer" class="cleaning-empty">Loading managers...</div>
       </section>
 
+      <section class="listing-form-section" id="listingPricingSection">
+        <h3>Pricing</h3>
+        <div class="calendar-source-row">
+          <label for="listingPerNightPrice">Per Night Price</label>
+          <input id="listingPerNightPrice" type="number" min="0" step="0.01" placeholder="e.g. 120" />
+        </div>
+        <div class="calendar-source-row">
+          <label for="listingPerStayPrice">Per Stay Price</label>
+          <input id="listingPerStayPrice" type="number" min="0" step="0.01" placeholder="e.g. 40" />
+        </div>
+      </section>
+
       <div class="feed-actions floating-action-bar" style="margin-top: 1.5rem;">
         <button type="submit" id="saveListingBtn" class="btn primary calendar-btn action-icon action-save" form="renameListingForm" aria-label="Save Listing">Save Listing</button>
         <button type="button" id="deleteListingBtn" class="btn secondary action-icon action-delete" aria-label="Delete Listing">Delete Listing</button>
