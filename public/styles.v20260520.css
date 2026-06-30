@@ -1097,6 +1097,11 @@ textarea:focus {
   gap: 0.55rem;
 }
 
+.landing-page-form .landing-listing-selection label {
+  width: auto;
+  flex-shrink: 1;
+}
+
 .landing-listing-row {
   border: 1px solid #e4e9f6;
   border-radius: 10px;
@@ -1105,11 +1110,30 @@ textarea:focus {
 }
 
 .landing-listing-toggle {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.45rem;
   font-size: 0.92rem;
   color: #1f2d4f;
+  width: 100%;
+}
+
+.landing-listing-toggle input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: auto;
+  -webkit-appearance: checkbox;
+  background: transparent;
+}
+
+.landing-listing-toggle span {
+  white-space: nowrap;
 }
 
 .landing-listing-url-row {
@@ -1119,8 +1143,27 @@ textarea:focus {
   gap: 0.3rem;
 }
 
+.landing-page-form .landing-listing-url-row label {
+  width: auto;
+  white-space: nowrap;
+}
+
 .landing-listing-url-row input:disabled {
   opacity: 0.65;
+}
+
+.landing-page-form .calendar-source-row.checkbox-row {
+  align-items: center;
+}
+
+.landing-page-form .calendar-source-row.checkbox-row input[type="checkbox"] {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  cursor: pointer;
+  appearance: auto;
+  -webkit-appearance: checkbox;
 }
 
 .config-item-empty {
