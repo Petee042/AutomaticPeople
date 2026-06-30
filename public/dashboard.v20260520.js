@@ -4297,6 +4297,8 @@ async function fetchBankDetails() {
     document.getElementById('bankAccountName').value = data.accountName || '';
     document.getElementById('bankSortCode').value = data.sortCode || '';
     document.getElementById('bankAccountNumber').value = data.accountNumber || '';
+    document.getElementById('bankIban').value = data.iban || '';
+    document.getElementById('bankBic').value = data.bic || '';
     document.getElementById('bankIsBusiness').checked = data.isBusiness === true;
   } catch {
     // non-fatal
@@ -4308,15 +4310,36 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   setBankDetailsMessage('', false);
   const btn = document.getElementById('saveBankDetailsBtn');
+  const accountName = String((document.getElementById('bankAccountName') || {}).value || '').trim();
+  const sortCode = String((document.getElementById('bankSortCode') || {}).value || '').trim();
+  const accountNumber = String((document.getElementById('bankAccountNumber') || {}).value || '').trim();
+  const iban = String((document.getElementById('bankIban') || {}).value || '').trim();
+  const bic = String((document.getElementById('bankBic') || {}).value || '').trim();
+
+  if (!accountName || !sortCode || !accountNumber) {
+    setBankDetailsMessage('Account name, sort code, and account number are required.', true);
+    return;
+  }
+  if (!iban) {
+    setBankDetailsMessage('IBAN is required.', true);
+    return;
+  }
+  if (!bic) {
+    setBankDetailsMessage('BIC is required.', true);
+    return;
+  }
+
   if (btn) btn.disabled = true;
   try {
     const res = await fetch('/api/account/bank-details', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        accountName: (document.getElementById('bankAccountName') || {}).value || '',
-        sortCode: (document.getElementById('bankSortCode') || {}).value || '',
-        accountNumber: (document.getElementById('bankAccountNumber') || {}).value || '',
+        accountName,
+        sortCode,
+        accountNumber,
+        iban,
+        bic,
         isBusiness: !!(document.getElementById('bankIsBusiness') || {}).checked
       })
     });

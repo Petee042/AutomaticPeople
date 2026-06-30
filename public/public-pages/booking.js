@@ -44,11 +44,14 @@ function getEnabledPaymentOptions(resource) {
     return [];
   }
 
+  const onlinePaymentEnabled = isEnabledValue(resource.online_payment)
+    && resource.online_payment_available === true;
+
   const options = [
     { key: 'free_of_charge', label: 'Free Of Charge', enabled: isEnabledValue(resource.free_of_charge) },
     { key: 'cash_on_site', label: 'Cash On Site', enabled: isEnabledValue(resource.cash_on_site) },
     { key: 'bank_transfer', label: 'Bank Transfer', enabled: isEnabledValue(resource.bank_transfer) },
-    { key: 'online_payment', label: 'Online Payment', enabled: isEnabledValue(resource.online_payment) }
+    { key: 'online_payment', label: 'Online Payment', enabled: onlinePaymentEnabled }
   ];
 
   return options.filter((option) => option.enabled);
@@ -71,6 +74,13 @@ function populatePaymentSelectionDropdown(resource) {
   });
 
   select.value = '';
+
+  if (resource && isEnabledValue(resource.online_payment) && resource.online_payment_available !== true) {
+    setBookingMessage(
+      String(resource.online_payment_unavailable_reason || 'Online payment is temporarily unavailable for this reservation.'),
+      false
+    );
+  }
 }
 
 function syncMirroredField(sourceId, targetId) {

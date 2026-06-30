@@ -156,6 +156,9 @@ async function loadPublicResource() {
     }
 
     currentResource = data.resource;
+    if (currentResource.online_payment_available !== true) {
+      throw new Error(currentResource.online_payment_unavailable_reason || 'Online payment is currently unavailable for this resource.');
+    }
     document.getElementById('reservationTitle').textContent = (currentResource.short_description || 'Reservation') + ' - Online Payment';
 
     renderPaymentMethodMessage(currentResource, paymentOption);

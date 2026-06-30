@@ -56,6 +56,12 @@ async function loadGuest() {
   document.getElementById('guestEmail').value = guest.guest_email || '';
   document.getElementById('guestPhone').value = guest.guest_phone || '';
   document.getElementById('guestSourceType').value = guest.source_type || '';
+
+  const deleteBtn = document.getElementById('deleteGuestBtn');
+  if (deleteBtn && guest.has_future_reservations === true) {
+    deleteBtn.disabled = true;
+    setGuestMessage('Delete disabled: this guest has future reservations.', true);
+  }
 }
 
 (async () => {

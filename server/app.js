@@ -1222,6 +1222,16 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE client_accounts
+    ADD COLUMN IF NOT EXISTS bank_iban TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_accounts
+    ADD COLUMN IF NOT EXISTS bank_bic TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_cleaners_cleaner_user_id
     ON cleaners (cleaner_user_id)
   `);
@@ -1802,6 +1812,66 @@ function toMinorUnits(amount) {
     return null;
   }
   return Math.round(numeric * 100);
+}
+
+function normaliseBankIban(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 34);
+}
+
+function normaliseBankBic(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 11);
+}
+
+function isOnlinePaymentAvailableForHostUser(hostUser) {
+  return Boolean(
+    stripeClient
+    && STRIPE_PUBLISHABLE_KEY
+    && hostUser
+    && hostUser.stripe_account_id
+    && hostUser.stripe_charges_enabled === true
+    && hostUser.stripe_payouts_enabled === true
+  );
+}
+
+function rankSplitStayOptions(options, preferredListingId) {
+  const preferredId = Number(preferredListingId || 0);
+  const normalised = (Array.isArray(options) ? options : []).map((option, index) => {
+    const segments = Array.isArray(option && option.segments) ? option.segments : [];
+    const totalPriceRaw = Number(option && option.totalPrice);
+    const totalPrice = Number.isFinite(totalPriceRaw) ? totalPriceRaw : Number.POSITIVE_INFINITY;
+    const moves = Math.max(0, segments.length - 1);
+    const preferredListingNights = segments.reduce((sum, segment) => {
+      const segmentListingId = Number(segment && segment.listingId || 0);
+      const segmentNights = Number(segment && segment.nights || 0);
+      if (!Number.isInteger(preferredId) || preferredId <= 0 || segmentListingId !== preferredId || !Number.isFinite(segmentNights) || segmentNights <= 0) {
+        return sum;
+      }
+      return sum + segmentNights;
+    }, 0);
+
+    return {
+      option,
+      totalPrice,
+      moves,
+      preferredListingNights,
+      originalIndex: index
+    };
+  });
+
+  normalised.sort((left, right) => {
+    if (left.totalPrice !== right.totalPrice) {
+      return left.totalPrice - right.totalPrice;
+    }
+    if (left.moves !== right.moves) {
+      return left.moves - right.moves;
+    }
+    if (left.preferredListingNights !== right.preferredListingNights) {
+      return right.preferredListingNights - left.preferredListingNights;
+    }
+    return left.originalIndex - right.originalIndex;
+  });
+
+  return normalised.map((row) => row.option);
 }
 
 function getDefaultSharedResourceReservationStatus(resource) {
@@ -6553,6 +6623,16 @@ async function deleteGuestForClientAccount(clientAccountId, guestId) {
     return { error: 'Guest not found.' };
   }
 
+  const guestEmail = normaliseOptionalEmail(guest.guest_email);
+  if (guestEmail) {
+    const futureCounts = await getFutureReservationCountsForGuestEmail(clientAccountId, guestEmail);
+    const futurePrivateCount = Number(futureCounts.privateCount || 0);
+    const futureSharedCount = Number(futureCounts.sharedCount || 0);
+    if (futurePrivateCount > 0 || futureSharedCount > 0) {
+      return { error: 'Guest cannot be deleted while future reservations exist.' };
+    }
+  }
+
   const guestUserId = Number(guest.guest_user_id || 0);
   if (Number.isInteger(guestUserId) && guestUserId > 0) {
     const removal = await removeGuestSiteUserFromClientScope(clientAccountId, guestUserId);
@@ -6576,6 +6656,42 @@ async function deleteGuestForClientAccount(clientAccountId, guestId) {
   }
 
   return { deletedGuestId: Number(result.rows[0].id) };
+}
+
+async function getFutureReservationCountsForGuestEmail(clientAccountId, guestEmail) {
+  const accountId = Number(clientAccountId || 0);
+  const email = normaliseOptionalEmail(guestEmail);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !email) {
+    return { privateCount: 0, sharedCount: 0 };
+  }
+
+  const futureReservationsResult = await pool.query(
+    `
+      WITH future_private AS (
+        SELECT COUNT(*)::bigint AS count_value
+        FROM reservation_activity
+        WHERE client_account_id = $1
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $2
+          AND reservation_checkout_date >= CURRENT_DATE
+      ),
+      future_shared AS (
+        SELECT COUNT(*)::bigint AS count_value
+        FROM shared_resource_reservations
+        WHERE client_account_id = $1
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $2
+          AND COALESCE(reservation_checkout_date, DATE(requested_end_at), DATE(requested_start_at)) >= CURRENT_DATE
+      )
+      SELECT
+        COALESCE((SELECT count_value FROM future_private), 0) AS private_count,
+        COALESCE((SELECT count_value FROM future_shared), 0) AS shared_count
+    `,
+    [accountId, email]
+  );
+
+  return {
+    privateCount: Number(futureReservationsResult.rows[0] && futureReservationsResult.rows[0].private_count || 0),
+    sharedCount: Number(futureReservationsResult.rows[0] && futureReservationsResult.rows[0].shared_count || 0)
+  };
 }
 
 async function upsertBookedInChangesForUser(userId, changes) {
@@ -9265,7 +9381,7 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   try {
     const clientAccountId = req.accessContext.activeClientAccountId;
     const result = await pool.query(
-      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business FROM client_accounts WHERE id = $1 LIMIT 1',
+      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
       [clientAccountId]
     );
     if (!result.rows[0]) {
@@ -9276,7 +9392,9 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
       accountName: row.bank_account_name || '',
       sortCode: row.bank_sort_code || '',
       accountNumber: row.bank_account_number || '',
-      isBusiness: row.bank_is_business === true
+      isBusiness: row.bank_is_business === true,
+      iban: row.bank_iban || '',
+      bic: row.bank_bic || ''
     });
   } catch (err) {
     console.error(err);
@@ -9289,17 +9407,35 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   const accountName = sanitizeHtml(String(req.body.accountName || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 200);
   const sortCode = sanitizeHtml(String(req.body.sortCode || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
   const accountNumber = sanitizeHtml(String(req.body.accountNumber || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
+  const iban = normaliseBankIban(sanitizeHtml(String(req.body.iban || '').trim(), { allowedTags: [], allowedAttributes: {} }));
+  const bic = normaliseBankBic(sanitizeHtml(String(req.body.bic || '').trim(), { allowedTags: [], allowedAttributes: {} }));
   const isBusiness = req.body.isBusiness === true || req.body.isBusiness === 'true';
+
+  if (!accountName || !sortCode || !accountNumber) {
+    return res.status(400).json({ error: 'Account name, sort code and account number are required.' });
+  }
+  if (!iban) {
+    return res.status(400).json({ error: 'IBAN is required.' });
+  }
+  if (!bic) {
+    return res.status(400).json({ error: 'BIC is required.' });
+  }
 
   try {
     const clientAccountId = req.accessContext.activeClientAccountId;
     await pool.query(
       `UPDATE client_accounts
-       SET bank_account_name = $1, bank_sort_code = $2, bank_account_number = $3, bank_is_business = $4, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5`,
-      [accountName, sortCode, accountNumber, isBusiness, clientAccountId]
+       SET bank_account_name = $1,
+           bank_sort_code = $2,
+           bank_account_number = $3,
+           bank_is_business = $4,
+           bank_iban = $5,
+           bank_bic = $6,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7`,
+      [accountName, sortCode, accountNumber, isBusiness, iban, bic, clientAccountId]
     );
-    return res.json({ accountName, sortCode, accountNumber, isBusiness });
+    return res.json({ accountName, sortCode, accountNumber, isBusiness, iban, bic });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to save bank details.' });
@@ -9909,8 +10045,18 @@ app.get('/api/public/shared-resources/:resourceId', async (req, res) => {
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
+    const hostUser = await getUserById(Number(resource.user_id || 0));
+    const onlinePaymentAvailable = resource.online_payment === true && isOnlinePaymentAvailableForHostUser(hostUser);
     const { user_id: _ignoreUserId, ...publicResource } = resource;
-    return res.json({ resource: publicResource });
+    return res.json({
+      resource: {
+        ...publicResource,
+        online_payment_available: onlinePaymentAvailable,
+        online_payment_unavailable_reason: onlinePaymentAvailable
+          ? ''
+          : (resource.online_payment === true ? 'Host online payment is currently unavailable.' : '')
+      }
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load shared resource.' });
@@ -10105,6 +10251,10 @@ app.post('/api/public/shared-resources/:resourceId/online-payment/prepare', asyn
       return res.status(400).json({ error: 'Host Stripe account is not connected yet.' });
     }
 
+    if (!isOnlinePaymentAvailableForHostUser(hostUser)) {
+      return res.status(400).json({ error: 'Host online payment is currently unavailable.' });
+    }
+
     const stripeAccount = await stripeClient.accounts.retrieve(String(hostUser.stripe_account_id));
     await setUserStripeConnectState(hostUser.id, {
       stripe_account_id: stripeAccount.id,
@@ -10232,6 +10382,24 @@ app.get('/api/public/reservations/by-identifier/:identifier', async (req, res) =
   }
 });
 
+// POST /api/public/reservation-enquiry/split-stay/rank — rank split-stay combinations
+app.post('/api/public/reservation-enquiry/split-stay/rank', async (req, res) => {
+  const options = Array.isArray(req.body && req.body.options) ? req.body.options : [];
+  if (!options.length) {
+    return res.status(400).json({ error: 'A non-empty options array is required.' });
+  }
+
+  const preferredListingId = Number(req.body && req.body.preferredListingId || 0);
+
+  try {
+    const ranked = rankSplitStayOptions(options, preferredListingId);
+    return res.json({ rankedOptions: ranked });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to rank split-stay options.' });
+  }
+});
+
 // POST /api/public/shared-resources/:resourceId/reservations — create a public reservation
 app.post('/api/public/shared-resources/:resourceId/reservations', async (req, res) => {
   const resourceId = Number(req.params.resourceId);
@@ -10273,6 +10441,8 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
+    const hostUser = await getUserById(Number(resource.user_id || 0));
+    const onlinePaymentAvailable = resource.online_payment === true && isOnlinePaymentAvailableForHostUser(hostUser);
 
     const optionConfig = {
       free_of_charge: {
@@ -10291,9 +10461,9 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         error: 'Bank transfer is not enabled for this resource.'
       },
       online_payment: {
-        enabled: resource.online_payment === true,
+        enabled: onlinePaymentAvailable,
         status: 'Awaiting Online Confirmation',
-        error: 'Online payment is not enabled for this resource.'
+        error: 'Online payment is not currently available for this resource.'
       }
     };
 
@@ -10376,6 +10546,33 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
 
       if (String(resource.resource_type || '').trim().toLowerCase() === 'parking' && vehicleRegistration) {
         lines.push('Registration Number: ' + vehicleRegistration);
+      }
+
+      if (paymentOption === 'bank_transfer') {
+        const bankResult = await pool.query(
+          'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+          [Number(resource.client_account_id || 0)]
+        );
+        const bankRow = bankResult.rows[0] || {};
+        const bankAccountName = String(bankRow.bank_account_name || '').trim();
+        const bankSortCode = String(bankRow.bank_sort_code || '').trim();
+        const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
+        const bankIban = String(bankRow.bank_iban || '').trim();
+        const bankBic = String(bankRow.bank_bic || '').trim();
+        const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
+
+        if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban || !bankBic) {
+          return res.status(400).json({ error: 'Host bank transfer details are incomplete. Please contact the host.' });
+        }
+
+        lines.push('');
+        lines.push('Bank Transfer Details:');
+        lines.push('Account name: ' + bankAccountName);
+        lines.push('Sort code: ' + bankSortCode);
+        lines.push('Account number: ' + bankAccountNumber);
+        lines.push('IBAN: ' + bankIban);
+        lines.push('BIC: ' + bankBic);
+        lines.push('Account type: ' + bankType);
       }
 
       const emailResult = await sendAppEmail({
@@ -11059,7 +11256,14 @@ app.get('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req,
     if (!guest) {
       return res.status(404).json({ error: 'Guest not found.' });
     }
-    return res.json({ guest });
+    const futureCounts = await getFutureReservationCountsForGuestEmail(req.accessContext.activeClientAccountId, guest.guest_email);
+    return res.json({
+      guest: {
+        ...guest,
+        future_reservation_count: Number(futureCounts.privateCount || 0) + Number(futureCounts.sharedCount || 0),
+        has_future_reservations: Number(futureCounts.privateCount || 0) + Number(futureCounts.sharedCount || 0) > 0
+      }
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load guest relationship.' });
@@ -12842,15 +13046,21 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
 
     if (paymentMethod === 'Bank Transfer') {
       const bankResult = await pool.query(
-        'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business FROM client_accounts WHERE id = $1 LIMIT 1',
+        'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
         [req.accessContext.activeClientAccountId]
       );
       const bankRow = bankResult.rows[0] || {};
       const bankAccountName = String(bankRow.bank_account_name || '').trim();
       const bankSortCode = String(bankRow.bank_sort_code || '').trim();
       const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
+      const bankIban = String(bankRow.bank_iban || '').trim();
+      const bankBic = String(bankRow.bank_bic || '').trim();
       const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
       const dueText = formatDateTimeForMessage(holdUntilAt);
+
+      if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban || !bankBic) {
+        return res.status(400).json({ error: 'Bank transfer details must include account name, sort code, account number, IBAN, and BIC.' });
+      }
 
       const textLines = [
         'Payment Request For Accommodation',
@@ -12867,6 +13077,8 @@ app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, 
         'Account name: ' + (bankAccountName || 'Not configured'),
         'Sort code: ' + (bankSortCode || 'Not configured'),
         'Account number: ' + (bankAccountNumber || 'Not configured'),
+        'IBAN: ' + (bankIban || 'Not configured'),
+        'BIC: ' + (bankBic || 'Not configured'),
         'Account type: ' + bankType,
         '',
         termsStatement,
