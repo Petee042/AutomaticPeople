@@ -421,15 +421,13 @@ document.getElementById('landingPageForm').addEventListener('submit', async (eve
     const saved = data.landingPage || {};
     setLandingPageMessage('Landing page saved.', false);
 
-    if (isCreateMode && Number.isInteger(Number(saved.id)) && Number(saved.id) > 0) {
-      window.location.href = '/reservation-enquiry-landing-page.html?id=' + encodeURIComponent(saved.id);
-      return;
-    }
-
     if (saved.public_slug) {
       currentPublicSlug = String(saved.public_slug || '');
       refreshPublicUrlDisplay();
     }
+
+    goBackToConfig();
+    return;
   } catch (err) {
     setLandingPageMessage(err.message || 'Failed to save landing page.', true);
   } finally {

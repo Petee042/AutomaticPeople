@@ -12,18 +12,13 @@ let reservationEnquiryOptions = [];
 let reservationEnquirySelectedOptionKey = '';
 let reservationEnquiryLastSearch = null;
 
-function isReservationEnquiryConditionsConfirmed() {
-  const checkbox = document.getElementById('reservationEnquiryConfirmConditions');
-  return Boolean(checkbox && checkbox.checked);
-}
-
 function updateReservationEnquiryContinueButtonState() {
   const button = document.getElementById('reservationEnquiryContinueBtn');
   if (!button) {
     return;
   }
   const selected = reservationEnquiryOptions.find((option) => option.key === reservationEnquirySelectedOptionKey) || null;
-  button.disabled = !selected || !isReservationEnquiryConditionsConfirmed();
+  button.disabled = !selected;
 }
 
 function setReservationEnquiryMessage(text, isError) {
@@ -95,9 +90,16 @@ function renderReservationEnquiryCalendars() {
       );
     }
 
+    const listingViewButton = String(calendar.listingUrl || '').trim()
+      ? '<button type="button" class="btn secondary reservation-enquiry-view-btn" data-view-url="' + String(calendar.listingUrl || '').replace(/"/g, '&quot;') + '" aria-label="Open listing details"></button>'
+      : '';
+
     return ''
       + '<article class="reservation-enquiry-calendar-card">'
-      +   '<div class="reservation-enquiry-calendar-title">' + String(calendar.listingName || '') + '</div>'
+      +   '<div class="reservation-enquiry-calendar-title-row">'
+      +     '<div class="reservation-enquiry-calendar-title">' + String(calendar.listingName || '') + '</div>'
+      +     listingViewButton
+      +   '</div>'
       +   '<p class="reservation-enquiry-calendar-subtitle">' + String(calendar.propertyName || '') + '</p>'
       +   '<div class="reservation-enquiry-weekdays">' + weekdayLabels.map((item) => '<span>' + item + '</span>').join('') + '</div>'
       +   '<div class="reservation-enquiry-days">' + dayCells.join('') + '</div>'
@@ -131,9 +133,6 @@ function renderReservationEnquiryResults() {
       const text = String(segment.propertyName || '') + ' / ' + String(segment.listingName || '') + ' (' + String(segment.arrivalDate || '') + ' to ' + String(segment.departureDate || '') + ')';
       return '<span class="reservation-enquiry-option-line">' + text + '</span>';
     }).join('');
-    const viewButton = option.listingUrl
-      ? '<button type="button" class="btn secondary reservation-enquiry-view-btn" data-view-url="' + String(option.listingUrl).replace(/"/g, '&quot;') + '" aria-label="Open listing details"></button>'
-      : '';
     const discountCell = showDiscountColumn
       ? ('<td>' + formatReservationEnquiryMoney(option.discountedTotalPrice) + '</td>')
       : '';
@@ -142,7 +141,6 @@ function renderReservationEnquiryResults() {
       + '<tr>'
       +   '<td>' + String(option.propertyName || '') + '</td>'
       +   '<td><div class="reservation-enquiry-option-lines">' + optionLines + '</div></td>'
-      +   '<td>' + viewButton + '</td>'
       +   '<td>' + formatReservationEnquiryMoney(option.totalPrice) + '</td>'
       +   discountCell
       +   '<td><input class="reservation-enquiry-option-select" type="checkbox" data-option-index="' + String(index) + '"' + checked + ' /></td>'
@@ -252,10 +250,6 @@ document.getElementById('reservationEnquirySearchForm').addEventListener('submit
 
   setReservationEnquiryMessage('Checking availability...', false);
   reservationEnquirySelectedOptionKey = '';
-  const conditionsCheckbox = document.getElementById('reservationEnquiryConfirmConditions');
-  if (conditionsCheckbox) {
-    conditionsCheckbox.checked = false;
-  }
 
   try {
     const response = await fetch('/api/public/reservation-enquiry-landing-pages/' + encodeURIComponent(reservationEnquirySlug) + '/check-availability', {
@@ -300,14 +294,7 @@ document.getElementById('reservationEnquiryResultsBody').addEventListener('chang
   renderReservationEnquiryResults();
 });
 
-const reservationEnquiryConfirmConditions = document.getElementById('reservationEnquiryConfirmConditions');
-if (reservationEnquiryConfirmConditions) {
-  reservationEnquiryConfirmConditions.addEventListener('change', () => {
-    updateReservationEnquiryContinueButtonState();
-  });
-}
-
-document.getElementById('reservationEnquiryResultsBody').addEventListener('click', (event) => {
+document.getElementById('reservationEnquiryCalendarGrid').addEventListener('click', (event) => {
   const target = event.target;
   if (!target || !target.classList || !target.classList.contains('reservation-enquiry-view-btn')) {
     return;
@@ -328,10 +315,6 @@ document.getElementById('reservationEnquiryContinueBtn').addEventListener('click
   const selected = reservationEnquiryOptions.find((option) => option.key === reservationEnquirySelectedOptionKey) || null;
   if (!selected) {
     setReservationEnquiryMessage('Select exactly one reservation option to continue.', true);
-    return;
-  }
-  if (!isReservationEnquiryConditionsConfirmed()) {
-    setReservationEnquiryMessage('Please confirm the Conditions before continuing.', true);
     return;
   }
   persistReservationEnquirySelection(selected);

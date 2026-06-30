@@ -1176,8 +1176,7 @@ textarea:focus {
 }
 
 .reservation-enquiry-description,
-.reservation-enquiry-notes,
-.reservation-enquiry-payment-notes {
+.reservation-enquiry-notes {
   color: #243557;
   line-height: 1.55;
 }
@@ -1251,18 +1250,6 @@ textarea:focus {
   box-shadow: 0 7px 15px rgba(19, 48, 112, 0.2);
 }
 
-.reservation-enquiry-terms-confirm-block {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.9rem;
-  margin: 0.9rem 0 0.25rem;
-  padding: 0.7rem 0.8rem;
-  border: 1px solid #dce5f7;
-  border-radius: 12px;
-  background: #f8fbff;
-}
-
 .reservation-enquiry-confirm-label {
   display: flex;
   align-items: flex-start;
@@ -1301,6 +1288,13 @@ textarea:focus {
   font-size: 0.95rem;
   font-weight: 700;
   color: #17346f;
+}
+
+.reservation-enquiry-calendar-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
 }
 
 .reservation-enquiry-calendar-subtitle {
@@ -1416,7 +1410,7 @@ textarea:focus {
 
 .reservation-enquiry-footer-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   gap: 0.8rem;
   flex-wrap: wrap;
@@ -1427,7 +1421,10 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  margin-left: auto;
+}
+
+.reservation-enquiry-footer-buttons .btn {
+  margin-top: 0;
 }
 
 .reservation-enquiry-clear-btn {
@@ -1443,7 +1440,6 @@ textarea:focus {
 .reservation-enquiry-selection-summary {
   font-size: 0.82rem;
   color: #60708f;
-  margin-right: auto;
 }
 
 .reservation-enquiry-detail-list {
@@ -1474,13 +1470,9 @@ textarea:focus {
   }
 
   .reservation-enquiry-section-header,
-  .reservation-enquiry-terms-confirm-block {
+  .reservation-enquiry-footer-actions {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .reservation-enquiry-footer-actions {
-    justify-content: space-between;
   }
 
   .reservation-enquiry-footer-buttons {

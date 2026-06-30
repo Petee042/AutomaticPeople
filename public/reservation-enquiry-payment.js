@@ -26,6 +26,24 @@ function formatReservationEnquiryPaymentMoney(value) {
   return 'GBP ' + amount.toFixed(2);
 }
 
+function formatReservationEnquiryPaymentDate(value) {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text || '-';
+  }
+  const dt = new Date(text + 'T00:00:00Z');
+  if (!Number.isFinite(dt.getTime())) {
+    return text;
+  }
+  return dt.toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC'
+  });
+}
+
 function loadReservationEnquirySelection() {
   const raw = window.sessionStorage.getItem(RESERVATION_ENQUIRY_SELECTION_STORAGE_KEY);
   if (!raw) {
@@ -77,7 +95,7 @@ function renderReservationEnquiryPaymentPage() {
     return;
   }
   document.getElementById('reservationEnquiryPaymentTitle').textContent = String(reservationEnquirySelection.title || 'Reservation Enquiry');
-  document.getElementById('reservationEnquiryPaymentStay').textContent = String(reservationEnquirySelection.arrivalDate || '') + ' to ' + String(reservationEnquirySelection.departureDate || '');
+  document.getElementById('reservationEnquiryPaymentStay').textContent = formatReservationEnquiryPaymentDate(reservationEnquirySelection.arrivalDate) + ' to ' + formatReservationEnquiryPaymentDate(reservationEnquirySelection.departureDate);
   document.getElementById('reservationEnquiryPaymentGuests').textContent = String(reservationEnquirySelection.guestCount || '');
   document.getElementById('reservationEnquiryPaymentOption').textContent = String(reservationEnquirySelection.option && reservationEnquirySelection.option.label || '');
   const payableAmount = reservationEnquirySelection.paymentMethod === 'online' || Number(reservationEnquirySelection.option && reservationEnquirySelection.option.discountedTotalPrice || 0) > 0
@@ -85,13 +103,6 @@ function renderReservationEnquiryPaymentPage() {
     : Number(reservationEnquirySelection.option && reservationEnquirySelection.option.totalPrice || 0);
   document.getElementById('reservationEnquiryPaymentAmount').textContent = formatReservationEnquiryPaymentMoney(payableAmount);
   document.getElementById('reservationEnquiryPaymentMethod').textContent = reservationEnquirySelection.paymentMethod === 'online' ? 'Online' : 'Bank Transfer';
-  const notesSection = document.getElementById('reservationEnquiryPaymentNotesSection');
-  const notesEl = document.getElementById('reservationEnquiryPaymentNotes');
-  const notesHtml = String(reservationEnquirySelection.notesHtml || '').trim();
-  if (notesSection && notesEl) {
-    notesSection.classList.toggle('hidden', !notesHtml);
-    notesEl.innerHTML = notesHtml;
-  }
 
   if (reservationEnquirySelection.paymentMethod === 'online') {
     setReservationEnquirySubmitButton('Load Payment Form', false);
