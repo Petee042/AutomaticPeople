@@ -227,11 +227,6 @@ document.getElementById('reservationEnquiryNextMonthBtn').addEventListener('clic
   renderReservationEnquiryCalendars();
 });
 
-document.getElementById('reservationEnquiryTermsBtn').addEventListener('click', () => {
-  const url = reservationEnquiryPage && reservationEnquiryPage.terms_url ? String(reservationEnquiryPage.terms_url) : '/guest-terms-and-conditions.html';
-  window.open(url, '_blank', 'noopener');
-});
-
 document.getElementById('reservationEnquirySearchForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const result = getReservationEnquirySearchPayload();

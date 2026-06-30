@@ -18,9 +18,9 @@
 
       <section class="listing-form-section">
         <div class="reservation-enquiry-month-header">
-          <button type="button" id="reservationEnquiryPrevMonthBtn" class="btn secondary">Previous Month</button>
+          <button type="button" id="reservationEnquiryPrevMonthBtn" class="btn secondary reservation-enquiry-month-icon-btn" aria-label="Previous month">&lt;</button>
           <div id="reservationEnquiryMonthLabel" class="reservation-enquiry-month-label"></div>
-          <button type="button" id="reservationEnquiryNextMonthBtn" class="btn secondary">Next Month</button>
+          <button type="button" id="reservationEnquiryNextMonthBtn" class="btn secondary reservation-enquiry-month-icon-btn" aria-label="Next month">&gt;</button>
         </div>
         <div id="reservationEnquiryCalendarGrid" class="reservation-enquiry-calendar-grid"></div>
       </section>
@@ -40,8 +40,8 @@
           </div>
 
           <div class="reservation-enquiry-inline-actions">
-            <button type="button" id="reservationEnquiryTermsBtn" class="btn secondary">Reservation Terms and Conditions</button>
-            <button type="submit" id="reservationEnquiryCheckAvailabilityBtn" class="btn primary">Check Availability</button>
+            <a id="reservationEnquiryTermsLink" class="reservation-enquiry-terms-link" href="/guest-terms-and-conditions.html" target="_blank" rel="noopener noreferrer">Terms and Conditions of Reservation</a>
+            <button type="submit" id="reservationEnquiryCheckAvailabilityBtn" class="btn primary reservation-enquiry-check-btn" aria-label="Check Availability">?</button>
           </div>
         </form>
       </section>

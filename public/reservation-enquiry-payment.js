@@ -67,6 +67,11 @@ function setReservationEnquirySubmitButton(text, disabled) {
   button.disabled = Boolean(disabled);
 }
 
+function isReservationEnquiryTermsConfirmed() {
+  const checkbox = document.getElementById('reservationEnquiryConfirmTerms');
+  return Boolean(checkbox && checkbox.checked);
+}
+
 function renderReservationEnquiryPaymentPage() {
   if (!reservationEnquirySelection) {
     return;
@@ -92,6 +97,18 @@ function renderReservationEnquiryPaymentPage() {
     setReservationEnquirySubmitButton('Load Payment Form', false);
   } else {
     setReservationEnquirySubmitButton('Confirm Reservation', false);
+  }
+
+  const confirmCheckbox = document.getElementById('reservationEnquiryConfirmTerms');
+  if (confirmCheckbox) {
+    confirmCheckbox.addEventListener('change', () => {
+      setReservationEnquirySubmitButton(
+        reservationEnquirySelection.paymentMethod === 'online'
+          ? (reservationEnquiryPreparedPayment ? 'Pay and Confirm Reservation' : 'Load Payment Form')
+          : 'Confirm Reservation',
+        !isReservationEnquiryTermsConfirmed()
+      );
+    });
   }
 }
 
@@ -181,6 +198,10 @@ document.getElementById('reservationEnquiryPaymentSubmitBtn').addEventListener('
     setReservationEnquiryPaymentMessage(guest.error, true);
     return;
   }
+  if (!isReservationEnquiryTermsConfirmed()) {
+    setReservationEnquiryPaymentMessage('Please confirm the Terms and Conditions of Reservation before continuing.', true);
+    return;
+  }
   setReservationEnquirySubmitButton(null, true);
 
   try {
@@ -227,4 +248,21 @@ document.getElementById('reservationEnquiryPaymentSubmitBtn').addEventListener('
     return;
   }
   renderReservationEnquiryPaymentPage();
+  const confirmCheckbox = document.getElementById('reservationEnquiryConfirmTerms');
+  if (confirmCheckbox) {
+    confirmCheckbox.addEventListener('change', () => {
+      setReservationEnquirySubmitButton(
+        reservationEnquirySelection.paymentMethod === 'online'
+          ? (reservationEnquiryPreparedPayment ? 'Pay and Confirm Reservation' : 'Load Payment Form')
+          : 'Confirm Reservation',
+        !isReservationEnquiryTermsConfirmed()
+      );
+    });
+  }
+  setReservationEnquirySubmitButton(
+    reservationEnquirySelection.paymentMethod === 'online'
+      ? 'Load Payment Form'
+      : 'Confirm Reservation',
+    !isReservationEnquiryTermsConfirmed()
+  );
 })();
