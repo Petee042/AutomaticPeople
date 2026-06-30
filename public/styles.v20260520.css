@@ -1076,6 +1076,20 @@ textarea:focus {
   font-size: 0.93rem;
 }
 
+.config-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.config-mini-btn {
+  height: 1.9rem;
+  padding: 0 0.58rem;
+  font-size: 0.78rem;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
 .config-item-empty {
   padding: 0.52rem 0.56rem;
   color: #5e6a86;

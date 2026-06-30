@@ -380,6 +380,126 @@ function createScopeBadge(text) {
   return badge;
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || '');
+  if (!value) {
+    throw new Error('Nothing to copy.');
+  }
+
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const temp = document.createElement('textarea');
+  temp.value = value;
+  temp.setAttribute('readonly', 'readonly');
+  temp.style.position = 'fixed';
+  temp.style.opacity = '0';
+  document.body.appendChild(temp);
+  temp.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(temp);
+  if (!ok) {
+    throw new Error('Clipboard unavailable.');
+  }
+}
+
+function buildReservationEnquiryLandingPublicUrl(row) {
+  const params = new URLSearchParams();
+  const slug = String(row && row.public_slug || '').trim();
+  const preferredListingId = Number(row && row.preferred_listing_id ? row.preferred_listing_id : 0);
+
+  if (slug) {
+    params.set('landingPage', slug);
+  }
+  if (Number.isInteger(preferredListingId) && preferredListingId > 0) {
+    params.set('preferredListingId', String(preferredListingId));
+  }
+  if (!slug && (!Number.isInteger(preferredListingId) || preferredListingId <= 0)) {
+    params.set('landingPageId', String(row && row.id ? row.id : ''));
+  }
+
+  const query = params.toString();
+  return window.location.origin + '/private-reservation.html' + (query ? ('?' + query) : '');
+}
+
+function renderReservationEnquiryLandingPageRows(containerId, rows) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(rows) || !rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'config-item-empty';
+    empty.textContent = 'No reservation enquiry landing pages yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  rows.forEach((rowData) => {
+    const row = document.createElement('div');
+    row.className = 'config-item-row';
+
+    const name = document.createElement('span');
+    name.className = 'config-item-name';
+    name.textContent = (rowData.name || ('Landing Page #' + rowData.id)) + (rowData.is_active === false ? ' (Inactive)' : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'config-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'btn secondary config-mini-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.title = 'Open public URL in new tab';
+    previewBtn.setAttribute('aria-label', 'Preview public URL for ' + (rowData.name || 'landing page'));
+    previewBtn.addEventListener('click', () => {
+      const url = buildReservationEnquiryLandingPublicUrl(rowData);
+      const tab = window.open(url, '_blank', 'noopener');
+      if (!tab) {
+        window.location.href = url;
+      }
+    });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn secondary config-mini-btn';
+    copyBtn.textContent = 'Copy URL';
+    copyBtn.title = 'Copy public URL';
+    copyBtn.setAttribute('aria-label', 'Copy public URL for ' + (rowData.name || 'landing page'));
+    copyBtn.addEventListener('click', async () => {
+      const url = buildReservationEnquiryLandingPublicUrl(rowData);
+      try {
+        await copyTextToClipboard(url);
+        setMessage('Copied landing page URL.', false);
+      } catch {
+        setMessage('Could not copy landing page URL.', true);
+      }
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn secondary config-edit-btn';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Edit';
+    editBtn.setAttribute('aria-label', 'Edit ' + (rowData.name || 'landing page'));
+    editBtn.addEventListener('click', () => {
+      window.location.href = '/reservation-enquiry-landing-page.html?id=' + encodeURIComponent(rowData.id);
+    });
+
+    actions.appendChild(previewBtn);
+    actions.appendChild(copyBtn);
+    actions.appendChild(editBtn);
+
+    row.appendChild(name);
+    row.appendChild(actions);
+    container.appendChild(row);
+  });
+}
+
 function renderConfigRows(containerId, items, emptyText) {
   const container = document.getElementById(containerId);
   if (!container) {
@@ -1134,16 +1254,9 @@ async function fetchReservationEnquiryLandingPages() {
     }
 
     const rows = Array.isArray(data.landingPages) ? data.landingPages : [];
-    renderConfigRows(
-      containerId,
-      rows.map((row) => ({
-        name: (row.name || ('Landing Page #' + row.id)) + (row.is_active === false ? ' (Inactive)' : ''),
-        href: '/reservation-enquiry-landing-page.html?id=' + encodeURIComponent(row.id)
-      })),
-      'No reservation enquiry landing pages yet.'
-    );
+    renderReservationEnquiryLandingPageRows(containerId, rows);
   } catch (err) {
-    renderConfigRows(containerId, [], 'No reservation enquiry landing pages yet.');
+    renderReservationEnquiryLandingPageRows(containerId, []);
     setMessage(err.message || 'Failed to load reservation enquiry landing pages.', true);
   }
 }
