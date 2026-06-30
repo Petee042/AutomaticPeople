@@ -7,6 +7,25 @@ const availabilityMap = {};
 let availabilityCheckId = 0;
 let preferredListingIdFromQuery = null;
 
+function formatMoney(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return '';
+  }
+  return 'GBP ' + amount.toFixed(2);
+}
+
+function setListingRankHint(text, isError) {
+  const hint = document.getElementById('listingRankHint');
+  if (!hint) {
+    return;
+  }
+  hint.textContent = text || '';
+  hint.className = isError
+    ? 'hint private-reservation-rank-hint error'
+    : 'hint private-reservation-rank-hint';
+}
+
 function getStayNights(arrival, departure) {
   if (!arrival || !departure || departure <= arrival) {
     return 0;
@@ -46,6 +65,7 @@ function localRankSingleStayOptions(options) {
 async function rankAvailableListings(arrival, departure) {
   const stayNights = getStayNights(arrival, departure);
   if (stayNights <= 0) {
+    setListingRankHint('Availability check will rank listings by estimated total price.', false);
     return;
   }
 
@@ -54,6 +74,7 @@ async function rankAvailableListings(arrival, departure) {
   });
 
   if (!availableListings.length) {
+    setListingRankHint('No available listings to rank for the selected dates.', false);
     return;
   }
 
@@ -77,6 +98,7 @@ async function rankAvailableListings(arrival, departure) {
   });
 
   let rankedOptions = [];
+  let usedFallback = false;
   try {
     const response = await fetch('/api/public/reservation-enquiry/split-stay/rank', {
       method: 'POST',
@@ -94,10 +116,12 @@ async function rankAvailableListings(arrival, departure) {
     const data = await response.json();
     rankedOptions = Array.isArray(data.rankedOptions) ? data.rankedOptions : [];
   } catch {
+    usedFallback = true;
     rankedOptions = localRankSingleStayOptions(options);
   }
 
   if (!rankedOptions.length) {
+    setListingRankHint('Could not rank listings for the selected dates.', true);
     return;
   }
 
@@ -106,6 +130,7 @@ async function rankAvailableListings(arrival, departure) {
     .filter(function(id) { return Number.isInteger(id) && id > 0; });
 
   if (!rankedIds.length) {
+    setListingRankHint('Could not rank listings for the selected dates.', true);
     return;
   }
 
@@ -132,6 +157,12 @@ async function rankAvailableListings(arrival, departure) {
   });
 
   allListings = reordered;
+  setListingRankHint(
+    usedFallback
+      ? 'Ranked by estimated total price (local fallback ranking active).'
+      : 'Ranked by estimated total price using reservation ranking rules.',
+    false
+  );
 }
 
 function setMessage(text, isError) {
@@ -167,6 +198,10 @@ function renderListings(listings) {
     Array.from(container.querySelectorAll('.cleaning-listing-checkbox:checked'))
       .map(function(cb) { return cb.value; })
   );
+  const arrival = String((document.getElementById('arrivalDate') || {}).value || '').trim();
+  const departure = String((document.getElementById('departureDate') || {}).value || '').trim();
+  const stayNights = getStayNights(arrival, departure);
+
   container.innerHTML = listings.map(function(listing) {
     const id = 'listing-chk-' + listing.id;
     const name = String(listing.name || listing.id);
@@ -184,11 +219,16 @@ function renderListings(listings) {
     }
     const checked = checkedIds.has(String(listing.id)) && !isDisabled ? ' checked' : '';
     const disabled = isDisabled ? ' disabled' : '';
+    const estimatedTotal = stayNights > 0 ? getListingEstimatedTotalPrice(listing, stayNights) : null;
+    const estimatedHtml = estimatedTotal !== null && Number.isFinite(estimatedTotal)
+      ? ('<span class="cleaning-listing-price">Est. total: ' + formatMoney(estimatedTotal) + '</span>')
+      : '';
     return (
       '<label class="cleaning-listing-row" for="' + id + '">' +
         indicatorHtml +
         '<input class="cleaning-listing-checkbox" type="checkbox" id="' + id + '" value="' + listing.id + '"' + checked + disabled + ' />' +
         '<span class="cleaning-listing-name">' + name + '</span>' +
+        estimatedHtml +
       '</label>'
     );
   }).join('');

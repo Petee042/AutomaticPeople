@@ -1133,6 +1133,13 @@ textarea:focus {
   color: #24304b;
 }
 
+.cleaning-listing-price {
+  margin-left: auto;
+  font-size: 0.84rem;
+  color: #4f5a73;
+  font-variant-numeric: tabular-nums;
+}
+
 .cleaning-listing-row:has(.cleaning-listing-checkbox:disabled) {
   opacity: 0.58;
   cursor: not-allowed;
@@ -1199,6 +1206,11 @@ textarea:focus {
 }
 .calendar-source-row:has(.cleaning-listings) > label {
   padding-top: 0.5rem;
+}
+
+.private-reservation-rank-hint {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
 }
 
 .cleaning-actions-row {
