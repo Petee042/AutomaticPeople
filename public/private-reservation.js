@@ -5,6 +5,134 @@ let guestUsers = [];
 // availabilityMap: listingId -> 'available' | 'unavailable' | 'loading' | null
 const availabilityMap = {};
 let availabilityCheckId = 0;
+let preferredListingIdFromQuery = null;
+
+function getStayNights(arrival, departure) {
+  if (!arrival || !departure || departure <= arrival) {
+    return 0;
+  }
+  const start = new Date(arrival + 'T00:00:00');
+  const end = new Date(departure + 'T00:00:00');
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return 0;
+  }
+  return Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000));
+}
+
+function getListingEstimatedTotalPrice(listing, stayNights) {
+  const nights = Number(stayNights || 0);
+  const perNight = Number(listing && listing.per_night_price);
+  const perStay = Number(listing && listing.per_stay_price);
+  const nightlyCost = Number.isFinite(perNight) ? perNight * nights : 0;
+  const stayCost = Number.isFinite(perStay) ? perStay : 0;
+  return Math.round((nightlyCost + stayCost) * 100) / 100;
+}
+
+function localRankSingleStayOptions(options) {
+  return (Array.isArray(options) ? options.slice() : []).sort(function(a, b) {
+    const leftTotal = Number(a && a.totalPrice);
+    const rightTotal = Number(b && b.totalPrice);
+    const safeLeft = Number.isFinite(leftTotal) ? leftTotal : Number.POSITIVE_INFINITY;
+    const safeRight = Number.isFinite(rightTotal) ? rightTotal : Number.POSITIVE_INFINITY;
+    if (safeLeft !== safeRight) {
+      return safeLeft - safeRight;
+    }
+    const leftName = String(a && a.listingName || '').toLowerCase();
+    const rightName = String(b && b.listingName || '').toLowerCase();
+    return leftName.localeCompare(rightName);
+  });
+}
+
+async function rankAvailableListings(arrival, departure) {
+  const stayNights = getStayNights(arrival, departure);
+  if (stayNights <= 0) {
+    return;
+  }
+
+  const availableListings = allListings.filter(function(listing) {
+    return availabilityMap[listing.id] === 'available';
+  });
+
+  if (!availableListings.length) {
+    return;
+  }
+
+  const selectedListingId = getSelectedListingId();
+  const preferredListingId = Number.isInteger(selectedListingId) && selectedListingId > 0
+    ? selectedListingId
+    : preferredListingIdFromQuery;
+
+  const options = availableListings.map(function(listing) {
+    return {
+      listingId: Number(listing.id),
+      listingName: String(listing.name || ''),
+      totalPrice: getListingEstimatedTotalPrice(listing, stayNights),
+      segments: [
+        {
+          listingId: Number(listing.id),
+          nights: stayNights
+        }
+      ]
+    };
+  });
+
+  let rankedOptions = [];
+  try {
+    const response = await fetch('/api/public/reservation-enquiry/split-stay/rank', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        preferredListingId: Number.isInteger(preferredListingId) && preferredListingId > 0 ? preferredListingId : null,
+        options
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('Ranking API unavailable');
+    }
+
+    const data = await response.json();
+    rankedOptions = Array.isArray(data.rankedOptions) ? data.rankedOptions : [];
+  } catch {
+    rankedOptions = localRankSingleStayOptions(options);
+  }
+
+  if (!rankedOptions.length) {
+    return;
+  }
+
+  const rankedIds = rankedOptions
+    .map(function(option) { return Number(option && option.listingId || 0); })
+    .filter(function(id) { return Number.isInteger(id) && id > 0; });
+
+  if (!rankedIds.length) {
+    return;
+  }
+
+  const listingById = new Map(allListings.map(function(listing) {
+    return [Number(listing.id), listing];
+  }));
+  const used = new Set();
+  const reordered = [];
+
+  rankedIds.forEach(function(id) {
+    const listing = listingById.get(id);
+    if (listing && !used.has(id)) {
+      reordered.push(listing);
+      used.add(id);
+    }
+  });
+
+  allListings.forEach(function(listing) {
+    const id = Number(listing.id);
+    if (!used.has(id)) {
+      reordered.push(listing);
+      used.add(id);
+    }
+  });
+
+  allListings = reordered;
+}
 
 function setMessage(text, isError) {
   const el = document.getElementById('reservationMessage');
@@ -97,6 +225,8 @@ async function checkAvailability(arrival, departure) {
   }));
 
   if (thisCheckId !== availabilityCheckId) return;
+
+  await rankAvailableListings(arrival, departure);
   renderListings(allListings);
 }
 
@@ -278,6 +408,12 @@ document.getElementById('privateReservationForm').addEventListener('submit', asy
 
 (async function init() {
   try {
+    const params = new URLSearchParams(window.location.search);
+    const preferredFromQuery = Number(params.get('preferredListingId') || 0);
+    preferredListingIdFromQuery = Number.isInteger(preferredFromQuery) && preferredFromQuery > 0
+      ? preferredFromQuery
+      : null;
+
     const meRes = await fetch('/api/me');
     if (!meRes.ok) {
       window.location.href = '/';
