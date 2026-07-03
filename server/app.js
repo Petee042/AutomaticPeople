@@ -9000,7 +9000,7 @@ if (process.env.NODE_ENV === 'production') {
 app.use(express.json({
   limit: '5mb',
   verify: (req, _res, buf) => {
-    if (req.originalUrl === '/api/stripe/webhook') {
+    if (String(req.originalUrl || '').startsWith('/api/stripe/webhook')) {
       req.rawBody = buf.toString('utf8');
     }
   }
@@ -10702,11 +10702,20 @@ app.post('/api/stripe/connect/start', requireAuth, async (req, res) => {
 // POST /api/stripe/webhook — Stripe event receiver for payment intent lifecycle
 app.post('/api/stripe/webhook', async (req, res) => {
   if (!stripeClient || !STRIPE_WEBHOOK_SECRET) {
+    console.warn('[Webhook] Stripe webhook is not configured', {
+      stripeClientConfigured: Boolean(stripeClient),
+      webhookSecretConfigured: Boolean(STRIPE_WEBHOOK_SECRET)
+    });
     return res.status(503).json({ error: 'Stripe webhook is not configured.' });
   }
 
   const signature = req.headers['stripe-signature'];
   if (!signature || !req.rawBody) {
+    console.warn('[Webhook] Missing Stripe signature or raw payload', {
+      hasSignature: Boolean(signature),
+      hasRawBody: Boolean(req.rawBody),
+      originalUrl: req.originalUrl
+    });
     return res.status(400).json({ error: 'Missing Stripe signature or raw payload.' });
   }
 
@@ -10719,6 +10728,12 @@ app.post('/api/stripe/webhook', async (req, res) => {
   }
 
   try {
+    console.log('[Webhook] Stripe event received', {
+      eventId: String(event && event.id || ''),
+      eventType: String(event && event.type || ''),
+      livemode: Boolean(event && event.livemode === true)
+    });
+
     if (event.type && event.type.startsWith('payment_intent.')) {
       const paymentIntent = event.data && event.data.object ? event.data.object : null;
       const paymentIntentId = paymentIntent && paymentIntent.id ? String(paymentIntent.id) : '';
@@ -10825,7 +10840,9 @@ app.post('/api/stripe/webhook', async (req, res) => {
                   sourceId: String(firstReservation.id)
                 });
 
-                if (firstReservation.email_address) {
+                const confirmationEmailAddress = normaliseOptionalEmail(firstReservation.email_address)
+                  || normaliseOptionalEmail(paymentIntent && paymentIntent.receipt_email);
+                if (confirmationEmailAddress) {
                   const identifiers = reservationRows
                     .map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', ');
                   const checkinText = String(firstReservation.reservation_checkin_date || '');
@@ -10843,7 +10860,7 @@ app.post('/api/stripe/webhook', async (req, res) => {
                     'Your reservation is now confirmed. Please keep your reference number(s) for your records.'
                   ];
                   const confirmEmailResult = await sendAppEmail({
-                    to: firstReservation.email_address,
+                    to: confirmationEmailAddress,
                     subject: 'Reservation Payment Confirmed',
                     textBody: confirmEmailLines.join('\n')
                   });
@@ -10867,6 +10884,11 @@ app.post('/api/stripe/webhook', async (req, res) => {
             } else {
               await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, commonUpdate)));
             }
+          } else {
+            console.warn('[Webhook] No reservation found for payment intent', {
+              paymentIntentId,
+              eventType: String(event.type || '')
+            });
           }
         }
       }
