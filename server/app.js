@@ -11364,6 +11364,7 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
       : Number(selectedOption.totalPrice || 0);
     const baseUrl = getPreferredAppBaseUrl(req) || '';
     const termsUrl = (baseUrl ? baseUrl : '') + '/guest-terms-and-conditions.html';
+    const debugSuppressTermsAndConditions = DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE;
     const paymentEmailSubject = DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE
       ? 'Reservation Enquiry Received'
       : 'Payment Request For Accommodation';
@@ -11389,8 +11390,7 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
     if (DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS) {
       textLines.push(
         '',
-        'Payment instructions are temporarily omitted for deliverability debugging.',
-        'Terms and Conditions: ' + termsUrl
+        'Payment instructions are temporarily omitted for deliverability debugging.'
       );
     } else {
       textLines.push(
@@ -11402,10 +11402,15 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
         'IBAN: ' + bankIban,
         'BIC: ' + bankBic,
         'Account type: ' + bankType,
-        '',
-        'By making payment you as The Guest are accepting the terms of The Host for The Reservation as stated in this email.',
-        'Terms and Conditions: ' + termsUrl
+        ''
       );
+
+      if (!debugSuppressTermsAndConditions) {
+        textLines.push(
+          'By making payment you as The Guest are accepting the terms of The Host for The Reservation as stated in this email.',
+          'Terms and Conditions: ' + termsUrl
+        );
+      }
     }
 
     let emailDeliveryWarning = false;
@@ -11419,6 +11424,7 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
       totalAmount: totalAmount,
       debugSuppressBankDetails: DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS,
       debugSuppressPaymentTitle: DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE,
+      debugSuppressTermsAndConditions,
       timestamp: new Date().toISOString()
     };
 
