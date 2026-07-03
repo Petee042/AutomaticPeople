@@ -64,25 +64,44 @@ function setCompletionMessage(text, isError) {
   document.getElementById('completionOption').textContent = String(data.option && data.option.label || '');
   document.getElementById('completionAmount').textContent = formatCompletionMoney(data.totalAmount);
 
-  if (data.emailDeliveryWarning === true) {
-    const reason = String(data.emailDeliveryReason || '').trim();
-    setCompletionMessage(
-      reason
-        ? ('Reservation request submitted, but payment email delivery failed: ' + reason)
-        : 'Reservation request submitted, but payment email delivery failed. Please contact support.',
-      true
-    );
-  } else {
-    setCompletionMessage('Reservation request submitted and payment email sent.', false);
-  }
+  const isOnlinePayment = data.paymentMode === 'online';
 
-  if (data.bankAccount) {
-    document.getElementById('completionAccountName').textContent = String(data.bankAccount.accountName || '');
-    document.getElementById('completionAccountType').textContent = String(data.bankAccount.accountType || '');
-    document.getElementById('completionSortCode').textContent = String(data.bankAccount.sortCode || '');
-    document.getElementById('completionAccountNumber').textContent = String(data.bankAccount.accountNumber || '');
-    document.getElementById('completionIban').textContent = String(data.bankAccount.iban || '');
-    document.getElementById('completionBic').textContent = String(data.bankAccount.bic || '');
+  if (isOnlinePayment) {
+    const titleEl = document.getElementById('completionTitle');
+    if (titleEl) titleEl.textContent = 'Payment Confirmed';
+
+    const bankSection = document.getElementById('completionBankSection');
+    if (bankSection) bankSection.classList.add('hidden');
+
+    const holdSection = document.getElementById('completionHoldSection');
+    if (holdSection) holdSection.classList.add('hidden');
+
+    const onlineNote = document.getElementById('completionOnlineNote');
+    if (onlineNote) onlineNote.classList.remove('hidden');
+
+    const paymentStatusText = data.paymentStatus ? (' Status: ' + data.paymentStatus + '.') : '';
+    setCompletionMessage('Your payment was confirmed and reservation is now active.' + paymentStatusText, false);
+  } else {
+    if (data.emailDeliveryWarning === true) {
+      const reason = String(data.emailDeliveryReason || '').trim();
+      setCompletionMessage(
+        reason
+          ? ('Reservation request submitted, but payment email delivery failed: ' + reason)
+          : 'Reservation request submitted, but payment email delivery failed. Please contact support.',
+        true
+      );
+    } else {
+      setCompletionMessage('Reservation request submitted and payment email sent.', false);
+    }
+
+    if (data.bankAccount) {
+      document.getElementById('completionAccountName').textContent = String(data.bankAccount.accountName || '');
+      document.getElementById('completionAccountType').textContent = String(data.bankAccount.accountType || '');
+      document.getElementById('completionSortCode').textContent = String(data.bankAccount.sortCode || '');
+      document.getElementById('completionAccountNumber').textContent = String(data.bankAccount.accountNumber || '');
+      document.getElementById('completionIban').textContent = String(data.bankAccount.iban || '');
+      document.getElementById('completionBic').textContent = String(data.bankAccount.bic || '');
+    }
   }
 
   window.sessionStorage.removeItem(RESERVATION_ENQUIRY_COMPLETION_KEY);

@@ -248,9 +248,23 @@ document.getElementById('reservationEnquiryPaymentSubmitBtn').addEventListener('
 
     setReservationEnquiryPaymentMessage('Confirming payment...', false);
     const status = await confirmReservationEnquiryOnlinePayment();
-    setReservationEnquiryPaymentMessage('Payment submitted successfully. Status: ' + status + '.', false);
-    setReservationEnquirySubmitButton('Payment Submitted', true);
+
+    // Store context and redirect to completion page
+    const payableAmount = reservationEnquirySelection.option && reservationEnquirySelection.option.discountedTotalPrice
+      ? Number(reservationEnquirySelection.option.discountedTotalPrice)
+      : Number(reservationEnquirySelection.option && reservationEnquirySelection.option.totalPrice || 0);
+    const onlineCompletionData = {
+      arrivalDate: reservationEnquirySelection.arrivalDate,
+      departureDate: reservationEnquirySelection.departureDate,
+      guestCount: reservationEnquirySelection.guestCount,
+      option: reservationEnquirySelection.option,
+      totalAmount: payableAmount,
+      paymentMode: 'online',
+      paymentStatus: status
+    };
+    window.sessionStorage.setItem('reservationEnquiryCompletionContext', JSON.stringify(onlineCompletionData));
     window.sessionStorage.removeItem(RESERVATION_ENQUIRY_SELECTION_STORAGE_KEY);
+    window.location.href = '/reservation-enquiry-complete.html';
   } catch (err) {
     setReservationEnquiryPaymentMessage(err.message || 'Failed to process reservation enquiry.', true);
     if (reservationEnquiryPreparedPayment) {

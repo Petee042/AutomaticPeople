@@ -9,7 +9,7 @@
 <body class="reservation-enquiry-page">
   <main class="dashboard">
     <div class="card-container wide public-booking-card reservation-enquiry-card">
-      <h2>Request Submitted</h2>
+      <h2 id="completionTitle">Request Submitted</h2>
       <p id="completionMessage" class="message hidden"></p>
 
       <section class="listing-form-section">
@@ -26,7 +26,7 @@
         </dl>
       </section>
 
-      <section class="listing-form-section">
+      <section id="completionBankSection" class="listing-form-section">
         <h3>Bank Account for Payment</h3>
         <dl class="reservation-enquiry-detail-list">
           <dt>Account Name</dt>
@@ -44,8 +44,12 @@
         </dl>
       </section>
 
-      <section class="listing-form-section">
+      <section id="completionHoldSection" class="listing-form-section">
         <p class="completion-note">Your reservation will be held for 24 hours from now. If payment is not received by then, the reservation will be automatically released.</p>
+      </section>
+
+      <section id="completionOnlineNote" class="listing-form-section hidden">
+        <p class="completion-note">A confirmation email has been sent to your email address. Your reservation is now confirmed.</p>
       </section>
     </div>
   </main>

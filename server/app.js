@@ -10754,6 +10754,30 @@ app.post('/api/stripe/webhook', async (req, res) => {
               sourceType: 'shared_resource_reservation',
               sourceId: String(reservation.id)
             });
+
+            if (reservation.email_address) {
+              const confirmEmailLines = [
+                'Reservation Payment Confirmed',
+                '',
+                'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+                'Reference: ' + String(reservation.reservation_identifier || ''),
+                'Starts: ' + String(reservation.requested_start_at || ''),
+                'Ends: ' + String(reservation.requested_end_at || ''),
+                'Amount paid: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+                '',
+                'Your reservation is now confirmed. Please keep your reference number for your records.'
+              ];
+              const confirmEmailResult = await sendAppEmail({
+                to: reservation.email_address,
+                subject: 'Reservation Payment Confirmed',
+                textBody: confirmEmailLines.join('\n')
+              });
+              if (!confirmEmailResult.ok) {
+                console.warn('[Webhook] Shared-resource confirmation email failed:', confirmEmailResult.error);
+              } else {
+                console.log('[Webhook] Shared-resource confirmation email sent:', confirmEmailResult.messageId);
+              }
+            }
           } else if (event.type === 'payment_intent.payment_failed') {
             await updateSharedResourceReservationPaymentById(reservation.id, {
               ...commonUpdate,
@@ -10800,6 +10824,35 @@ app.post('/api/stripe/webhook', async (req, res) => {
                   sourceType: 'private_reservation',
                   sourceId: String(firstReservation.id)
                 });
+
+                if (firstReservation.email_address) {
+                  const identifiers = reservationRows
+                    .map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', ');
+                  const checkinText = String(firstReservation.reservation_checkin_date || '');
+                  const checkoutText = String(firstReservation.reservation_checkout_date || '');
+                  const totalMinor = reservationRows.reduce((sum, row) => sum + Number(row.reservation_amount || 0), 0);
+                  const confirmEmailLines = [
+                    'Reservation Payment Confirmed',
+                    '',
+                    'Guest: ' + String(firstReservation.first_name || '') + ' ' + String(firstReservation.family_name || ''),
+                    'Reference(s): ' + (identifiers || '-'),
+                    'Check-in: ' + checkinText,
+                    'Check-out: ' + checkoutText,
+                    'Total paid: ' + totalMinor.toFixed(2),
+                    '',
+                    'Your reservation is now confirmed. Please keep your reference number(s) for your records.'
+                  ];
+                  const confirmEmailResult = await sendAppEmail({
+                    to: firstReservation.email_address,
+                    subject: 'Reservation Payment Confirmed',
+                    textBody: confirmEmailLines.join('\n')
+                  });
+                  if (!confirmEmailResult.ok) {
+                    console.warn('[Webhook] Reservation-activity confirmation email failed:', confirmEmailResult.error);
+                  } else {
+                    console.log('[Webhook] Reservation-activity confirmation email sent:', confirmEmailResult.messageId);
+                  }
+                }
               }
             } else if (event.type === 'payment_intent.payment_failed') {
               await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
