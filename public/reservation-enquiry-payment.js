@@ -196,7 +196,25 @@ async function confirmReservationEnquiryOnlinePayment() {
   if (status === 'requires_payment_method') {
     throw new Error('Payment was not completed. Please try another card or method.');
   }
-  return status;
+  return {
+    status,
+    paymentIntentId: String(result.paymentIntent.id || '')
+  };
+}
+
+async function finalizeReservationEnquiryOnlinePayment(paymentIntentId) {
+  const response = await fetch('/api/public/reservation-enquiry-landing-pages/' + encodeURIComponent(reservationEnquiryPaymentSlug) + '/online-payment/finalize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      paymentIntentId: String(paymentIntentId || '')
+    })
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to finalize reservation payment.');
+  }
+  return data;
 }
 
 document.getElementById('reservationEnquiryPaymentBackBtn').addEventListener('click', () => {
@@ -247,7 +265,9 @@ document.getElementById('reservationEnquiryPaymentSubmitBtn').addEventListener('
     }
 
     setReservationEnquiryPaymentMessage('Confirming payment...', false);
-    const status = await confirmReservationEnquiryOnlinePayment();
+    const confirmation = await confirmReservationEnquiryOnlinePayment();
+    setReservationEnquiryPaymentMessage('Finalizing reservation...', false);
+    const finalized = await finalizeReservationEnquiryOnlinePayment(confirmation.paymentIntentId || reservationEnquiryPreparedPayment.paymentIntentId);
 
     // Store context and redirect to completion page
     const payableAmount = reservationEnquirySelection.option && reservationEnquirySelection.option.discountedTotalPrice
@@ -260,7 +280,9 @@ document.getElementById('reservationEnquiryPaymentSubmitBtn').addEventListener('
       option: reservationEnquirySelection.option,
       totalAmount: payableAmount,
       paymentMode: 'online',
-      paymentStatus: status
+      paymentStatus: confirmation.status,
+      emailDeliveryWarning: finalized.emailSent !== true,
+      emailDeliveryReason: finalized.emailSent === true ? '' : String(finalized.emailError || 'Confirmation email may be delayed. Please contact support if not received.')
     };
     window.sessionStorage.setItem('reservationEnquiryCompletionContext', JSON.stringify(onlineCompletionData));
     window.sessionStorage.removeItem(RESERVATION_ENQUIRY_SELECTION_STORAGE_KEY);

@@ -35,6 +35,9 @@ const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT_COUNTRY || 'GB').trim().toUpperCase();
+const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
+  || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
+  || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
 const DATA_RESET_FLAG_KEY = 'minimal-profile-reset-v1';
 const IS_ALPHA = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'development';
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim();
@@ -2456,6 +2459,135 @@ async function updateReservationActivityPaymentById(id, nextState) {
   );
 
   return result.rows[0] || null;
+}
+
+async function sendReservationActivityConfirmationEmail(reservationRows, paymentIntent) {
+  const rows = Array.isArray(reservationRows) ? reservationRows : [];
+  const firstReservation = rows[0] || null;
+  if (!firstReservation) {
+    return { sent: false, error: 'No reservation row available.' };
+  }
+
+  const confirmationEmailAddress = normaliseOptionalEmail(firstReservation.email_address)
+    || normaliseOptionalEmail(paymentIntent && paymentIntent.receipt_email);
+  if (!confirmationEmailAddress) {
+    return { sent: false, error: 'No recipient email found for reservation confirmation.' };
+  }
+
+  const identifiers = rows
+    .map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', ');
+  const checkinText = String(firstReservation.reservation_checkin_date || '');
+  const checkoutText = String(firstReservation.reservation_checkout_date || '');
+  const totalAmount = rows.reduce((sum, row) => sum + Number(row.reservation_amount || 0), 0);
+  const confirmEmailLines = [
+    'Reservation Payment Confirmed',
+    '',
+    'Guest: ' + String(firstReservation.first_name || '') + ' ' + String(firstReservation.family_name || ''),
+    'Reference(s): ' + (identifiers || '-'),
+    'Check-in: ' + checkinText,
+    'Check-out: ' + checkoutText,
+    'Total paid: ' + totalAmount.toFixed(2),
+    '',
+    'Your reservation is now confirmed. Please keep your reference number(s) for your records.'
+  ];
+  const confirmEmailResult = await sendAppEmail({
+    to: confirmationEmailAddress,
+    subject: 'Reservation Payment Confirmed',
+    textBody: confirmEmailLines.join('\n')
+  });
+  if (!confirmEmailResult.ok) {
+    return { sent: false, error: String(confirmEmailResult.error || 'Failed to send confirmation email.') };
+  }
+
+  return {
+    sent: true,
+    messageId: confirmEmailResult.messageId ? String(confirmEmailResult.messageId) : '',
+    recipient: confirmationEmailAddress
+  };
+}
+
+async function finalizeReservationActivityPaymentIntent(paymentIntent, options) {
+  const intent = paymentIntent && typeof paymentIntent === 'object' ? paymentIntent : null;
+  const paymentIntentId = String(intent && intent.id || '').trim();
+  if (!paymentIntentId) {
+    return { found: false, error: 'Missing payment intent id.' };
+  }
+
+  const reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+  if (!reservationRows.length) {
+    return { found: false, paymentIntentId };
+  }
+
+  const commonUpdate = {
+    paymentProvider: 'stripe',
+    paymentIntentId,
+    paymentStatus: String(intent.status || '').toLowerCase(),
+    paymentCurrency: String(intent.currency || 'gbp').toLowerCase(),
+    paymentAmountMinor: Number.isInteger(intent.amount_received)
+      ? intent.amount_received
+      : (Number.isInteger(intent.amount) ? intent.amount : null),
+    paymentLastError: intent.last_payment_error && intent.last_payment_error.message
+      ? String(intent.last_payment_error.message)
+      : ''
+  };
+
+  const paymentStatus = String(intent.status || '').toLowerCase();
+  if (paymentStatus === 'succeeded') {
+    const alreadyConfirmed = reservationRows.every((row) => String(row.status || '').toLowerCase() === 'confirmed');
+
+    await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
+      ...commonUpdate,
+      status: 'confirmed'
+    })));
+
+    const firstReservation = reservationRows[0] || null;
+    if (firstReservation) {
+      await ensureGuestSiteUserForClientAccount({
+        clientAccountId: firstReservation.client_account_id,
+        ownerUserId: firstReservation.user_id,
+        firstName: firstReservation.first_name,
+        familyName: firstReservation.family_name,
+        email: firstReservation.email_address,
+        sourceType: 'private_reservation',
+        sourceId: String(firstReservation.id)
+      });
+    }
+
+    let emailResult = { sent: false, error: '', recipient: '' };
+    if (!alreadyConfirmed || (options && options.forceSendEmail === true)) {
+      emailResult = await sendReservationActivityConfirmationEmail(reservationRows, intent);
+    }
+
+    return {
+      found: true,
+      paymentStatus,
+      confirmed: true,
+      alreadyConfirmed,
+      reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean),
+      emailSent: emailResult.sent === true,
+      emailError: String(emailResult.error || ''),
+      emailRecipient: String(emailResult.recipient || '')
+    };
+  }
+
+  if (paymentStatus === 'requires_payment_method' || paymentStatus === 'requires_action') {
+    await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
+      ...commonUpdate,
+      status: 'awaiting_online_payment'
+    })));
+    return { found: true, paymentStatus, confirmed: false };
+  }
+
+  if (paymentStatus === 'canceled') {
+    await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
+      ...commonUpdate,
+      status: 'cancelled'
+    })));
+    return { found: true, paymentStatus, confirmed: false };
+  }
+
+  await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, commonUpdate)));
+  return { found: true, paymentStatus, confirmed: false };
 }
 
 function normaliseSharedResourceReservationEmail(value) {
@@ -8993,7 +9125,7 @@ async function fetchEventsFromCalendarUrl(calendarUrl) {
 }
 
 // ── Middleware ───────────────────────────────────────────────────────────────
-if (process.env.NODE_ENV === 'production') {
+if (TRUST_PROXY_ENABLED) {
   app.set('trust proxy', 1);
 }
 
@@ -10807,82 +10939,15 @@ app.post('/api/stripe/webhook', async (req, res) => {
             await updateSharedResourceReservationPaymentById(reservation.id, commonUpdate);
           }
         } else {
-          const reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
-          if (reservationRows.length) {
-            const commonUpdate = {
-              paymentProvider: 'stripe',
-              paymentIntentId,
-              paymentStatus: String(paymentIntent.status || '').toLowerCase(),
-              paymentCurrency: String(paymentIntent.currency || 'gbp').toLowerCase(),
-              paymentAmountMinor: Number.isInteger(paymentIntent.amount_received)
-                ? paymentIntent.amount_received
-                : (Number.isInteger(paymentIntent.amount) ? paymentIntent.amount : null),
-              paymentLastError: paymentIntent.last_payment_error && paymentIntent.last_payment_error.message
-                ? String(paymentIntent.last_payment_error.message)
-                : ''
-            };
-
-            if (event.type === 'payment_intent.succeeded') {
-              await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
-                ...commonUpdate,
-                status: 'confirmed'
-              })));
-
-              const firstReservation = reservationRows[0] || null;
-              if (firstReservation) {
-                await ensureGuestSiteUserForClientAccount({
-                  clientAccountId: firstReservation.client_account_id,
-                  ownerUserId: firstReservation.user_id,
-                  firstName: firstReservation.first_name,
-                  familyName: firstReservation.family_name,
-                  email: firstReservation.email_address,
-                  sourceType: 'private_reservation',
-                  sourceId: String(firstReservation.id)
-                });
-
-                const confirmationEmailAddress = normaliseOptionalEmail(firstReservation.email_address)
-                  || normaliseOptionalEmail(paymentIntent && paymentIntent.receipt_email);
-                if (confirmationEmailAddress) {
-                  const identifiers = reservationRows
-                    .map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', ');
-                  const checkinText = String(firstReservation.reservation_checkin_date || '');
-                  const checkoutText = String(firstReservation.reservation_checkout_date || '');
-                  const totalMinor = reservationRows.reduce((sum, row) => sum + Number(row.reservation_amount || 0), 0);
-                  const confirmEmailLines = [
-                    'Reservation Payment Confirmed',
-                    '',
-                    'Guest: ' + String(firstReservation.first_name || '') + ' ' + String(firstReservation.family_name || ''),
-                    'Reference(s): ' + (identifiers || '-'),
-                    'Check-in: ' + checkinText,
-                    'Check-out: ' + checkoutText,
-                    'Total paid: ' + totalMinor.toFixed(2),
-                    '',
-                    'Your reservation is now confirmed. Please keep your reference number(s) for your records.'
-                  ];
-                  const confirmEmailResult = await sendAppEmail({
-                    to: confirmationEmailAddress,
-                    subject: 'Reservation Payment Confirmed',
-                    textBody: confirmEmailLines.join('\n')
-                  });
-                  if (!confirmEmailResult.ok) {
-                    console.warn('[Webhook] Reservation-activity confirmation email failed:', confirmEmailResult.error);
-                  } else {
-                    console.log('[Webhook] Reservation-activity confirmation email sent:', confirmEmailResult.messageId);
-                  }
-                }
-              }
-            } else if (event.type === 'payment_intent.payment_failed') {
-              await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
-                ...commonUpdate,
-                status: 'awaiting_online_payment'
-              })));
-            } else if (event.type === 'payment_intent.canceled') {
-              await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
-                ...commonUpdate,
-                status: 'cancelled'
-              })));
-            } else {
-              await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, commonUpdate)));
+          const finalized = await finalizeReservationActivityPaymentIntent(paymentIntent, { source: 'webhook' });
+          if (finalized && finalized.found) {
+            if (finalized.confirmed === true) {
+              console.log('[Webhook] Reservation-activity payment finalized', {
+                paymentIntentId,
+                alreadyConfirmed: finalized.alreadyConfirmed === true,
+                emailSent: finalized.emailSent === true,
+                emailError: finalized.emailError || ''
+              });
             }
           } else {
             console.warn('[Webhook] No reservation found for payment intent', {
@@ -11694,6 +11759,62 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/online-payment/pre
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to prepare online payment.' });
+  }
+});
+
+// POST /api/public/reservation-enquiry-landing-pages/:slug/online-payment/finalize — verify payment intent and finalize reservation state
+app.post('/api/public/reservation-enquiry-landing-pages/:slug/online-payment/finalize', async (req, res) => {
+  if (!stripeClient) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  const slug = normaliseLandingPageSlug(req.params.slug);
+  const paymentIntentId = String(req.body && req.body.paymentIntentId || '').trim();
+  if (!slug) {
+    return res.status(400).json({ error: 'Invalid landing page slug.' });
+  }
+  if (!paymentIntentId) {
+    return res.status(400).json({ error: 'Payment intent id is required.' });
+  }
+
+  try {
+    const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+    if (!paymentIntent || !paymentIntent.id) {
+      return res.status(404).json({ error: 'Payment intent was not found.' });
+    }
+
+    const paymentIntentSlug = normaliseLandingPageSlug(paymentIntent.metadata && paymentIntent.metadata.landing_page_slug);
+    if (paymentIntentSlug && paymentIntentSlug !== slug) {
+      return res.status(403).json({ error: 'Payment intent does not match this landing page.' });
+    }
+
+    const finalized = await finalizeReservationActivityPaymentIntent(paymentIntent, {
+      source: 'public-finalize-endpoint'
+    });
+    if (!finalized || !finalized.found) {
+      return res.status(404).json({ error: 'No reservation records found for this payment intent.' });
+    }
+    if (finalized.confirmed !== true) {
+      return res.status(409).json({
+        error: 'Payment has not completed yet.',
+        paymentStatus: String(finalized.paymentStatus || '')
+      });
+    }
+
+    return res.json({
+      message: 'Reservation payment finalized.',
+      reservationIdentifiers: finalized.reservationIdentifiers || [],
+      paymentStatus: String(finalized.paymentStatus || ''),
+      emailSent: finalized.emailSent === true,
+      emailError: String(finalized.emailError || ''),
+      emailRecipient: String(finalized.emailRecipient || '')
+    });
+  } catch (err) {
+    console.error('[Finalize] Reservation enquiry payment finalization failed', {
+      paymentIntentId,
+      error: String(err && err.message || err)
+    });
+    return res.status(500).json({ error: 'Failed to finalize reservation payment.' });
   }
 });
 

@@ -77,10 +77,25 @@ function setCompletionMessage(text, isError) {
     if (holdSection) holdSection.classList.add('hidden');
 
     const onlineNote = document.getElementById('completionOnlineNote');
-    if (onlineNote) onlineNote.classList.remove('hidden');
+    if (onlineNote) {
+      onlineNote.classList.remove('hidden');
+      if (data.emailDeliveryWarning === true) {
+        onlineNote.innerHTML = '<p class="completion-note">Your reservation is confirmed, but the confirmation email could not be sent. Please keep this page for your records and contact support if needed.</p>';
+      }
+    }
 
     const paymentStatusText = data.paymentStatus ? (' Status: ' + data.paymentStatus + '.') : '';
-    setCompletionMessage('Your payment was confirmed and reservation is now active.' + paymentStatusText, false);
+    if (data.emailDeliveryWarning === true) {
+      const reason = String(data.emailDeliveryReason || '').trim();
+      setCompletionMessage(
+        reason
+          ? ('Your payment was confirmed, but email delivery failed: ' + reason)
+          : 'Your payment was confirmed, but confirmation email delivery failed.',
+        true
+      );
+    } else {
+      setCompletionMessage('Your payment was confirmed and reservation is now active.' + paymentStatusText, false);
+    }
   } else {
     if (data.emailDeliveryWarning === true) {
       const reason = String(data.emailDeliveryReason || '').trim();
