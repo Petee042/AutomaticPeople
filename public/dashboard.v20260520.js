@@ -4449,16 +4449,36 @@ async function loadPrivateReservations() {
 async function fetchBankDetails() {
   try {
     const res = await fetch('/api/account/bank-details');
-    if (!res.ok) return;
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.warn('[BankDetails] Failed to load bank details:', res.status, errorData.error || 'Unknown error');
+      // Only show message if it's an auth or account error, not just empty data
+      if (res.status === 401 || res.status === 403) {
+        setBankDetailsMessage('You do not have permission to view bank details.', true);
+      } else if (res.status === 404) {
+        console.warn('[BankDetails] Client account not found - this should not happen');
+      }
+      return;
+    }
     const data = await res.json();
-    document.getElementById('bankAccountName').value = data.accountName || '';
-    document.getElementById('bankSortCode').value = data.sortCode || '';
-    document.getElementById('bankAccountNumber').value = data.accountNumber || '';
-    document.getElementById('bankIban').value = data.iban || '';
-    document.getElementById('bankBic').value = data.bic || '';
-    document.getElementById('bankIsBusiness').checked = data.isBusiness === true;
-  } catch {
-    // non-fatal
+    const bankAccountNameEl = document.getElementById('bankAccountName');
+    const bankSortCodeEl = document.getElementById('bankSortCode');
+    const bankAccountNumberEl = document.getElementById('bankAccountNumber');
+    const bankIbanEl = document.getElementById('bankIban');
+    const bankBicEl = document.getElementById('bankBic');
+    const bankIsBusinessEl = document.getElementById('bankIsBusiness');
+
+    if (bankAccountNameEl) bankAccountNameEl.value = data.accountName || '';
+    if (bankSortCodeEl) bankSortCodeEl.value = data.sortCode || '';
+    if (bankAccountNumberEl) bankAccountNumberEl.value = data.accountNumber || '';
+    if (bankIbanEl) bankIbanEl.value = data.iban || '';
+    if (bankBicEl) bankBicEl.value = data.bic || '';
+    if (bankIsBusinessEl) bankIsBusinessEl.checked = data.isBusiness === true;
+
+    console.log('[BankDetails] Loaded bank details successfully');
+  } catch (err) {
+    console.error('[BankDetails] Error loading bank details:', err);
+    // Non-fatal error - don't show message to user for network/parse errors
   }
 }
 
@@ -4488,6 +4508,7 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
 
   if (btn) btn.disabled = true;
   try {
+    console.log('[BankDetails] Saving bank details:', { accountName, sortCode, iban, bic });
     const res = await fetch('/api/account/bank-details', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -4501,9 +4522,14 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to save bank details.');
+    if (!res.ok) {
+      console.error('[BankDetails] Save failed with status', res.status, data);
+      throw new Error(data.error || 'Failed to save bank details.');
+    }
+    console.log('[BankDetails] Bank details saved successfully');
     setBankDetailsMessage('Bank details saved.', false);
   } catch (err) {
+    console.error('[BankDetails] Error saving bank details:', err);
     setBankDetailsMessage(err.message || 'Failed to save bank details.', true);
   } finally {
     if (btn) btn.disabled = false;

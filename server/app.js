@@ -10402,11 +10402,17 @@ app.get('/api/me', requireAuth, async (req, res) => {
 app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, res) => {
   try {
     const clientAccountId = req.accessContext.activeClientAccountId;
+    if (!clientAccountId) {
+      console.warn('[BankDetails] Fetch attempt with no activeClientAccountId set');
+      return res.status(400).json({ error: 'No active client account context.' });
+    }
+
     const result = await pool.query(
       'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
       [clientAccountId]
     );
     if (!result.rows[0]) {
+      console.warn('[BankDetails] Client account not found for clientAccountId:', clientAccountId);
       return res.status(404).json({ error: 'Client account not found.' });
     }
     const row = result.rows[0];
@@ -10419,7 +10425,7 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
       bic: row.bank_bic || ''
     });
   } catch (err) {
-    console.error(err);
+    console.error('[BankDetails] Error loading bank details:', err);
     return res.status(500).json({ error: 'Failed to load bank details.' });
   }
 });
@@ -10445,7 +10451,12 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
 
   try {
     const clientAccountId = req.accessContext.activeClientAccountId;
-    await pool.query(
+    if (!clientAccountId) {
+      console.warn('[BankDetails] Save attempt with no activeClientAccountId set');
+      return res.status(400).json({ error: 'No active client account context.' });
+    }
+
+    const result = await pool.query(
       `UPDATE client_accounts
        SET bank_account_name = $1,
            bank_sort_code = $2,
@@ -10457,9 +10468,16 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
        WHERE id = $7`,
       [accountName, sortCode, accountNumber, isBusiness, iban, bic, clientAccountId]
     );
+
+    if (result.rowCount === 0) {
+      console.warn('[BankDetails] Update affected 0 rows for clientAccountId:', clientAccountId);
+      return res.status(404).json({ error: 'Client account not found.' });
+    }
+
+    console.log('[BankDetails] Bank details updated successfully for clientAccountId:', clientAccountId);
     return res.json({ accountName, sortCode, accountNumber, isBusiness, iban, bic });
   } catch (err) {
-    console.error(err);
+    console.error('[BankDetails] Error saving bank details:', err);
     return res.status(500).json({ error: 'Failed to save bank details.' });
   }
 });
