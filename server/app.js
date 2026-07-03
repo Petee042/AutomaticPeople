@@ -29,6 +29,8 @@ const STAY_API_BASE_URL = 'https://api.stayapi.com';
 const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').trim();
 const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
 const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
+const DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || '').trim().toLowerCase());
+const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE || '').trim().toLowerCase());
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
@@ -11362,8 +11364,11 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
       : Number(selectedOption.totalPrice || 0);
     const baseUrl = getPreferredAppBaseUrl(req) || '';
     const termsUrl = (baseUrl ? baseUrl : '') + '/guest-terms-and-conditions.html';
+    const paymentEmailSubject = DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE
+      ? 'Reservation Enquiry Received'
+      : 'Payment Request For Accommodation';
     const textLines = [
-      'Payment Request For Accommodation',
+      paymentEmailSubject,
       '',
       'Guest: ' + firstName + ' ' + familyName,
       'Number of guests: ' + String(guestCount),
@@ -11381,19 +11386,27 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
       );
     });
 
-    textLines.push(
-      '',
-      'Bank details:',
-      'Account name: ' + bankAccountName,
-      'Sort code: ' + bankSortCode,
-      'Account number: ' + bankAccountNumber,
-      'IBAN: ' + bankIban,
-      'BIC: ' + bankBic,
-      'Account type: ' + bankType,
-      '',
-      'By making payment you as The Guest are accepting the terms of The Host for The Reservation as stated in this email.',
-      'Terms and Conditions: ' + termsUrl
-    );
+    if (DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS) {
+      textLines.push(
+        '',
+        'Payment instructions are temporarily omitted for deliverability debugging.',
+        'Terms and Conditions: ' + termsUrl
+      );
+    } else {
+      textLines.push(
+        '',
+        'Bank details:',
+        'Account name: ' + bankAccountName,
+        'Sort code: ' + bankSortCode,
+        'Account number: ' + bankAccountNumber,
+        'IBAN: ' + bankIban,
+        'BIC: ' + bankBic,
+        'Account type: ' + bankType,
+        '',
+        'By making payment you as The Guest are accepting the terms of The Host for The Reservation as stated in this email.',
+        'Terms and Conditions: ' + termsUrl
+      );
+    }
 
     let emailDeliveryWarning = false;
     let emailDeliveryReason = '';
@@ -11404,12 +11417,14 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
       guestName: firstName + ' ' + familyName,
       reservationIdentifiers: reservationRows.map((row) => String(row.reservation && row.reservation.reservation_identifier || '')).filter(Boolean),
       totalAmount: totalAmount,
+      debugSuppressBankDetails: DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS,
+      debugSuppressPaymentTitle: DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE,
       timestamp: new Date().toISOString()
     };
 
     const emailResult = await sendAppEmail({
       to: emailAddress,
-      subject: 'Payment Request For Accommodation',
+      subject: paymentEmailSubject,
       textBody: textLines.join('\n')
     });
 
