@@ -10143,6 +10143,149 @@ app.post('/api/admin/email/test/send', requireAdminAuth, async (req, res) => {
   }
 });
 
+// GET /api/admin/stripe/payment-intents/:paymentIntentId — diagnostic view for Stripe payment intent linkage
+app.get('/api/admin/stripe/payment-intents/:paymentIntentId', requireAdminAuth, async (req, res) => {
+  const paymentIntentId = String(req.params.paymentIntentId || '').trim();
+  if (!paymentIntentId) {
+    return res.status(400).json({ error: 'Payment intent id is required.' });
+  }
+
+  const diagnostics = {
+    paymentIntentId,
+    stripe: {
+      configured: Boolean(stripeClient),
+      retrieved: false,
+      retrievalError: '',
+      status: '',
+      currency: '',
+      amount: null,
+      amountReceived: null,
+      receiptEmail: '',
+      metadata: {}
+    },
+    postmark: {
+      configured: Boolean(POSTMARK_SERVER_TOKEN && POSTMARK_FROM),
+      from: POSTMARK_FROM,
+      messageStream: POSTMARK_MESSAGE_STREAM
+    },
+    sharedResourceReservation: null,
+    reservationActivity: {
+      rows: [],
+      count: 0,
+      allConfirmed: false,
+      guestRelationshipFound: false
+    },
+    confirmationEmail: {
+      recipientCandidate: '',
+      canAttemptSend: false,
+      likelyAlreadySentByFinalizePath: false
+    },
+    notes: []
+  };
+
+  try {
+    if (stripeClient) {
+      try {
+        const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+        diagnostics.stripe.retrieved = true;
+        diagnostics.stripe.status = String(paymentIntent && paymentIntent.status || '');
+        diagnostics.stripe.currency = String(paymentIntent && paymentIntent.currency || '').toLowerCase();
+        diagnostics.stripe.amount = Number.isInteger(paymentIntent && paymentIntent.amount) ? Number(paymentIntent.amount) : null;
+        diagnostics.stripe.amountReceived = Number.isInteger(paymentIntent && paymentIntent.amount_received)
+          ? Number(paymentIntent.amount_received)
+          : null;
+        diagnostics.stripe.receiptEmail = String(paymentIntent && paymentIntent.receipt_email || '');
+        diagnostics.stripe.metadata = paymentIntent && paymentIntent.metadata ? paymentIntent.metadata : {};
+      } catch (err) {
+        diagnostics.stripe.retrievalError = String(err && err.message || err);
+      }
+    }
+
+    const sharedReservation = await getSharedResourceReservationByPaymentIntentId(paymentIntentId);
+    if (sharedReservation) {
+      diagnostics.sharedResourceReservation = {
+        id: Number(sharedReservation.id),
+        reservationIdentifier: String(sharedReservation.reservation_identifier || ''),
+        status: String(sharedReservation.status || ''),
+        paymentStatus: String(sharedReservation.payment_status || ''),
+        emailAddress: String(sharedReservation.email_address || ''),
+        clientAccountId: Number(sharedReservation.client_account_id || 0) || null
+      };
+
+      diagnostics.confirmationEmail.recipientCandidate = String(sharedReservation.email_address || '').trim();
+      diagnostics.confirmationEmail.canAttemptSend = Boolean(normaliseOptionalEmail(sharedReservation.email_address));
+    }
+
+    const reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+    diagnostics.reservationActivity.rows = reservationRows.map((row) => ({
+      id: Number(row.id),
+      reservationIdentifier: String(row.reservation_identifier || ''),
+      status: String(row.status || ''),
+      paymentStatus: String(row.payment_status || ''),
+      paymentMethod: String(row.payment_method || ''),
+      emailAddress: String(row.email_address || ''),
+      clientAccountId: Number(row.client_account_id || 0) || null,
+      sourceReservationId: Number(row.id)
+    }));
+    diagnostics.reservationActivity.count = reservationRows.length;
+    diagnostics.reservationActivity.allConfirmed = reservationRows.length > 0
+      && reservationRows.every((row) => String(row.status || '').toLowerCase() === 'confirmed');
+
+    if (!diagnostics.confirmationEmail.recipientCandidate && reservationRows[0]) {
+      diagnostics.confirmationEmail.recipientCandidate = String(reservationRows[0].email_address || '').trim();
+      diagnostics.confirmationEmail.canAttemptSend = Boolean(
+        normaliseOptionalEmail(diagnostics.confirmationEmail.recipientCandidate)
+        || normaliseOptionalEmail(diagnostics.stripe.receiptEmail)
+      );
+    }
+
+    if (reservationRows[0]) {
+      const firstReservation = reservationRows[0];
+      const guestLookup = await pool.query(
+        `
+          SELECT id
+          FROM guest_relationships
+          WHERE client_account_id = $1
+            AND guest_email = $2
+          ORDER BY id DESC
+          LIMIT 1
+        `,
+        [Number(firstReservation.client_account_id || 0), String(firstReservation.email_address || '').trim().toLowerCase()]
+      );
+      diagnostics.reservationActivity.guestRelationshipFound = Boolean(guestLookup.rows[0]);
+    }
+
+    diagnostics.confirmationEmail.likelyAlreadySentByFinalizePath = Boolean(
+      diagnostics.reservationActivity.allConfirmed
+      && diagnostics.reservationActivity.guestRelationshipFound
+    );
+
+    if (!diagnostics.stripe.configured) {
+      diagnostics.notes.push('Stripe is not configured on this server process.');
+    }
+    if (diagnostics.stripe.configured && !diagnostics.stripe.retrieved && diagnostics.stripe.retrievalError) {
+      diagnostics.notes.push('Stripe API lookup failed: ' + diagnostics.stripe.retrievalError);
+    }
+    if (!diagnostics.sharedResourceReservation && diagnostics.reservationActivity.count === 0) {
+      diagnostics.notes.push('No reservations are linked to this payment intent in local DB.');
+    }
+    if (diagnostics.reservationActivity.count > 0 && !diagnostics.reservationActivity.guestRelationshipFound) {
+      diagnostics.notes.push('Reservation rows exist but guest relationship was not found yet.');
+    }
+    if (!diagnostics.postmark.configured) {
+      diagnostics.notes.push('Postmark is not fully configured for application email sending.');
+    }
+
+    return res.json(diagnostics);
+  } catch (err) {
+    console.error('[Admin][StripeDiagnostics] Failed to inspect payment intent', {
+      paymentIntentId,
+      error: String(err && err.message || err)
+    });
+    return res.status(500).json({ error: 'Failed to inspect Stripe payment intent.' });
+  }
+});
+
 // GET /api/admin/kayak/endpoints
 app.get('/api/admin/kayak/endpoints', requireAdminAuth, (req, res) => {
   const endpointList = Object.values(KAYAK_HOTEL_ENDPOINTS).map((endpoint) => ({
