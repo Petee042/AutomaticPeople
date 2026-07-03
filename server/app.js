@@ -11012,6 +11012,17 @@ app.post('/api/stripe/webhook', async (req, res) => {
     if (event.type && event.type.startsWith('payment_intent.')) {
       const paymentIntent = event.data && event.data.object ? event.data.object : null;
       const paymentIntentId = paymentIntent && paymentIntent.id ? String(paymentIntent.id) : '';
+      console.log('[StripeDiagnostics][WebhookPaymentIntent]', {
+        eventType: String(event.type || ''),
+        eventId: String(event.id || ''),
+        paymentIntentId,
+        status: String(paymentIntent && paymentIntent.status || ''),
+        currency: String(paymentIntent && paymentIntent.currency || ''),
+        amount: Number.isInteger(paymentIntent && paymentIntent.amount) ? paymentIntent.amount : null,
+        amountReceived: Number.isInteger(paymentIntent && paymentIntent.amount_received) ? paymentIntent.amount_received : null,
+        receiptEmail: String(paymentIntent && paymentIntent.receipt_email || ''),
+        metadata: paymentIntent && paymentIntent.metadata ? paymentIntent.metadata : {}
+      });
       if (paymentIntentId) {
         const reservation = await getSharedResourceReservationByPaymentIntentId(paymentIntentId);
         if (reservation) {
@@ -11883,6 +11894,15 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/online-payment/pre
       }
     );
 
+    console.log('[StripeDiagnostics][ReservationEnquiryPrepare]', {
+      landingPageSlug: String(landingPage.public_slug || ''),
+      paymentIntentId: String(paymentIntent.id || ''),
+      paymentIntentStatus: String(paymentIntent.status || ''),
+      hostStripeAccountId: String(stripeAccount.id || ''),
+      reservationIdentifiers: reservationRows.map((row) => String(row && row.reservation_identifier || '')).filter(Boolean),
+      guestEmail: emailAddress
+    });
+
     await Promise.all(reservationRows.map((reservation) => updateReservationActivityPaymentById(reservation.id, {
       paymentProvider: 'stripe',
       paymentIntentId: paymentIntent.id,
@@ -11926,6 +11946,17 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/online-payment/fin
       return res.status(404).json({ error: 'Payment intent was not found.' });
     }
 
+    console.log('[StripeDiagnostics][ReservationEnquiryFinalize][StripeRetrieved]', {
+      landingPageSlug: slug,
+      paymentIntentId: String(paymentIntent.id || ''),
+      status: String(paymentIntent.status || ''),
+      currency: String(paymentIntent.currency || ''),
+      amount: Number.isInteger(paymentIntent.amount) ? paymentIntent.amount : null,
+      amountReceived: Number.isInteger(paymentIntent.amount_received) ? paymentIntent.amount_received : null,
+      receiptEmail: String(paymentIntent.receipt_email || ''),
+      metadata: paymentIntent.metadata || {}
+    });
+
     const paymentIntentSlug = normaliseLandingPageSlug(paymentIntent.metadata && paymentIntent.metadata.landing_page_slug);
     if (paymentIntentSlug && paymentIntentSlug !== slug) {
       return res.status(403).json({ error: 'Payment intent does not match this landing page.' });
@@ -11934,6 +11965,19 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/online-payment/fin
     const finalized = await finalizeReservationActivityPaymentIntent(paymentIntent, {
       source: 'public-finalize-endpoint'
     });
+
+    console.log('[StripeDiagnostics][ReservationEnquiryFinalize][DBFinalize]', {
+      landingPageSlug: slug,
+      paymentIntentId: String(paymentIntent.id || ''),
+      found: finalized && finalized.found === true,
+      confirmed: finalized && finalized.confirmed === true,
+      alreadyConfirmed: finalized && finalized.alreadyConfirmed === true,
+      reservationIdentifiers: finalized && Array.isArray(finalized.reservationIdentifiers) ? finalized.reservationIdentifiers : [],
+      emailSent: finalized && finalized.emailSent === true,
+      emailRecipient: String(finalized && finalized.emailRecipient || ''),
+      emailError: String(finalized && finalized.emailError || '')
+    });
+
     if (!finalized || !finalized.found) {
       return res.status(404).json({ error: 'No reservation records found for this payment intent.' });
     }
