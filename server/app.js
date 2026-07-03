@@ -3239,11 +3239,27 @@ async function sendAppEmail(input) {
 
       const result = await postmarkRes.json().catch(() => ({}));
       if (!postmarkRes.ok) {
-        return { ok: false, error: getPostmarkErrorMessage(result, postmarkRes.status) };
+        return {
+          ok: false,
+          error: getPostmarkErrorMessage(result, postmarkRes.status),
+          postmarkStatusCode: postmarkRes.status,
+          postmarkResponse: result
+        };
       }
-      return { ok: true };
+      return {
+        ok: true,
+        messageId: result && result.MessageID ? String(result.MessageID) : null,
+        postmarkResponse: result
+      };
     } catch (err) {
-      return { ok: false, error: 'Failed to send email via Postmark.' };
+      const errorMsg = 'Failed to send email via Postmark.';
+      console.error('[SendEmail] Postmark API error', {
+        error: errorMsg,
+        exception: String(err && err.message || err),
+        recipient: to,
+        timestamp: new Date().toISOString()
+      });
+      return { ok: false, error: errorMsg, exception: String(err && err.message || err) };
     }
   }
 
@@ -11363,15 +11379,48 @@ app.post('/api/public/reservation-enquiry-landing-pages/:slug/bank-transfer-subm
 
     let emailDeliveryWarning = false;
     let emailDeliveryReason = '';
+    const logContext = {
+      reservationEnquiry: true,
+      landingPageSlug: req.params.slug,
+      guestEmail: emailAddress,
+      guestName: firstName + ' ' + familyName,
+      reservationIdentifiers: reservationRows.map((row) => String(row.reservation && row.reservation.reservation_identifier || '')).filter(Boolean),
+      totalAmount: totalAmount,
+      timestamp: new Date().toISOString()
+    };
+
     const emailResult = await sendAppEmail({
       to: emailAddress,
       subject: 'Payment Request For Accommodation',
       textBody: textLines.join('\n')
     });
-    if (!emailResult.ok && !String(emailResult.error || '').includes('not configured')) {
+
+    if (emailResult.ok) {
+      console.log('[ReservationEnquiry] Email sent successfully', {
+        ...logContext,
+        postmarkMessageId: emailResult.messageId,
+        postmarkResponse: emailResult.postmarkResponse
+      });
+    } else if (!String(emailResult.error || '').includes('not configured')) {
+      console.error('[ReservationEnquiry] Email send failed (hard error)', {
+        ...logContext,
+        error: emailResult.error,
+        postmarkStatusCode: emailResult.postmarkStatusCode,
+        postmarkResponse: emailResult.postmarkResponse,
+        exception: emailResult.exception
+      });
       return res.status(502).json({ error: emailResult.error || 'Failed to send payment request email.' });
+    } else {
+      // Email not configured - allow reservation to proceed but warn user
+      emailDeliveryWarning = true;
+      emailDeliveryReason = String(emailResult.error || '').trim();
+      console.warn('[ReservationEnquiry] Email delivery not configured', {
+        ...logContext,
+        warning: emailDeliveryReason
+      });
     }
-    if (!emailResult.ok) {
+
+    if (!emailResult.ok && String(emailResult.error || '').includes('not configured')) {
       emailDeliveryWarning = true;
       emailDeliveryReason = String(emailResult.error || '').trim();
     }
