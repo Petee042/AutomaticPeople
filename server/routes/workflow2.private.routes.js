@@ -429,7 +429,13 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
         });
 
         if (!existingGuestSiteUser && guestSiteUser) {
-          const setupEmailResult = await sendPasswordResetEmail(req, guestSiteUser);
+          let passwordSetupUser = guestSiteUser;
+          // Defensive fallback: ensure password_hash is present for reset-token generation.
+          if (!passwordSetupUser.password_hash) {
+            passwordSetupUser = await findUserByEmail(emailAddress);
+          }
+
+          const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
           if (!setupEmailResult.ok) {
             emailDeliveryReason = String(setupEmailResult.error || '').trim();
             emailDeliveryWarning = true;

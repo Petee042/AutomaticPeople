@@ -4605,7 +4605,7 @@ async function ensureGuestSiteUserForClientAccount(input) {
       `
         INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
         VALUES ($1, $2, $3, $4, $5, '', FALSE)
-        RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, created_at
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
       `,
       [username, email, temporaryPasswordHash, firstName, familyName]
     );
