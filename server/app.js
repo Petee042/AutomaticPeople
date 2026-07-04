@@ -9723,6 +9723,17 @@ app.use('/api', async (req, res, next) => {
     return next();
   }
 
+  const publicAuthWriteEndpoints = new Set([
+    '/signup',
+    '/login',
+    '/account/validate',
+    '/account/password-reset/request',
+    '/account/password-reset/confirm'
+  ]);
+  if (publicAuthWriteEndpoints.has(pathValue)) {
+    return next();
+  }
+
   const method = String(req.method || 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
     return next();
