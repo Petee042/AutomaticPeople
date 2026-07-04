@@ -12,6 +12,7 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
     normaliseOptionalEmail,
     sendAppEmail,
     ensureGuestSiteUserForClientAccount,
+    findUserByEmail,
     mapPrivateReservationRow,
     normaliseDateKey,
     normaliseSharedResourceReservationText,
@@ -27,7 +28,8 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
     getPreferredAppBaseUrl,
     formatDateTimeForMessage,
     createReservationActivityForListing,
-    sendSiteUserValidationEmail
+    sendSiteUserValidationEmail,
+    sendPasswordResetEmail
   } = deps;
 
   app.get('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
@@ -412,6 +414,29 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
         status: nextStatus,
         notes: ''
       });
+
+      // For paid private reservations, ensure the guest can access the site to complete payment.
+      // If this email does not already belong to a site user, create the user and send a password-setup link.
+      if (paymentMethod !== 'No Charge') {
+        const existingGuestSiteUser = await findUserByEmail(emailAddress);
+        const guestSiteUser = await ensureGuestSiteUserForClientAccount({
+          clientAccountId: req.accessContext.activeClientAccountId,
+          ownerUserId: req.accessContext.effectiveOwnerUserId,
+          firstName,
+          familyName,
+          email: emailAddress,
+          sourceType: 'private_reservation',
+          sourceId: String(reservation.id)
+        });
+
+        if (!existingGuestSiteUser && guestSiteUser) {
+          const setupEmailResult = await sendPasswordResetEmail(req, guestSiteUser);
+          if (!setupEmailResult.ok) {
+            emailDeliveryReason = String(setupEmailResult.error || '').trim();
+            emailDeliveryWarning = true;
+          }
+        }
+      }
 
       if (paymentMethod === 'No Charge') {
         const noChargeEmail = await sendAppEmail({

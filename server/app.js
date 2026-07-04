@@ -14161,6 +14161,7 @@ registerWorkflow2PrivateReservationRoutes(app, {
   normaliseOptionalEmail,
   sendAppEmail,
   ensureGuestSiteUserForClientAccount,
+  findUserByEmail,
   mapPrivateReservationRow,
   normaliseDateKey,
   normaliseSharedResourceReservationText,
@@ -14176,7 +14177,8 @@ registerWorkflow2PrivateReservationRoutes(app, {
   getPreferredAppBaseUrl,
   formatDateTimeForMessage,
   createReservationActivityForListing,
-  sendSiteUserValidationEmail
+  sendSiteUserValidationEmail,
+  sendPasswordResetEmail
 });
 
 // GET /api/calendar-entries?url=... — load and parse ICS events
