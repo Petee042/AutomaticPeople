@@ -26,7 +26,8 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
     generateGlobalReservationIdentifier,
     getPreferredAppBaseUrl,
     formatDateTimeForMessage,
-    createReservationActivityForListing
+    createReservationActivityForListing,
+    sendSiteUserValidationEmail
   } = deps;
 
   app.get('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
@@ -448,9 +449,29 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
         });
       }
 
+      if (paymentMethod === 'Online Payment') {
+        const guestSiteUser = await ensureGuestSiteUserForClientAccount({
+          clientAccountId: req.accessContext.activeClientAccountId,
+          ownerUserId: req.accessContext.effectiveOwnerUserId,
+          firstName,
+          familyName,
+          email: emailAddress,
+          sourceType: 'private_reservation',
+          sourceId: String(reservation.id)
+        });
+
+        if (guestSiteUser && guestSiteUser.is_validated === false) {
+          const validationEmailResult = await sendSiteUserValidationEmail(req, guestSiteUser);
+          if (!validationEmailResult.ok) {
+            emailDeliveryReason = String(validationEmailResult.error || '').trim();
+            emailDeliveryWarning = true;
+          }
+        }
+      }
+
       return res.json({
         reservation,
-        nextUrl: '/dashboard.html?tab=panel-dashboard',
+        nextUrl: '/dashboard-private-reservations.html',
         emailDeliveryWarning,
         emailDeliveryReason,
         message: paymentMethod === 'No Charge'

@@ -6,6 +6,8 @@ let guestUsers = [];
 const availabilityMap = {};
 let availabilityCheckId = 0;
 let preferredListingIdFromQuery = null;
+let reservationCostManuallyEdited = false;
+let applyingReservationCostProgrammatically = false;
 
 function formatMoney(value) {
   const amount = Number(value);
@@ -45,6 +47,55 @@ function getListingEstimatedTotalPrice(listing, stayNights) {
   const nightlyCost = Number.isFinite(perNight) ? perNight * nights : 0;
   const stayCost = Number.isFinite(perStay) ? perStay : 0;
   return Math.round((nightlyCost + stayCost) * 100) / 100;
+}
+
+function findListingById(listingId) {
+  const id = Number(listingId || 0);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+  return allListings.find(function(listing) { return Number(listing.id) === id; }) || null;
+}
+
+function getCalculatedReservationCost() {
+  const listing = findListingById(getSelectedListingId());
+  const arrival = String((document.getElementById('arrivalDate') || {}).value || '').trim();
+  const departure = String((document.getElementById('departureDate') || {}).value || '').trim();
+  const stayNights = getStayNights(arrival, departure);
+
+  if (!listing || stayNights <= 0) {
+    return null;
+  }
+
+  const total = getListingEstimatedTotalPrice(listing, stayNights);
+  return Number.isFinite(total) ? total : null;
+}
+
+function applyAutoCalculatedReservationCost(options) {
+  const opts = options || {};
+  const force = opts.force === true;
+  const input = document.getElementById('reservationCost');
+  if (!input) {
+    return;
+  }
+
+  const calculated = getCalculatedReservationCost();
+  if (calculated === null) {
+    if (force && !reservationCostManuallyEdited) {
+      applyingReservationCostProgrammatically = true;
+      input.value = '';
+      applyingReservationCostProgrammatically = false;
+    }
+    return;
+  }
+
+  if (!force && reservationCostManuallyEdited) {
+    return;
+  }
+
+  applyingReservationCostProgrammatically = true;
+  input.value = calculated.toFixed(2);
+  applyingReservationCostProgrammatically = false;
 }
 
 function localRankSingleStayOptions(options) {
@@ -217,7 +268,12 @@ function renderListings(listings) {
     } else {
       indicatorHtml = '<span class="avail-indicator avail-unknown" aria-label=""></span>';
     }
-    const checked = checkedIds.has(String(listing.id)) && !isDisabled ? ' checked' : '';
+    const shouldCheckPreferred = checkedIds.size === 0
+      && Number.isInteger(preferredListingIdFromQuery)
+      && Number(preferredListingIdFromQuery) > 0
+      && Number(listing.id) === Number(preferredListingIdFromQuery)
+      && !isDisabled;
+    const checked = (checkedIds.has(String(listing.id)) || shouldCheckPreferred) && !isDisabled ? ' checked' : '';
     const disabled = isDisabled ? ' disabled' : '';
     const estimatedTotal = stayNights > 0 ? getListingEstimatedTotalPrice(listing, stayNights) : null;
     const estimatedHtml = estimatedTotal !== null && Number.isFinite(estimatedTotal)
@@ -329,6 +385,13 @@ document.getElementById('cancelReservationBtn').addEventListener('click', functi
   window.location.href = '/dashboard.html?tab=panel-dashboard';
 });
 
+document.getElementById('reservationCost').addEventListener('input', function() {
+  if (applyingReservationCostProgrammatically) {
+    return;
+  }
+  reservationCostManuallyEdited = true;
+});
+
 document.getElementById('listingsCheckboxList').addEventListener('change', function(e) {
   const target = e.target;
   if (!target || !target.classList || !target.classList.contains('cleaning-listing-checkbox')) {
@@ -343,6 +406,8 @@ document.getElementById('listingsCheckboxList').addEventListener('change', funct
       cb.checked = false;
     }
   });
+
+  applyAutoCalculatedReservationCost({ force: false });
 });
 
 // Trigger availability check when either date changes
@@ -355,6 +420,7 @@ document.getElementById('listingsCheckboxList').addEventListener('change', funct
       var departure = document.getElementById('departureDate').value;
       checkAvailability(arrival, departure);
     }, 300);
+    applyAutoCalculatedReservationCost({ force: false });
   }
   document.getElementById('arrivalDate').addEventListener('change', onDateChange);
   document.getElementById('departureDate').addEventListener('change', onDateChange);
@@ -436,7 +502,7 @@ document.getElementById('privateReservationForm').addEventListener('submit', asy
 
     setMessage(data.message || 'Reservation saved.', false);
     setTimeout(function() {
-      window.location.href = '/dashboard.html?tab=panel-dashboard';
+      window.location.href = '/dashboard-private-reservations.html';
     }, 900);
   } catch (err) {
     setMessage(err.message || 'Failed to save reservation.', true);
@@ -453,6 +519,15 @@ document.getElementById('privateReservationForm').addEventListener('submit', asy
     preferredListingIdFromQuery = Number.isInteger(preferredFromQuery) && preferredFromQuery > 0
       ? preferredFromQuery
       : null;
+    const arrivalFromQuery = String(params.get('arrivalDate') || '').trim();
+    const departureFromQuery = String(params.get('departureDate') || '').trim();
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(arrivalFromQuery)) {
+      document.getElementById('arrivalDate').value = arrivalFromQuery;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(departureFromQuery)) {
+      document.getElementById('departureDate').value = departureFromQuery;
+    }
 
     const meRes = await fetch('/api/me');
     if (!meRes.ok) {
@@ -493,6 +568,12 @@ document.getElementById('privateReservationForm').addEventListener('submit', asy
     if (!document.getElementById('guestCount').value) {
       document.getElementById('guestCount').value = '1';
     }
+
+    await checkAvailability(
+      String(document.getElementById('arrivalDate').value || '').trim(),
+      String(document.getElementById('departureDate').value || '').trim()
+    );
+    applyAutoCalculatedReservationCost({ force: true });
   } catch (err) {
     setMessage('Failed to load page data. Please try again.', true);
   }

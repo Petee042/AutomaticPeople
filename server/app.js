@@ -5842,9 +5842,12 @@ function getPrivateReservationPaymentStatusLabel(row) {
     return status === 'awaiting_bank_transfer' ? 'outstanding' : 'paid';
   }
   if (paymentMethod === 'Online Payment') {
-    return 'paid';
+    return status === 'awaiting_online_payment' ? 'outstanding' : 'paid';
   }
-  return 'paid';
+  if (status.indexOf('awaiting_') === 0) {
+    return 'outstanding';
+  }
+  return status || 'paid';
 }
 
 function canConfirmPrivateReservationPayment(row) {
@@ -14172,7 +14175,8 @@ registerWorkflow2PrivateReservationRoutes(app, {
   generateGlobalReservationIdentifier,
   getPreferredAppBaseUrl,
   formatDateTimeForMessage,
-  createReservationActivityForListing
+  createReservationActivityForListing,
+  sendSiteUserValidationEmail
 });
 
 // GET /api/calendar-entries?url=... — load and parse ICS events

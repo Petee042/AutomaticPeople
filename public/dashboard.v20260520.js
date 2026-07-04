@@ -4493,7 +4493,7 @@ async function loadPrivateReservations() {
     return;
   }
 
-  tbody.innerHTML = '<tr><td colspan="7">Loading private reservations...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8">Loading private reservations...</td></tr>';
   setPrivateReservationsMessage('', false);
 
   try {
@@ -4503,7 +4503,7 @@ async function loadPrivateReservations() {
       return;
     }
     if (res.status === 403) {
-      tbody.innerHTML = '<tr><td colspan="7">Access restricted.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">Access restricted.</td></tr>';
       return;
     }
 
@@ -4514,7 +4514,7 @@ async function loadPrivateReservations() {
 
     const reservations = Array.isArray(data.reservations) ? data.reservations : [];
     if (!reservations.length) {
-      tbody.innerHTML = '<tr><td colspan="7">No private reservations found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">No private reservations found.</td></tr>';
       return;
     }
 
@@ -4543,6 +4543,9 @@ async function loadPrivateReservations() {
       const amountCell = document.createElement('td');
       amountCell.textContent = formatPrivateReservationAmount(reservation.amount);
 
+      const paymentStatusCell = document.createElement('td');
+      paymentStatusCell.textContent = String(reservation.paymentStatus || '—');
+
       const actionCell = document.createElement('td');
       const actionsWrap = document.createElement('div');
       actionsWrap.className = 'feed-actions';
@@ -4566,11 +4569,12 @@ async function loadPrivateReservations() {
       tr.appendChild(arrivalCell);
       tr.appendChild(nightsCell);
       tr.appendChild(amountCell);
+      tr.appendChild(paymentStatusCell);
       tr.appendChild(actionCell);
       tbody.appendChild(tr);
     });
   } catch (err) {
-    tbody.innerHTML = '<tr><td colspan="7">Failed to load private reservations.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8">Failed to load private reservations.</td></tr>';
     setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
   }
 }
