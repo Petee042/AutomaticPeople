@@ -33,7 +33,7 @@ let currentEditingTeamUserId = null;
 let currentTeamMemberDeleteImpact = null;
 let currentMeProfile = null;
 let currentDashboardContextMode = 'hosting';
-let dashboardContextAvailability = { hosting: true, guest: false };
+let dashboardContextAvailability = { hosting: true, guest: true };
 let dashboardTabController = null;
 
 let opsCalCurrentMonth = new Date();
@@ -1128,7 +1128,7 @@ function updateDashboardContextAvailabilityFromMemberships() {
 
   dashboardContextAvailability = {
     hosting: hasHosting || !hasGuest,
-    guest: hasGuest
+    guest: hasGuest || true
   };
 
   renderDashboardContextToggle();
@@ -1203,13 +1203,6 @@ function renderDashboardContextToggle() {
   const iconEl = document.getElementById('dashboardContextToggleIcon');
   const labelEl = document.getElementById('dashboardContextLabel');
   if (!toggleBtn || !iconEl || !labelEl) {
-    return;
-  }
-
-  const canSwitchModes = dashboardContextAvailability.hosting && dashboardContextAvailability.guest;
-  toggleBtn.classList.toggle('hidden', !canSwitchModes);
-  toggleBtn.disabled = !canSwitchModes;
-  if (!canSwitchModes) {
     return;
   }
 
@@ -4482,10 +4475,6 @@ if (_guestAccountForm) _guestAccountForm.addEventListener('submit', async (e) =>
 
 const _dashboardContextToggle = document.getElementById('dashboardContextToggle');
 if (_dashboardContextToggle) _dashboardContextToggle.addEventListener('click', async () => {
-  if (!(dashboardContextAvailability.hosting && dashboardContextAvailability.guest)) {
-    return;
-  }
-
   const nextMode = currentDashboardContextMode === 'guest' ? 'hosting' : 'guest';
   const menuBtn = document.getElementById('tabMenuBtn');
   const menuEl = document.getElementById('tabContextMenu');
