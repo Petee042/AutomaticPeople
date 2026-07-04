@@ -2541,7 +2541,31 @@ async function finalizeReservationActivityPaymentIntent(paymentIntent, options) 
     return { found: false, error: 'Missing payment intent id.' };
   }
 
-  const reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+  let reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+  if (!reservationRows.length) {
+    const metadataReservationId = Number(
+      intent
+      && intent.metadata
+      && (intent.metadata.reservation_activity_id || intent.metadata.first_reservation_id)
+    );
+    if (Number.isInteger(metadataReservationId) && metadataReservationId > 0) {
+      await pool.query(
+        `
+          UPDATE reservation_activity
+          SET payment_provider = 'stripe',
+              payment_intent_id = CASE
+                WHEN NULLIF(TRIM(COALESCE(payment_intent_id, '')), '') IS NULL THEN $2
+                ELSE payment_intent_id
+              END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `,
+        [metadataReservationId, paymentIntentId]
+      );
+      reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+    }
+  }
+
   if (!reservationRows.length) {
     return { found: false, paymentIntentId };
   }
@@ -2616,6 +2640,49 @@ async function finalizeReservationActivityPaymentIntent(paymentIntent, options) 
 
   await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, commonUpdate)));
   return { found: true, paymentStatus, confirmed: false };
+}
+
+async function getGuestDashboardReservationByIdForUser(reservationId, userId, normalizedEmail) {
+  const id = Number(reservationId || 0);
+  const uid = Number(userId || 0);
+  const guestEmail = String(normalizedEmail || '').trim().toLowerCase();
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(uid) || uid <= 0) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT ra.id,
+             ra.user_id,
+             ra.client_account_id,
+             ra.listing_id,
+             ra.reservation_identifier,
+             ra.reservation_checkin_date::text AS reservation_checkin_date,
+             ra.reservation_checkout_date::text AS reservation_checkout_date,
+             ra.first_name,
+             ra.family_name,
+             ra.email_address,
+             ra.reservation_amount,
+             ra.payment_method,
+             ra.status,
+             ra.payment_intent_id,
+             ra.created_at,
+             l.name AS listing_name,
+             COALESCE(NULLIF(TRIM(p.name), ''), '') AS property_name
+      FROM reservation_activity ra
+      LEFT JOIN listings l ON l.id = ra.listing_id
+      LEFT JOIN properties p ON p.id = l.property_id
+      WHERE ra.id = $1
+        AND (
+          ra.user_id = $2
+          OR ($3 <> '' AND LOWER(TRIM(COALESCE(ra.email_address, ''))) = $3)
+        )
+      LIMIT 1
+    `,
+    [id, uid, guestEmail]
+  );
+
+  return result.rows[0] || null;
 }
 
 function normaliseSharedResourceReservationEmail(value) {
@@ -11225,6 +11292,214 @@ app.get('/api/guest/dashboard/reservations', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load guest reservations.' });
+  }
+});
+
+// POST /api/guest/dashboard/reservations/:reservationId/pay-now — start Stripe checkout for guest online-payment reservation
+app.post('/api/guest/dashboard/reservations/:reservationId/pay-now', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    if (String(reservation.payment_method || '').trim() !== 'Online Payment') {
+      return res.status(400).json({ error: 'This reservation is not configured for online payment.' });
+    }
+    if (String(reservation.status || '').trim().toLowerCase() !== 'awaiting_online_payment') {
+      return res.status(409).json({ error: 'This reservation is not awaiting online payment.' });
+    }
+
+    const amount = Number(reservation.reservation_amount || 0);
+    const amountMinor = toMinorUnits(amount);
+    if (!Number.isInteger(amountMinor) || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Reservation amount is invalid for online payment.' });
+    }
+
+    const hostUser = await getUserById(Number(reservation.user_id || 0));
+    if (!hostUser || !hostUser.stripe_account_id) {
+      return res.status(400).json({ error: 'Host Stripe account is not connected yet.' });
+    }
+    if (!isOnlinePaymentAvailableForHostUser(hostUser)) {
+      return res.status(400).json({ error: 'Host online payment is currently unavailable.' });
+    }
+
+    const stripeAccount = await stripeClient.accounts.retrieve(String(hostUser.stripe_account_id));
+    await setUserStripeConnectState(hostUser.id, {
+      stripe_account_id: stripeAccount.id,
+      stripe_onboarding_complete: stripeAccount.details_submitted === true,
+      stripe_charges_enabled: stripeAccount.charges_enabled === true,
+      stripe_payouts_enabled: stripeAccount.payouts_enabled === true
+    });
+    if (stripeAccount.charges_enabled !== true || stripeAccount.payouts_enabled !== true) {
+      return res.status(400).json({ error: 'Host Stripe account onboarding is incomplete.' });
+    }
+
+    const baseUrl = getPreferredAppBaseUrl(req);
+    if (!baseUrl) {
+      return res.status(400).json({ error: 'Unable to determine application URL for payment redirect.' });
+    }
+
+    const successUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=success&reservationId=' + encodeURIComponent(String(reservation.id));
+    const cancelUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=cancelled&reservationId=' + encodeURIComponent(String(reservation.id));
+    const listingName = String(reservation.listing_name || '').trim();
+    const propertyName = String(reservation.property_name || '').trim();
+
+    const checkoutSession = await stripeClient.checkout.sessions.create({
+      mode: 'payment',
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      customer_email: normaliseOptionalEmail(guestUser.email) || normaliseOptionalEmail(reservation.email_address) || undefined,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'gbp',
+            unit_amount: amountMinor,
+            product_data: {
+              name: 'Reservation ' + String(reservation.reservation_identifier || '').trim(),
+              description: (propertyName ? (propertyName + ' / ') : '') + (listingName || ('Listing #' + String(reservation.listing_id || '')))
+            }
+          }
+        }
+      ],
+      payment_intent_data: {
+        transfer_data: {
+          destination: String(stripeAccount.id)
+        },
+        metadata: {
+          reservation_type: 'guest_dashboard_private_reservation',
+          reservation_activity_id: String(reservation.id),
+          reservation_identifier: String(reservation.reservation_identifier || ''),
+          client_account_id: String(reservation.client_account_id || ''),
+          host_user_id: String(reservation.user_id || '')
+        }
+      },
+      metadata: {
+        reservation_type: 'guest_dashboard_private_reservation',
+        reservation_activity_id: String(reservation.id),
+        reservation_identifier: String(reservation.reservation_identifier || '')
+      }
+    });
+
+    const checkoutPaymentIntentId = checkoutSession && checkoutSession.payment_intent
+      ? String(checkoutSession.payment_intent)
+      : '';
+    if (checkoutPaymentIntentId) {
+      await updateReservationActivityPaymentById(reservation.id, {
+        paymentProvider: 'stripe',
+        paymentIntentId: checkoutPaymentIntentId,
+        paymentStatus: 'requires_payment_method',
+        paymentCurrency: 'gbp',
+        paymentAmountMinor: amountMinor,
+        paymentLastError: '',
+        status: 'awaiting_online_payment'
+      });
+    }
+
+    if (!checkoutSession || !checkoutSession.url) {
+      return res.status(500).json({ error: 'Failed to start Stripe checkout session.' });
+    }
+
+    return res.json({
+      checkoutUrl: String(checkoutSession.url),
+      reservationId: Number(reservation.id),
+      reservationIdentifier: String(reservation.reservation_identifier || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to start reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/reservations/:reservationId/notify-payment — guest notifies host a bank transfer was made
+app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    if (String(reservation.payment_method || '').trim() !== 'Bank Transfer') {
+      return res.status(400).json({ error: 'This reservation is not configured for bank transfer.' });
+    }
+    if (String(reservation.status || '').trim().toLowerCase() !== 'awaiting_bank_transfer') {
+      return res.status(409).json({ error: 'This reservation is not awaiting bank transfer.' });
+    }
+
+    const ownerUserId = await getClientOwnerUserId(Number(reservation.client_account_id || 0));
+    const ownerUser = ownerUserId ? await getUserById(ownerUserId) : null;
+    const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
+    if (!ownerEmail) {
+      return res.status(400).json({ error: 'Host contact email is not available for this reservation.' });
+    }
+
+    const notifyEmailResult = await sendAppEmail({
+      to: ownerEmail,
+      subject: 'Guest Bank Transfer Payment Notification',
+      textBody: [
+        'A guest has notified that bank transfer payment has been made.',
+        '',
+        'Reservation ID: ' + String(reservation.reservation_identifier || ''),
+        'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+        'Guest email: ' + String(reservation.email_address || ''),
+        'Property: ' + String(reservation.property_name || ''),
+        'Listing: ' + String(reservation.listing_name || ''),
+        'Arrival date: ' + String(reservation.reservation_checkin_date || ''),
+        'Departure date: ' + String(reservation.reservation_checkout_date || ''),
+        'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+        'Notified at: ' + new Date().toISOString(),
+        '',
+        'Please verify bank receipt and confirm payment in the dashboard.'
+      ].join('\n')
+    });
+
+    if (!notifyEmailResult.ok) {
+      return res.status(502).json({ error: notifyEmailResult.error || 'Failed to send payment notification email.' });
+    }
+
+    return res.json({
+      notified: true,
+      message: 'Payment notification sent to host.'
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to send payment notification.' });
   }
 });
 
