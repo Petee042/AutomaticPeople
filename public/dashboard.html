@@ -283,6 +283,7 @@
         <section class="listing-form-section">
           <h3>Reservations</h3>
           <p id="guestReservationsMessage" class="message"></p>
+          <p class="hint">Your confirmed and active reservation activity appears below.</p>
         </section>
 
         <section class="listing-form-section">
@@ -294,14 +295,16 @@
                   <th>Reservation ID</th>
                   <th>Listing</th>
                   <th>Arrival</th>
+                  <th>Departure</th>
                   <th>Nights</th>
                   <th>Amount</th>
                   <th>Payment Status</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody id="guestAccommodationTableBody">
                 <tr>
-                  <td colspan="6">Loading accommodation reservations...</td>
+                  <td colspan="8">Loading accommodation reservations...</td>
                 </tr>
               </tbody>
             </table>
@@ -319,7 +322,7 @@
                   <th>End</th>
                   <th>Amount</th>
                   <th>Payment Status</th>
-                  <th>Status</th>
+                  <th>Booking Status</th>
                 </tr>
               </thead>
               <tbody id="guestFacilityTableBody">
@@ -337,6 +340,7 @@
         <section class="listing-form-section">
           <h3>Personal Account</h3>
           <p id="guestAccountMessage" class="message"></p>
+          <p class="hint">Name and email are fixed for login identity. Telephone and postal address can be updated.</p>
 
           <form id="guestAccountForm" class="bank-details-form" novalidate>
             <div class="calendar-source-row">

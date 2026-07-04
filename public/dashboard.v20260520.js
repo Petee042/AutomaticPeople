@@ -4860,7 +4860,7 @@ async function loadGuestReservations() {
     return;
   }
 
-  accommodationBody.innerHTML = '<tr><td colspan="6">Loading accommodation reservations...</td></tr>';
+  accommodationBody.innerHTML = '<tr><td colspan="8">Loading accommodation reservations...</td></tr>';
   facilityBody.innerHTML = '<tr><td colspan="6">Loading facility reservations...</td></tr>';
   setGuestReservationsMessage('', false);
 
@@ -4880,7 +4880,7 @@ async function loadGuestReservations() {
     const facilities = Array.isArray(data.facilities) ? data.facilities : [];
 
     if (!accommodation.length) {
-      accommodationBody.innerHTML = '<tr><td colspan="6">No accommodation reservations found.</td></tr>';
+      accommodationBody.innerHTML = '<tr><td colspan="8">No accommodation reservations found.</td></tr>';
     } else {
       accommodationBody.innerHTML = '';
       accommodation.forEach((reservation) => {
@@ -4895,6 +4895,9 @@ async function loadGuestReservations() {
         const arrivalCell = document.createElement('td');
         arrivalCell.textContent = formatPrivateReservationArrival(reservation.arrivalDate);
 
+        const departureCell = document.createElement('td');
+        departureCell.textContent = formatPrivateReservationArrival(reservation.departureDate);
+
         const nightsCell = document.createElement('td');
         nightsCell.textContent = String(Number(reservation.stayNights || 0) || 0);
 
@@ -4904,12 +4907,17 @@ async function loadGuestReservations() {
         const paymentCell = document.createElement('td');
         paymentCell.textContent = reservation.paymentStatus || '—';
 
+        const statusCell = document.createElement('td');
+        statusCell.textContent = reservation.status || '—';
+
         tr.appendChild(idCell);
         tr.appendChild(listingCell);
         tr.appendChild(arrivalCell);
+        tr.appendChild(departureCell);
         tr.appendChild(nightsCell);
         tr.appendChild(amountCell);
         tr.appendChild(paymentCell);
+        tr.appendChild(statusCell);
         accommodationBody.appendChild(tr);
       });
     }
@@ -4949,7 +4957,7 @@ async function loadGuestReservations() {
       });
     }
   } catch (err) {
-    accommodationBody.innerHTML = '<tr><td colspan="6">Failed to load accommodation reservations.</td></tr>';
+    accommodationBody.innerHTML = '<tr><td colspan="8">Failed to load accommodation reservations.</td></tr>';
     facilityBody.innerHTML = '<tr><td colspan="6">Failed to load facility reservations.</td></tr>';
     setGuestReservationsMessage(err.message || 'Failed to load guest reservations.', true);
   }
