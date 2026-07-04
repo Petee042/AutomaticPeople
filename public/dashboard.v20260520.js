@@ -1206,7 +1206,7 @@ function renderDashboardContextToggle() {
     return;
   }
 
-  const modeLabel = currentDashboardContextMode === 'guest' ? 'Guest' : 'Hosting';
+  const modeLabel = currentDashboardContextMode === 'guest' ? 'Hosting' : 'Guest';
   labelEl.textContent = modeLabel;
   iconEl.innerHTML = getContextToggleIconSvg(currentDashboardContextMode);
 
