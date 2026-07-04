@@ -7408,11 +7408,11 @@ async function reassignGuestReferencesForClientAccount(clientAccountId, targetUs
       SET guest_user_id = $1,
           guest_email = 'deleted+guest-rel-' || id::text || '@automaticpeople.local',
           guest_phone = '',
-          guest_first_name = $3,
-          guest_family_name = $4,
+          guest_first_name = $2,
+          guest_family_name = $3,
           updated_at = CURRENT_TIMESTAMP
-      WHERE client_account_id = $5
-        AND guest_user_id = $6
+      WHERE client_account_id = $4
+        AND guest_user_id = $5
     `,
     [deleted.deletedUserId, deleted.deletedFirstName, deleted.deletedFamilyName, accountId, targetId]
   );
