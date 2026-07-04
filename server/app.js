@@ -7599,7 +7599,13 @@ async function deleteUserAndData(userId) {
       continue;
     }
     processedTeamClientIds.add(clientAccountId);
-    await removeTeamMemberFromClientScope(clientAccountId, id);
+    const teamResult = await removeTeamMemberFromClientScope(clientAccountId, id);
+    if (teamResult && teamResult.error) {
+      // Treat stale team membership records as no-op to keep global admin deletion resilient.
+      if (String(teamResult.error).toLowerCase().indexOf('not a team member') === -1) {
+        return { error: teamResult.error };
+      }
+    }
   }
 
   const processedGuestClientIds = new Set();
@@ -7627,7 +7633,13 @@ async function deleteUserAndData(userId) {
       continue;
     }
     processedGuestClientIds.add(clientAccountId);
-    await removeGuestSiteUserFromClientScope(clientAccountId, id);
+    const guestResult = await removeGuestSiteUserFromClientScope(clientAccountId, id);
+    if (guestResult && guestResult.error) {
+      // Treat stale guest membership records as no-op to keep global admin deletion resilient.
+      if (String(guestResult.error).toLowerCase().indexOf('invalid guest site user') === -1) {
+        return { error: guestResult.error };
+      }
+    }
   }
 
   const cleanupResult = await removeSiteUserIfUnreferenced(id);
@@ -10446,7 +10458,10 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
     return res.json({ message: 'User deleted.', deletedUserId: result.deletedUserId });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Failed to delete user.' });
+    return res.status(500).json({
+      error: err && err.message ? String(err.message) : 'Failed to delete user.',
+      details: err && err.detail ? String(err.detail) : ''
+    });
   }
 });
 
