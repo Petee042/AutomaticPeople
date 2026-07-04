@@ -15,6 +15,7 @@ const { Pool } = require('pg');
 const { registerWorkflow2PrivateReservationRoutes } = require('./routes/workflow2.private.routes');
 const { registerWorkflow3FacilityBookingRoutes } = require('./routes/workflow3.facility-booking.routes');
 const { registerWorkflow4ReservationEnquiryRoutes } = require('./routes/workflow4.reservation-enquiry.routes');
+const { registerWorkflow5FacilityEnquiryRoutes } = require('./routes/workflow5.facility-enquiry.routes');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -50,6 +51,8 @@ const PASSWORD_RESET_TOKEN_VERSION = 'v1';
 const PASSWORD_RESET_TOKEN_TTL_MS = Number(process.env.PASSWORD_RESET_TOKEN_TTL_MS || (1000 * 60 * 60));
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+const LANDING_PAGE_WORKFLOW_4 = 'workflow4_reservation_enquiry_public';
+const LANDING_PAGE_WORKFLOW_5 = 'workflow5_facility_enquiry_public';
 const stripeClient = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
 if (!DATABASE_URL) {
@@ -870,6 +873,22 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE reservation_enquiry_landing_pages
     ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'bank_transfer'
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS workflow_type TEXT NOT NULL DEFAULT '${LANDING_PAGE_WORKFLOW_4}'
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS shared_resource_id BIGINT REFERENCES shared_resources(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    UPDATE reservation_enquiry_landing_pages
+    SET workflow_type = '${LANDING_PAGE_WORKFLOW_4}'
+    WHERE COALESCE(TRIM(workflow_type), '') = ''
   `);
 
   await pool.query(`
@@ -2268,10 +2287,11 @@ async function getActiveReservationEnquiryLandingPageBySlug(slug) {
       FROM reservation_enquiry_landing_pages relp
       LEFT JOIN listings l ON l.id = relp.preferred_listing_id
       WHERE relp.public_slug = $1
+        AND relp.workflow_type = $2
         AND relp.is_active = TRUE
       LIMIT 1
     `,
-    [normalisedSlug]
+    [normalisedSlug, LANDING_PAGE_WORKFLOW_4]
   );
 
   return result.rows[0] ? mapReservationEnquiryLandingPageRow(result.rows[0]) : null;
@@ -5125,9 +5145,10 @@ async function getReservationEnquiryLandingPagesForUser(userId, clientAccountId)
       LEFT JOIN listings l ON l.id = relp.preferred_listing_id
       WHERE relp.user_id = $1
         AND relp.client_account_id = $2
+        AND relp.workflow_type = $3
       ORDER BY LOWER(relp.name) ASC, relp.id ASC
     `,
-    [Number(userId), Number(clientAccountId)]
+    [Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_4]
   );
   return result.rows.map(mapReservationEnquiryLandingPageRow);
 }
@@ -5155,9 +5176,10 @@ async function getReservationEnquiryLandingPageByIdForUser(id, userId, clientAcc
       WHERE relp.id = $1
         AND relp.user_id = $2
         AND relp.client_account_id = $3
+        AND relp.workflow_type = $4
       LIMIT 1
     `,
-    [Number(id), Number(userId), Number(clientAccountId)]
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_4]
   );
   return result.rows[0] ? mapReservationEnquiryLandingPageRow(result.rows[0]) : null;
 }
@@ -5231,6 +5253,8 @@ async function createReservationEnquiryLandingPageForUser(input) {
         INSERT INTO reservation_enquiry_landing_pages (
           user_id,
           client_account_id,
+          workflow_type,
+          shared_resource_id,
           name,
           public_slug,
           preferred_listing_id,
@@ -5242,7 +5266,7 @@ async function createReservationEnquiryLandingPageForUser(input) {
           is_active,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
         RETURNING id,
                   user_id,
                   client_account_id,
@@ -5261,6 +5285,7 @@ async function createReservationEnquiryLandingPageForUser(input) {
       [
         Number(input.userId),
         Number(input.clientAccountId),
+        LANDING_PAGE_WORKFLOW_4,
         name,
         slug,
         preferredListingId,
@@ -5317,16 +5342,19 @@ async function updateReservationEnquiryLandingPageForUser(input) {
         SET name = $1,
             public_slug = $2,
             preferred_listing_id = $3,
-            description_html = $4,
-            notes_html = $5,
-            listing_filters_json = $6,
-            percentage_discount = $7,
-            payment_method = $8,
-            is_active = $9,
+            workflow_type = $4,
+            shared_resource_id = NULL,
+            description_html = $5,
+            notes_html = $6,
+            listing_filters_json = $7,
+            percentage_discount = $8,
+            payment_method = $9,
+            is_active = $10,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = $10
-          AND user_id = $11
-          AND client_account_id = $12
+        WHERE id = $11
+          AND user_id = $12
+          AND client_account_id = $13
+          AND workflow_type = $14
         RETURNING id,
                   user_id,
                   client_account_id,
@@ -5346,6 +5374,7 @@ async function updateReservationEnquiryLandingPageForUser(input) {
         name,
         slug,
         preferredListingId,
+        LANDING_PAGE_WORKFLOW_4,
         descriptionHtml,
         notesHtml,
         JSON.stringify(listingFilters),
@@ -5354,7 +5383,8 @@ async function updateReservationEnquiryLandingPageForUser(input) {
         isActive,
         Number(input.id),
         Number(input.userId),
-        Number(input.clientAccountId)
+        Number(input.clientAccountId),
+        LANDING_PAGE_WORKFLOW_4
       ]
     );
     if (!result.rows[0]) {
@@ -5373,14 +5403,355 @@ async function deleteReservationEnquiryLandingPageForUser(id, userId, clientAcco
       WHERE id = $1
         AND user_id = $2
         AND client_account_id = $3
+        AND workflow_type = $4
       RETURNING id
     `,
-    [Number(id), Number(userId), Number(clientAccountId)]
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_4]
   );
   if (!result.rows[0]) {
     return { error: 'Landing page not found.' };
   }
   return { deletedLandingPageId: Number(result.rows[0].id) };
+}
+
+function mapFacilityEnquiryLandingPageRow(row) {
+  const paymentMethod = normaliseLandingPagePaymentMethod(row && row.payment_method) || 'bank_transfer';
+  return {
+    id: Number(row && row.id || 0),
+    user_id: Number(row && row.user_id || 0),
+    client_account_id: row && row.client_account_id ? Number(row.client_account_id) : null,
+    workflow_type: String(row && row.workflow_type || ''),
+    name: String(row && row.name || ''),
+    public_slug: String(row && row.public_slug || ''),
+    description_html: sanitiseRichTextHtml(row && row.description_html || ''),
+    notes_html: sanitiseRichTextHtml(row && row.notes_html || ''),
+    shared_resource_id: row && row.shared_resource_id ? Number(row.shared_resource_id) : null,
+    shared_resource_name: String(row && row.shared_resource_name || ''),
+    shared_resource_type: String(row && row.shared_resource_type || ''),
+    shared_resource_property_id: row && row.shared_resource_property_id ? Number(row.shared_resource_property_id) : null,
+    shared_resource_listing_id: row && row.shared_resource_listing_id ? Number(row.shared_resource_listing_id) : null,
+    payment_method: paymentMethod,
+    payment_bank_transfer: paymentMethod === 'bank_transfer',
+    payment_online: paymentMethod === 'online',
+    is_active: row && row.is_active === true,
+    created_at: row && row.created_at,
+    updated_at: row && row.updated_at
+  };
+}
+
+async function getFacilityEnquiryLandingPagesForUser(userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.workflow_type,
+             relp.name,
+             relp.public_slug,
+             relp.description_html,
+             relp.notes_html,
+             relp.shared_resource_id,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             sr.short_description AS shared_resource_name,
+             sr.resource_type AS shared_resource_type,
+             sr.property_id AS shared_resource_property_id,
+             sr.listing_id AS shared_resource_listing_id
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN shared_resources sr ON sr.id = relp.shared_resource_id
+      WHERE relp.user_id = $1
+        AND relp.client_account_id = $2
+        AND relp.workflow_type = $3
+      ORDER BY LOWER(relp.name) ASC, relp.id ASC
+    `,
+    [Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_5]
+  );
+  return result.rows.map(mapFacilityEnquiryLandingPageRow);
+}
+
+async function getFacilityEnquiryLandingPageByIdForUser(id, userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.workflow_type,
+             relp.name,
+             relp.public_slug,
+             relp.description_html,
+             relp.notes_html,
+             relp.shared_resource_id,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             sr.short_description AS shared_resource_name,
+             sr.resource_type AS shared_resource_type,
+             sr.property_id AS shared_resource_property_id,
+             sr.listing_id AS shared_resource_listing_id
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN shared_resources sr ON sr.id = relp.shared_resource_id
+      WHERE relp.id = $1
+        AND relp.user_id = $2
+        AND relp.client_account_id = $3
+        AND relp.workflow_type = $4
+      LIMIT 1
+    `,
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_5]
+  );
+  return result.rows[0] ? mapFacilityEnquiryLandingPageRow(result.rows[0]) : null;
+}
+
+async function getActiveFacilityEnquiryLandingPageBySlug(slug) {
+  const normalisedSlug = normaliseLandingPageSlug(slug);
+  if (!normalisedSlug) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.workflow_type,
+             relp.name,
+             relp.public_slug,
+             relp.description_html,
+             relp.notes_html,
+             relp.shared_resource_id,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             sr.short_description AS shared_resource_name,
+             sr.resource_type AS shared_resource_type,
+             sr.property_id AS shared_resource_property_id,
+             sr.listing_id AS shared_resource_listing_id
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN shared_resources sr ON sr.id = relp.shared_resource_id
+      WHERE relp.public_slug = $1
+        AND relp.workflow_type = $2
+        AND relp.is_active = TRUE
+      LIMIT 1
+    `,
+    [normalisedSlug, LANDING_PAGE_WORKFLOW_5]
+  );
+
+  return result.rows[0] ? mapFacilityEnquiryLandingPageRow(result.rows[0]) : null;
+}
+
+async function createFacilityEnquiryLandingPageForUser(input) {
+  const name = normaliseLandingPageName(input && input.name);
+  const requestedSlug = normaliseLandingPageSlug(input && input.publicSlug, name);
+  const descriptionHtml = sanitiseRichTextHtml(input && input.descriptionHtml);
+  const notesHtml = sanitiseRichTextHtml(input && input.notesHtml);
+  const paymentMethod = normaliseLandingPagePaymentMethod(input && input.paymentMethod);
+  const isActive = !(input && input.isActive === false);
+  const sharedResourceId = normaliseOptionalPositiveInteger(input && input.sharedResourceId);
+
+  if (!name) {
+    return { error: 'Landing page name is required.' };
+  }
+  if (!requestedSlug) {
+    return { error: 'Landing page slug is required.' };
+  }
+  if (!sharedResourceId) {
+    return { error: 'Select one facility for this landing page.' };
+  }
+  if (!paymentMethod) {
+    return { error: 'Choose one payment method: Bank Transfer or Online.' };
+  }
+
+  const sharedResource = await getSharedResourceByIdForUser(sharedResourceId, Number(input.userId));
+  if (!sharedResource) {
+    return { error: 'Selected facility was not found.' };
+  }
+  if (Number(sharedResource.client_account_id || 0) !== Number(input.clientAccountId || 0)) {
+    return { error: 'Selected facility is not in your active account.' };
+  }
+
+  const slug = await ensureUniqueReservationEnquiryLandingPageSlug(input.clientAccountId, requestedSlug, null);
+  if (!slug) {
+    return { error: 'Landing page slug is required.' };
+  }
+
+  const result = await pool.query(
+    `
+      INSERT INTO reservation_enquiry_landing_pages (
+        user_id,
+        client_account_id,
+        workflow_type,
+        shared_resource_id,
+        name,
+        public_slug,
+        preferred_listing_id,
+        description_html,
+        notes_html,
+        listing_filters_json,
+        percentage_discount,
+        payment_method,
+        is_active,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, '[]', 0, $9, $10, CURRENT_TIMESTAMP)
+      RETURNING id,
+                user_id,
+                client_account_id,
+                workflow_type,
+                name,
+                public_slug,
+                description_html,
+                notes_html,
+                shared_resource_id,
+                payment_method,
+                is_active,
+                created_at,
+                updated_at
+    `,
+    [
+      Number(input.userId),
+      Number(input.clientAccountId),
+      LANDING_PAGE_WORKFLOW_5,
+      Number(sharedResourceId),
+      name,
+      slug,
+      descriptionHtml,
+      notesHtml,
+      paymentMethod,
+      isActive
+    ]
+  );
+
+  return { landingPage: mapFacilityEnquiryLandingPageRow(result.rows[0]) };
+}
+
+async function updateFacilityEnquiryLandingPageForUser(input) {
+  const name = normaliseLandingPageName(input && input.name);
+  const requestedSlug = normaliseLandingPageSlug(input && input.publicSlug, name);
+  const descriptionHtml = sanitiseRichTextHtml(input && input.descriptionHtml);
+  const notesHtml = sanitiseRichTextHtml(input && input.notesHtml);
+  const paymentMethod = normaliseLandingPagePaymentMethod(input && input.paymentMethod);
+  const isActive = !(input && input.isActive === false);
+  const sharedResourceId = normaliseOptionalPositiveInteger(input && input.sharedResourceId);
+
+  if (!name) {
+    return { error: 'Landing page name is required.' };
+  }
+  if (!requestedSlug) {
+    return { error: 'Landing page slug is required.' };
+  }
+  if (!sharedResourceId) {
+    return { error: 'Select one facility for this landing page.' };
+  }
+  if (!paymentMethod) {
+    return { error: 'Choose one payment method: Bank Transfer or Online.' };
+  }
+
+  const sharedResource = await getSharedResourceByIdForUser(sharedResourceId, Number(input.userId));
+  if (!sharedResource) {
+    return { error: 'Selected facility was not found.' };
+  }
+  if (Number(sharedResource.client_account_id || 0) !== Number(input.clientAccountId || 0)) {
+    return { error: 'Selected facility is not in your active account.' };
+  }
+
+  const slug = await ensureUniqueReservationEnquiryLandingPageSlug(input.clientAccountId, requestedSlug, input.id);
+  if (!slug) {
+    return { error: 'Landing page slug is required.' };
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE reservation_enquiry_landing_pages
+      SET name = $1,
+          public_slug = $2,
+          workflow_type = $3,
+          shared_resource_id = $4,
+          preferred_listing_id = NULL,
+          description_html = $5,
+          notes_html = $6,
+          listing_filters_json = '[]',
+          percentage_discount = 0,
+          payment_method = $7,
+          is_active = $8,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9
+        AND user_id = $10
+        AND client_account_id = $11
+        AND workflow_type = $12
+      RETURNING id,
+                user_id,
+                client_account_id,
+                workflow_type,
+                name,
+                public_slug,
+                description_html,
+                notes_html,
+                shared_resource_id,
+                payment_method,
+                is_active,
+                created_at,
+                updated_at
+    `,
+    [
+      name,
+      slug,
+      LANDING_PAGE_WORKFLOW_5,
+      Number(sharedResourceId),
+      descriptionHtml,
+      notesHtml,
+      paymentMethod,
+      isActive,
+      Number(input.id),
+      Number(input.userId),
+      Number(input.clientAccountId),
+      LANDING_PAGE_WORKFLOW_5
+    ]
+  );
+
+  if (!result.rows[0]) {
+    return { error: 'Landing page not found.' };
+  }
+
+  return { landingPage: mapFacilityEnquiryLandingPageRow(result.rows[0]) };
+}
+
+async function deleteFacilityEnquiryLandingPageForUser(id, userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      DELETE FROM reservation_enquiry_landing_pages
+      WHERE id = $1
+        AND user_id = $2
+        AND client_account_id = $3
+        AND workflow_type = $4
+      RETURNING id
+    `,
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_5]
+  );
+  if (!result.rows[0]) {
+    return { error: 'Landing page not found.' };
+  }
+  return { deletedLandingPageId: Number(result.rows[0].id) };
+}
+
+function isFacilityEnquiryLandingPageAllowedByScope(req, row) {
+  if (!hasManagerAssignmentScope(req)) {
+    return true;
+  }
+
+  const sharedResource = {
+    id: Number(row && row.shared_resource_id || 0),
+    property_id: Number(row && row.shared_resource_property_id || 0) || null,
+    listing_id: Number(row && row.shared_resource_listing_id || 0) || null
+  };
+
+  if (!sharedResource.id) {
+    return false;
+  }
+
+  return isSharedResourceAllowedByScope(req, sharedResource);
 }
 
 function isReservationEnquiryLandingPageAllowedByScope(req, row) {
@@ -11340,6 +11711,44 @@ registerWorkflow4ReservationEnquiryRoutes(app, {
   normaliseLandingPageSlug,
   finalizeReservationActivityPaymentIntent,
   rankSplitStayOptions
+});
+
+registerWorkflow5FacilityEnquiryRoutes(app, {
+  requireScopedRole,
+  getFacilityEnquiryLandingPagesForUser,
+  getFacilityEnquiryLandingPageByIdForUser,
+  isFacilityEnquiryLandingPageAllowedByScope,
+  createFacilityEnquiryLandingPageForUser,
+  updateFacilityEnquiryLandingPageForUser,
+  deleteFacilityEnquiryLandingPageForUser,
+  getActiveFacilityEnquiryLandingPageBySlug,
+  getPreferredAppBaseUrl,
+  getSharedResourceByIdPublic,
+  getUserById,
+  isOnlinePaymentAvailableForHostUser,
+  normaliseDateKey,
+  parseLocalDateTime,
+  normaliseSharedResourceMaxAdvanceBookingDays,
+  getSharedResourceReservationsByResourceId,
+  normaliseSharedResourceMaxUnits,
+  findCapacityConflictPeriod,
+  findAvailablePeriods,
+  formatDateTimeForMessage,
+  normaliseSharedResourceReservationText,
+  normaliseSharedResourceReservationEmail,
+  normaliseSharedResourceReservationAmount,
+  getDateKeyFromEventDateTime,
+  getSharedResourceReservationListingId,
+  generateGlobalReservationIdentifier,
+  createSharedResourceReservation,
+  htmlToPlainText,
+  pool,
+  sendAppEmail,
+  stripeClient,
+  STRIPE_PUBLISHABLE_KEY,
+  setUserStripeConnectState,
+  toMinorUnits,
+  updateSharedResourceReservationPaymentById
 });
 
 registerWorkflow3FacilityBookingRoutes(app, {
