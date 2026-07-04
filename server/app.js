@@ -3503,11 +3503,11 @@ async function sendPasswordResetEmail(req, user) {
   }
 
   const resetUrl = baseUrl + '/reset-password.html?token=' + encodeURIComponent(token);
-  const subject = 'Reset your AutomaticPeople password';
+  const subject = 'Enter or reset your AutomaticPeople password';
   const textBody = [
-    'A request was made to reset your AutomaticPeople password.',
+    'A request was made to enter or reset your AutomaticPeople password.',
     '',
-    'Reset your password using this link:',
+    'Enter or reset your password using this link:',
     resetUrl,
     '',
     'This link expires in 1 hour.',
@@ -11485,6 +11485,8 @@ app.post('/api/account/password-reset/confirm', async (req, res) => {
       `,
       [passwordHash, Number(user.id)]
     );
+
+    await markUserValidated(Number(user.id));
 
     return res.json({ message: 'Your password has been reset. You can now log in.' });
   } catch (err) {
