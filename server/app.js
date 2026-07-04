@@ -7559,7 +7559,7 @@ async function deleteUserAndData(userId) {
     return { error: 'User not found.' };
   }
 
-  const processedClientIds = new Set();
+  const deletedOwnerClientIds = new Set();
   const ownerAccountsResult = await pool.query(
     `
       SELECT client_account_id
@@ -7574,13 +7574,14 @@ async function deleteUserAndData(userId) {
 
   for (const row of ownerAccountsResult.rows) {
     const clientAccountId = Number(row.client_account_id);
-    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || processedClientIds.has(clientAccountId)) {
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || deletedOwnerClientIds.has(clientAccountId)) {
       continue;
     }
-    processedClientIds.add(clientAccountId);
+    deletedOwnerClientIds.add(clientAccountId);
     await deleteClientAccountAndScopedData(clientAccountId);
   }
 
+  const processedTeamClientIds = new Set();
   const teamAccountsResult = await pool.query(
     `
       SELECT DISTINCT client_account_id
@@ -7594,13 +7595,14 @@ async function deleteUserAndData(userId) {
   );
   for (const row of teamAccountsResult.rows) {
     const clientAccountId = Number(row.client_account_id);
-    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || processedClientIds.has(clientAccountId)) {
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || deletedOwnerClientIds.has(clientAccountId) || processedTeamClientIds.has(clientAccountId)) {
       continue;
     }
-    processedClientIds.add(clientAccountId);
+    processedTeamClientIds.add(clientAccountId);
     await removeTeamMemberFromClientScope(clientAccountId, id);
   }
 
+  const processedGuestClientIds = new Set();
   const guestAccountsResult = await pool.query(
     `
       SELECT DISTINCT client_account_id
@@ -7621,14 +7623,49 @@ async function deleteUserAndData(userId) {
   );
   for (const row of guestAccountsResult.rows) {
     const clientAccountId = Number(row.client_account_id);
-    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || processedClientIds.has(clientAccountId)) {
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || deletedOwnerClientIds.has(clientAccountId) || processedGuestClientIds.has(clientAccountId)) {
       continue;
     }
-    processedClientIds.add(clientAccountId);
+    processedGuestClientIds.add(clientAccountId);
     await removeGuestSiteUserFromClientScope(clientAccountId, id);
   }
 
-  await removeSiteUserIfUnreferenced(id);
+  const cleanupResult = await removeSiteUserIfUnreferenced(id);
+  if (cleanupResult.deleted !== true) {
+    const blockingRefs = await pool.query(
+      `
+        SELECT
+          (SELECT COUNT(*)::int FROM client_memberships WHERE user_id = $1 AND status IN ('active', 'invited')) AS active_memberships,
+          (SELECT COUNT(*)::int FROM guest_relationships WHERE guest_user_id = $1) AS guest_relationships,
+          (SELECT COUNT(*)::int FROM cleaners WHERE cleaner_user_id = $1) AS cleaner_links,
+          (SELECT COUNT(*)::int FROM booked_in_changes WHERE cleaner_user_id = $1) AS booked_in_links,
+          (SELECT COUNT(*)::int FROM listing_calendar_events WHERE guest_user_id = $1) AS listing_calendar_guest_links
+      `,
+      [id]
+    );
+    const row = blockingRefs.rows[0] || {};
+    const counts = [
+      Number(row.active_memberships || 0),
+      Number(row.guest_relationships || 0),
+      Number(row.cleaner_links || 0),
+      Number(row.booked_in_links || 0),
+      Number(row.listing_calendar_guest_links || 0)
+    ];
+    const totalBlocking = counts.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+    if (totalBlocking > 0) {
+      return {
+        error: 'User still has linked records and cannot be deleted yet.',
+        blockingReferences: {
+          activeMemberships: Number(row.active_memberships || 0),
+          guestRelationships: Number(row.guest_relationships || 0),
+          cleanerLinks: Number(row.cleaner_links || 0),
+          bookedInLinks: Number(row.booked_in_links || 0),
+          listingCalendarGuestLinks: Number(row.listing_calendar_guest_links || 0)
+        }
+      };
+    }
+  }
+
   return { deletedUserId: id };
 }
 
@@ -10398,6 +10435,12 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
   try {
     const result = await deleteUserAndData(userId);
     if (result.error) {
+      if (result.error === 'User still has linked records and cannot be deleted yet.') {
+        return res.status(409).json({
+          error: result.error,
+          blockingReferences: result.blockingReferences || null
+        });
+      }
       return res.status(404).json({ error: result.error });
     }
     return res.json({ message: 'User deleted.', deletedUserId: result.deletedUserId });
