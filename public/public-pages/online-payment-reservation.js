@@ -2,6 +2,7 @@
 
 const params = new URLSearchParams(window.location.search);
 const resourceId = Number(params.get('resourceId'));
+const facilityLandingSlug = String(params.get('facilityLandingPage') || '').trim();
 const paymentOption = String(params.get('paymentOption') || '');
 const startDateTimeParam = params.get('startDateTime') || '';
 const endDateTimeParam = params.get('endDateTime') || '';
@@ -15,6 +16,7 @@ let stripeClient = null;
 let stripeElements = null;
 let stripePaymentElement = null;
 let preparedPayment = null;
+let facilityLandingPage = null;
 
 function isParkingResource(resource) {
   if (!resource) {
@@ -142,24 +144,39 @@ function renderPaymentMethodMessage(resource, paymentKey) {
 }
 
 async function loadPublicResource() {
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
+  if (!facilityLandingSlug && (!Number.isInteger(resourceId) || resourceId <= 0)) {
     setReservationMessage('Invalid resource id.', true);
     return;
   }
 
   try {
-    const res = await fetch('/api/public/shared-resources/' + resourceId);
+    const endpoint = facilityLandingSlug
+      ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug))
+      : ('/api/public/shared-resources/' + resourceId);
+    const res = await fetch(endpoint);
     const data = await res.json();
 
     if (!res.ok) {
       throw new Error(data.error || 'Failed to load shared resource.');
     }
 
-    currentResource = data.resource;
+    if (facilityLandingSlug) {
+      facilityLandingPage = data.landingPage || null;
+      currentResource = facilityLandingPage && facilityLandingPage.facility ? facilityLandingPage.facility : null;
+      if (!facilityLandingPage || !currentResource) {
+        throw new Error('Facility enquiry landing page was not found.');
+      }
+      if (String(facilityLandingPage.payment_method || '') !== 'online') {
+        throw new Error('This landing page is not configured for online payment.');
+      }
+    } else {
+      currentResource = data.resource;
+    }
+
     if (currentResource.online_payment_available !== true) {
       throw new Error(currentResource.online_payment_unavailable_reason || 'Online payment is currently unavailable for this resource.');
     }
-    document.getElementById('reservationTitle').textContent = (currentResource.short_description || 'Reservation') + ' - Online Payment';
+    document.getElementById('reservationTitle').textContent = ((facilityLandingPage && facilityLandingPage.title) || currentResource.short_description || 'Reservation') + ' - Online Payment';
 
     renderPaymentMethodMessage(currentResource, paymentOption);
     renderVehicleRegistrationField(currentResource);
@@ -169,7 +186,11 @@ async function loadPublicResource() {
 }
 
 async function prepareOnlinePayment(guestPayload) {
-  const response = await fetch('/api/public/shared-resources/' + resourceId + '/online-payment/prepare', {
+  const endpoint = facilityLandingSlug
+    ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug) + '/online-payment/prepare')
+    : ('/api/public/shared-resources/' + resourceId + '/online-payment/prepare');
+
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
