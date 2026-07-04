@@ -31,6 +31,10 @@ let currentManagerAssignments = {
 let currentGuests = [];
 let currentEditingTeamUserId = null;
 let currentTeamMemberDeleteImpact = null;
+let currentMeProfile = null;
+let currentDashboardContextMode = 'hosting';
+let dashboardContextAvailability = { hosting: true, guest: false };
+let dashboardTabController = null;
 
 let opsCalCurrentMonth = new Date();
 let opsCalCurrentEvents = [];
@@ -671,6 +675,7 @@ function renderAccessContext(context) {
     }
   }
 
+  updateDashboardContextAvailabilityFromMemberships();
   applyAccessRoleVisibility();
 }
 
@@ -1104,6 +1109,157 @@ async function fetchAccessContext() {
     throw new Error(data.error || 'Failed to load access context.');
   }
   renderAccessContext(data);
+}
+
+function getDashboardContextStorageKey() {
+  return 'dashboardContextMode';
+}
+
+function updateDashboardContextAvailabilityFromMemberships() {
+  const memberships = currentAccessContext && Array.isArray(currentAccessContext.memberships)
+    ? currentAccessContext.memberships
+    : [];
+
+  const hasGuest = memberships.some((membership) => String(membership && membership.role || '').trim() === 'Guest');
+  const hasHosting = memberships.some((membership) => {
+    const role = String(membership && membership.role || '').trim();
+    return role === 'Client' || role === 'Manager' || role === 'Staff';
+  });
+
+  dashboardContextAvailability = {
+    hosting: hasHosting || !hasGuest,
+    guest: hasGuest
+  };
+
+  renderDashboardContextToggle();
+}
+
+function normalizeDashboardContextMode(mode) {
+  const next = String(mode || '').trim().toLowerCase();
+  if (next === 'guest' && dashboardContextAvailability.guest) {
+    return 'guest';
+  }
+  if (next === 'hosting' && dashboardContextAvailability.hosting) {
+    return 'hosting';
+  }
+  if (dashboardContextAvailability.hosting) {
+    return 'hosting';
+  }
+  if (dashboardContextAvailability.guest) {
+    return 'guest';
+  }
+  return 'hosting';
+}
+
+function getAllowedPanelsForContext(mode) {
+  return mode === 'guest'
+    ? ['panel-guest-reservations', 'panel-guest-account']
+    : ['panel-dashboard', 'panel-config', 'panel-ops', 'panel-account'];
+}
+
+function getDefaultPanelForContext(mode) {
+  return mode === 'guest' ? 'panel-guest-reservations' : 'panel-dashboard';
+}
+
+function setTabButtonState(button, label, panelId, isHidden) {
+  if (!button) {
+    return;
+  }
+  button.textContent = label;
+  button.dataset.panel = panelId;
+  button.setAttribute('aria-controls', panelId);
+  button.classList.toggle('hidden', Boolean(isHidden));
+}
+
+function applyTabDefinitionsForContext(mode) {
+  const primary = document.getElementById('tabBtnPrimary');
+  const secondary = document.getElementById('tabBtnSecondary');
+  const tertiary = document.getElementById('tabBtnTertiary');
+  const quaternary = document.getElementById('tabBtnQuaternary');
+
+  if (mode === 'guest') {
+    setTabButtonState(primary, 'Reservations', 'panel-guest-reservations', false);
+    setTabButtonState(secondary, 'Personal Account', 'panel-guest-account', false);
+    setTabButtonState(tertiary, 'Ops', 'panel-ops', true);
+    setTabButtonState(quaternary, 'Host Account', 'panel-account', true);
+    return;
+  }
+
+  setTabButtonState(primary, 'Dashboard', 'panel-dashboard', false);
+  setTabButtonState(secondary, 'Config', 'panel-config', false);
+  setTabButtonState(tertiary, 'Ops', 'panel-ops', false);
+  setTabButtonState(quaternary, 'Host Account', 'panel-account', false);
+}
+
+function getContextToggleIconSvg(mode) {
+  if (mode === 'guest') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 10.5 12 4l8 6.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 9.8V20h11V9.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 20v-5.5h4V20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.5 18.5c1.2-3.2 3.6-4.8 6.5-4.8s5.3 1.6 6.5 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+}
+
+function renderDashboardContextToggle() {
+  const toggleBtn = document.getElementById('dashboardContextToggle');
+  const iconEl = document.getElementById('dashboardContextToggleIcon');
+  const labelEl = document.getElementById('dashboardContextLabel');
+  if (!toggleBtn || !iconEl || !labelEl) {
+    return;
+  }
+
+  const canSwitchModes = dashboardContextAvailability.hosting && dashboardContextAvailability.guest;
+  toggleBtn.classList.toggle('hidden', !canSwitchModes);
+  toggleBtn.disabled = !canSwitchModes;
+  if (!canSwitchModes) {
+    return;
+  }
+
+  const modeLabel = currentDashboardContextMode === 'guest' ? 'Guest' : 'Hosting';
+  labelEl.textContent = modeLabel;
+  iconEl.innerHTML = getContextToggleIconSvg(currentDashboardContextMode);
+
+  if (currentDashboardContextMode === 'guest') {
+    toggleBtn.setAttribute('aria-label', 'Switch to hosting context');
+    toggleBtn.setAttribute('title', 'Switch to Hosting');
+  } else {
+    toggleBtn.setAttribute('aria-label', 'Switch to guest context');
+    toggleBtn.setAttribute('title', 'Switch to Guest');
+  }
+}
+
+async function applyDashboardContextMode(mode, options) {
+  const settings = Object.assign({ loadData: false }, options || {});
+  const normalizedMode = normalizeDashboardContextMode(mode);
+  currentDashboardContextMode = normalizedMode;
+
+  applyTabDefinitionsForContext(normalizedMode);
+  renderDashboardContextToggle();
+
+  try {
+    sessionStorage.setItem(getDashboardContextStorageKey(), normalizedMode);
+  } catch {
+    // ignore
+  }
+
+  const activePanelId = dashboardTabController ? dashboardTabController.getActivePanel() : '';
+  const allowedPanels = getAllowedPanelsForContext(normalizedMode);
+  const targetPanel = allowedPanels.includes(activePanelId)
+    ? activePanelId
+    : getDefaultPanelForContext(normalizedMode);
+
+  if (dashboardTabController) {
+    dashboardTabController.activateTab(targetPanel);
+  }
+
+  if (settings.loadData) {
+    if (normalizedMode === 'guest') {
+      await loadGuestDashboardData();
+    } else {
+      await loadDashboardData();
+      if (targetPanel === 'panel-dashboard') {
+        await loadEventLog();
+      }
+    }
+  }
 }
 
 async function fetchTeamMembers() {
@@ -3915,15 +4071,29 @@ async function sendScheduleEmailToRecipient(toEmail) {
       return;
     }
     const meData = await meRes.json();
+    currentMeProfile = meData;
     setConsolidatedIcsUrl(meData.consolidated_ics_token || '');
     currentUserEmail = String(meData.email || '').toLowerCase();
     loadDashboardState();
     renderStripeConnectStatus(meData.stripeConnect || null);
 
     await fetchAccessContext();
-    await loadPrivateReservations();
-    await loadDashboardData();
-    await loadEventLog();
+
+    let persistedMode = '';
+    try {
+      persistedMode = String(sessionStorage.getItem(getDashboardContextStorageKey()) || '').trim().toLowerCase();
+    } catch {
+      persistedMode = '';
+    }
+    const initialMode = normalizeDashboardContextMode(persistedMode || (dashboardContextAvailability.guest && !dashboardContextAvailability.hosting ? 'guest' : 'hosting'));
+    await applyDashboardContextMode(initialMode, { loadData: false });
+
+    if (currentDashboardContextMode === 'guest') {
+      await loadGuestDashboardData();
+    } else {
+      await loadDashboardData();
+      await loadEventLog();
+    }
 
     const now = new Date();
     const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -3938,7 +4108,7 @@ async function sendScheduleEmailToRecipient(toEmail) {
     const savedSelection = savedDashboardState && Array.isArray(savedDashboardState.scheduleListingIds)
       ? savedDashboardState.scheduleListingIds.length
       : 0;
-    if (savedSelection) {
+    if (savedSelection && currentDashboardContextMode === 'hosting') {
       await updateSchedulePreview();
     }
   } catch (err) {
@@ -4253,6 +4423,79 @@ const _logoutBtn = document.getElementById('logoutBtn');
 if (_logoutBtn) _logoutBtn.addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   window.location.href = '/';
+});
+
+const _guestLogoutBtn = document.getElementById('guestLogoutBtn');
+if (_guestLogoutBtn) _guestLogoutBtn.addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = '/';
+});
+
+const _guestAccountForm = document.getElementById('guestAccountForm');
+if (_guestAccountForm) _guestAccountForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  setGuestAccountMessage('', false);
+
+  const saveBtn = document.getElementById('saveGuestAccountBtn');
+  const telephone = String((document.getElementById('guestTelephone') || {}).value || '').trim();
+  const postalAddress = String((document.getElementById('guestPostalAddress') || {}).value || '').trim();
+
+  if (telephone.length > 60) {
+    setGuestAccountMessage('Telephone must be 60 characters or fewer.', true);
+    return;
+  }
+  if (postalAddress.length > 500) {
+    setGuestAccountMessage('Postal address must be 500 characters or fewer.', true);
+    return;
+  }
+
+  if (saveBtn) {
+    saveBtn.disabled = true;
+  }
+  try {
+    const response = await fetch('/api/guest/dashboard/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telephone, postalAddress })
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to save guest account details.');
+    }
+
+    applyGuestProfile(data);
+    setGuestAccountMessage('Personal account saved.', false);
+  } catch (err) {
+    setGuestAccountMessage(err.message || 'Failed to save guest account details.', true);
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+    }
+  }
+});
+
+const _dashboardContextToggle = document.getElementById('dashboardContextToggle');
+if (_dashboardContextToggle) _dashboardContextToggle.addEventListener('click', async () => {
+  if (!(dashboardContextAvailability.hosting && dashboardContextAvailability.guest)) {
+    return;
+  }
+
+  const nextMode = currentDashboardContextMode === 'guest' ? 'hosting' : 'guest';
+  const menuBtn = document.getElementById('tabMenuBtn');
+  const menuEl = document.getElementById('tabContextMenu');
+  if (menuBtn && menuEl) {
+    menuEl.classList.add('hidden');
+    menuBtn.setAttribute('aria-expanded', 'false');
+    menuBtn.classList.remove('open');
+  }
+
+  await applyDashboardContextMode(nextMode, { loadData: true });
 });
 
 // ── Bank Details ──────────────────────────────────────────────
@@ -4577,6 +4820,178 @@ async function loadPrivateReservations() {
     tbody.innerHTML = '<tr><td colspan="8">Failed to load private reservations.</td></tr>';
     setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
   }
+}
+
+function setGuestReservationsMessage(text, isError) {
+  const el = document.getElementById('guestReservationsMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setGuestAccountMessage(text, isError) {
+  const el = document.getElementById('guestAccountMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function formatGuestDateTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '—';
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatGuestAmount(amount) {
+  const numeric = Number(amount);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : '—';
+}
+
+async function loadGuestReservations() {
+  const accommodationBody = document.getElementById('guestAccommodationTableBody');
+  const facilityBody = document.getElementById('guestFacilityTableBody');
+  if (!accommodationBody || !facilityBody) {
+    return;
+  }
+
+  accommodationBody.innerHTML = '<tr><td colspan="6">Loading accommodation reservations...</td></tr>';
+  facilityBody.innerHTML = '<tr><td colspan="6">Loading facility reservations...</td></tr>';
+  setGuestReservationsMessage('', false);
+
+  try {
+    const response = await fetch('/api/guest/dashboard/reservations');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load guest reservations.');
+    }
+
+    const accommodation = Array.isArray(data.accommodation) ? data.accommodation : [];
+    const facilities = Array.isArray(data.facilities) ? data.facilities : [];
+
+    if (!accommodation.length) {
+      accommodationBody.innerHTML = '<tr><td colspan="6">No accommodation reservations found.</td></tr>';
+    } else {
+      accommodationBody.innerHTML = '';
+      accommodation.forEach((reservation) => {
+        const tr = document.createElement('tr');
+
+        const idCell = document.createElement('td');
+        idCell.textContent = reservation.reservationIdentifier || '—';
+
+        const listingCell = document.createElement('td');
+        listingCell.textContent = reservation.listingName || '—';
+
+        const arrivalCell = document.createElement('td');
+        arrivalCell.textContent = formatPrivateReservationArrival(reservation.arrivalDate);
+
+        const nightsCell = document.createElement('td');
+        nightsCell.textContent = String(Number(reservation.stayNights || 0) || 0);
+
+        const amountCell = document.createElement('td');
+        amountCell.textContent = formatGuestAmount(reservation.amount);
+
+        const paymentCell = document.createElement('td');
+        paymentCell.textContent = reservation.paymentStatus || '—';
+
+        tr.appendChild(idCell);
+        tr.appendChild(listingCell);
+        tr.appendChild(arrivalCell);
+        tr.appendChild(nightsCell);
+        tr.appendChild(amountCell);
+        tr.appendChild(paymentCell);
+        accommodationBody.appendChild(tr);
+      });
+    }
+
+    if (!facilities.length) {
+      facilityBody.innerHTML = '<tr><td colspan="6">No facility reservations found.</td></tr>';
+    } else {
+      facilityBody.innerHTML = '';
+      facilities.forEach((reservation) => {
+        const tr = document.createElement('tr');
+
+        const resourceCell = document.createElement('td');
+        resourceCell.textContent = reservation.resourceName || '—';
+
+        const startCell = document.createElement('td');
+        startCell.textContent = formatGuestDateTime(reservation.requestedStartAt);
+
+        const endCell = document.createElement('td');
+        endCell.textContent = formatGuestDateTime(reservation.requestedEndAt);
+
+        const amountCell = document.createElement('td');
+        amountCell.textContent = formatGuestAmount(reservation.amount);
+
+        const paymentCell = document.createElement('td');
+        paymentCell.textContent = reservation.paymentStatus || '—';
+
+        const statusCell = document.createElement('td');
+        statusCell.textContent = reservation.status || '—';
+
+        tr.appendChild(resourceCell);
+        tr.appendChild(startCell);
+        tr.appendChild(endCell);
+        tr.appendChild(amountCell);
+        tr.appendChild(paymentCell);
+        tr.appendChild(statusCell);
+        facilityBody.appendChild(tr);
+      });
+    }
+  } catch (err) {
+    accommodationBody.innerHTML = '<tr><td colspan="6">Failed to load accommodation reservations.</td></tr>';
+    facilityBody.innerHTML = '<tr><td colspan="6">Failed to load facility reservations.</td></tr>';
+    setGuestReservationsMessage(err.message || 'Failed to load guest reservations.', true);
+  }
+}
+
+function applyGuestProfile(profile) {
+  const firstNameEl = document.getElementById('guestAccountFirstName');
+  const familyNameEl = document.getElementById('guestAccountFamilyName');
+  const emailEl = document.getElementById('guestAccountEmail');
+  const telephoneEl = document.getElementById('guestTelephone');
+  const postalAddressEl = document.getElementById('guestPostalAddress');
+
+  if (firstNameEl) firstNameEl.value = String(profile && profile.firstName || '');
+  if (familyNameEl) familyNameEl.value = String(profile && profile.familyName || '');
+  if (emailEl) emailEl.value = String(profile && profile.email || '');
+  if (telephoneEl) telephoneEl.value = String(profile && profile.telephone || '');
+  if (postalAddressEl) postalAddressEl.value = String(profile && profile.postalAddress || '');
+}
+
+async function loadGuestAccountProfile() {
+  setGuestAccountMessage('', false);
+  try {
+    const response = await fetch('/api/guest/dashboard/profile');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load guest account details.');
+    }
+
+    applyGuestProfile(data);
+  } catch (err) {
+    setGuestAccountMessage(err.message || 'Failed to load guest account details.', true);
+  }
+}
+
+async function loadGuestDashboardData() {
+  await loadGuestReservations();
+  await loadGuestAccountProfile();
 }
 
 async function fetchBankDetails() {
@@ -4935,24 +5350,44 @@ if (_copyConsolidatedIcsUrlBtn) _copyConsolidatedIcsUrlBtn.addEventListener('cli
   const tabBtns = Array.from(document.querySelectorAll('.dashboard-tab-btn'));
   const panels = Array.from(document.querySelectorAll('.dashboard-tab-panel'));
 
+  function getVisibleTabButtons() {
+    return tabBtns.filter((btn) => !btn.classList.contains('hidden'));
+  }
+
   function activateTab(panelId) {
+    const visibleButtons = getVisibleTabButtons();
+    const visiblePanelIds = new Set(visibleButtons.map((btn) => btn.dataset.panel));
+
+    let targetPanelId = panelId;
+    if (!targetPanelId || !visiblePanelIds.has(targetPanelId) || !document.getElementById(targetPanelId)) {
+      targetPanelId = visibleButtons.length ? visibleButtons[0].dataset.panel : getDefaultPanelForContext(currentDashboardContextMode);
+    }
+
     tabBtns.forEach((btn) => {
-      const isTarget = btn.dataset.panel === panelId;
+      const isTarget = !btn.classList.contains('hidden') && btn.dataset.panel === targetPanelId;
       btn.classList.toggle('active', isTarget);
       btn.setAttribute('aria-selected', String(isTarget));
     });
     panels.forEach((panel) => {
-      panel.classList.toggle('hidden', panel.id !== panelId);
+      panel.classList.toggle('hidden', panel.id !== targetPanelId);
     });
     try {
-      sessionStorage.setItem(STORAGE_KEY, panelId);
+      sessionStorage.setItem(STORAGE_KEY, targetPanelId);
     } catch {
       // ignore
     }
-    if (panelId === 'panel-dashboard') {
+    if (targetPanelId === 'panel-dashboard' && currentDashboardContextMode === 'hosting') {
       refreshDashboardActivity();
       loadEventLog();
     }
+    if (targetPanelId === 'panel-guest-reservations') {
+      loadGuestReservations();
+    }
+    if (targetPanelId === 'panel-guest-account') {
+      loadGuestAccountProfile();
+    }
+
+    return targetPanelId;
   }
 
   tabBtns.forEach((btn) => {
@@ -4980,6 +5415,14 @@ if (_copyConsolidatedIcsUrlBtn) _copyConsolidatedIcsUrlBtn.addEventListener('cli
     // ignore
   }
   activateTab(initial);
+
+  dashboardTabController = {
+    activateTab,
+    getActivePanel() {
+      const active = document.querySelector('.dashboard-tab-btn.active');
+      return active ? String(active.dataset.panel || '') : '';
+    }
+  };
 })();
 
 // ── Consolidated reservations (Ops tab) ──────────────────────
@@ -5082,7 +5525,7 @@ async function loadAllReservations() {
 // -- Tab context menu ------------------------------------------
 
 (function initTabContextMenu() {
-  const TAB_SUBMENUS = {
+  const HOST_SUBMENUS = {
     'panel-dashboard': [
       { label: 'View Private Reservations', href: '/dashboard-private-reservations.html' },
       { label: 'View Facility Reservations', href: '/dashboard-facility-reservations.html' }
@@ -5095,17 +5538,23 @@ async function loadAllReservations() {
     'panel-account': []
   };
 
+  const GUEST_SUBMENUS = {
+    'panel-guest-reservations': [],
+    'panel-guest-account': []
+  };
+
   const menuBtn = document.getElementById('tabMenuBtn');
   const menuEl = document.getElementById('tabContextMenu');
   if (!menuBtn || !menuEl) return;
 
   function getActivePanel() {
     const active = document.querySelector('.dashboard-tab-btn.active');
-    return active ? active.dataset.panel : 'panel-dashboard';
+    return active ? active.dataset.panel : getDefaultPanelForContext(currentDashboardContextMode);
   }
 
   function buildMenu(panelId) {
-    const items = TAB_SUBMENUS[panelId] || [];
+    const activeMap = currentDashboardContextMode === 'guest' ? GUEST_SUBMENUS : HOST_SUBMENUS;
+    const items = activeMap[panelId] || [];
     if (!items.length) {
       menuEl.innerHTML = '<span class="tab-context-menu-empty">No actions for this section.</span>';
     } else {

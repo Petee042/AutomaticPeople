@@ -377,11 +377,59 @@ textarea:focus {
   position: relative;
   display: flex;
   align-items: stretch;
+  gap: 0.4rem;
 }
 
 .tab-bar-row .dashboard-tab-bar {
   flex: 1;
   min-width: 0;
+}
+
+.context-toggle-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 5.2rem;
+  padding: 0 0.5rem;
+  border: 1px solid #d7deef;
+  border-bottom: 2px solid #e0e4f0;
+  border-radius: 0;
+  background: #ffffff;
+  color: #304067;
+  cursor: pointer;
+}
+
+.context-toggle-btn:hover {
+  color: #133070;
+  background: #f4f7ff;
+}
+
+.context-toggle-btn:focus-visible {
+  outline: 2px solid #133070;
+  outline-offset: -2px;
+}
+
+.context-toggle-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-toggle-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.context-toggle-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .tab-menu-btn {
@@ -2476,6 +2524,15 @@ textarea:focus {
     font-size: 0.82rem;
     padding: 0.75rem 0.4rem;
     min-width: 72px;
+  }
+
+  .context-toggle-btn {
+    min-width: auto;
+    padding: 0 0.4rem;
+  }
+
+  .context-toggle-label {
+    display: none;
   }
 }
 

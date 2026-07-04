@@ -432,6 +432,11 @@ async function initializeUserStore() {
 
   await pool.query(`
     ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS postal_address TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
     ADD COLUMN IF NOT EXISTS is_validated BOOLEAN NOT NULL DEFAULT TRUE
   `);
 
@@ -11107,6 +11112,8 @@ app.get('/api/me', requireAuth, async (req, res) => {
       firstName: user.first_name || '',
       familyName: user.family_name || '',
       email: user.email || req.session.email,
+      telephone: user.telephone || '',
+      postalAddress: user.postal_address || '',
       isValidated: user.is_validated !== false,
       consolidated_ics_token: buildConsolidatedIcsToken(req.session.userId),
       stripeConnect: formatStripeConnectStatus(user),
@@ -11119,6 +11126,161 @@ app.get('/api/me', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load current user profile.' });
+  }
+});
+
+// GET /api/guest/dashboard/reservations — guest-facing accommodation and facility reservations
+app.get('/api/guest/dashboard/reservations', requireAuth, async (req, res) => {
+  try {
+    const user = await getUserById(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(user.email) || '';
+
+    const accommodationResult = await pool.query(
+      `
+        SELECT ra.id,
+               ra.reservation_identifier,
+               ra.listing_id,
+               l.name AS listing_name,
+               ra.reservation_checkin_date::text AS reservation_checkin_date,
+               ra.reservation_checkout_date::text AS reservation_checkout_date,
+               ra.first_name,
+               ra.family_name,
+               ra.email_address,
+               ra.reservation_amount,
+               ra.payment_method,
+               ra.status,
+               ra.created_at,
+               (ra.reservation_checkout_date - ra.reservation_checkin_date) AS stay_nights
+        FROM reservation_activity ra
+        LEFT JOIN listings l ON l.id = ra.listing_id
+        WHERE (
+          ra.user_id = $1
+          OR ($2 <> '' AND LOWER(TRIM(COALESCE(ra.email_address, ''))) = $2)
+        )
+          AND ra.status <> ALL($3::text[])
+        ORDER BY ra.reservation_checkin_date DESC, ra.id DESC
+      `,
+      [Number(req.session.userId), normalizedEmail, ['cancelled', 'expired']]
+    );
+
+    const facilityResult = await pool.query(
+      `
+        SELECT srr.id,
+               srr.shared_resource_id,
+               sr.short_description AS resource_short_description,
+               srr.requested_start_at,
+               srr.requested_end_at,
+               srr.reservation_amount,
+               srr.payment_status,
+               srr.status,
+               srr.created_at,
+               srr.client_account_id
+        FROM shared_resource_reservations srr
+        LEFT JOIN shared_resources sr ON sr.id = srr.shared_resource_id
+        WHERE (
+          srr.user_id = $1
+          OR ($2 <> '' AND LOWER(TRIM(COALESCE(srr.email_address, ''))) = $2)
+        )
+          AND LOWER(TRIM(COALESCE(srr.status, ''))) <> 'cancelled'
+        ORDER BY srr.requested_start_at DESC NULLS LAST, srr.id DESC
+      `,
+      [Number(req.session.userId), normalizedEmail]
+    );
+
+    return res.json({
+      accommodation: accommodationResult.rows.map((row) => ({
+        id: Number(row.id || 0),
+        reservationIdentifier: String(row.reservation_identifier || '').trim(),
+        listingId: Number(row.listing_id || 0),
+        listingName: String(row.listing_name || '').trim() || '',
+        arrivalDate: String(row.reservation_checkin_date || '').trim(),
+        departureDate: String(row.reservation_checkout_date || '').trim(),
+        stayNights: Number(row.stay_nights || 0) || 0,
+        amount: row.reservation_amount !== null && row.reservation_amount !== undefined
+          ? Number(row.reservation_amount)
+          : null,
+        paymentMethod: String(row.payment_method || '').trim(),
+        status: String(row.status || '').trim(),
+        paymentStatus: getPrivateReservationPaymentStatusLabel(row),
+        createdAt: row.created_at ? String(row.created_at) : ''
+      })),
+      facilities: facilityResult.rows.map((row) => ({
+        id: Number(row.id || 0),
+        sharedResourceId: Number(row.shared_resource_id || 0),
+        resourceName: String(row.resource_short_description || '').trim() || ('Resource #' + String(row.shared_resource_id || '')),
+        requestedStartAt: row.requested_start_at ? String(row.requested_start_at) : '',
+        requestedEndAt: row.requested_end_at ? String(row.requested_end_at) : '',
+        amount: row.reservation_amount !== null && row.reservation_amount !== undefined
+          ? Number(row.reservation_amount)
+          : null,
+        paymentStatus: normaliseSharedResourceReservationPaymentStatus(row.payment_status),
+        status: String(row.status || '').trim(),
+        createdAt: row.created_at ? String(row.created_at) : ''
+      }))
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load guest reservations.' });
+  }
+});
+
+// GET /api/guest/dashboard/profile — current user profile for guest dashboard account section
+app.get('/api/guest/dashboard/profile', requireAuth, async (req, res) => {
+  try {
+    const user = await getUserById(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    return res.json({
+      firstName: String(user.first_name || ''),
+      familyName: String(user.family_name || ''),
+      email: String(user.email || ''),
+      telephone: String(user.telephone || ''),
+      postalAddress: String(user.postal_address || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load guest profile.' });
+  }
+});
+
+// PUT /api/guest/dashboard/profile — update editable guest account fields
+app.put('/api/guest/dashboard/profile', requireAuth, async (req, res) => {
+  const telephone = sanitizeHtml(String(req.body.telephone || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 60);
+  const postalAddress = sanitizeHtml(String(req.body.postalAddress || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 500);
+
+  try {
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET telephone = $1,
+            postal_address = $2
+        WHERE id = $3
+        RETURNING first_name, family_name, email, telephone, postal_address
+      `,
+      [telephone, postalAddress, Number(req.session.userId)]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const updated = result.rows[0];
+    return res.json({
+      firstName: String(updated.first_name || ''),
+      familyName: String(updated.family_name || ''),
+      email: String(updated.email || ''),
+      telephone: String(updated.telephone || ''),
+      postalAddress: String(updated.postal_address || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to update guest profile.' });
   }
 });
 
