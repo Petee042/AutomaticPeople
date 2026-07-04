@@ -426,6 +426,14 @@ function buildReservationEnquiryLandingPublicUrl(row) {
   return window.location.origin + '/reservation-enquiry.html' + (query ? ('?' + query) : '');
 }
 
+function buildFacilityEnquiryLandingPublicUrl(row) {
+  const slug = String(row && row.public_slug || '').trim();
+  if (!slug) {
+    return '';
+  }
+  return window.location.origin + '/resource-booking.html?facilityLandingPage=' + encodeURIComponent(slug);
+}
+
 function renderReservationEnquiryLandingPageRows(containerId, rows) {
   const container = document.getElementById(containerId);
   if (!container) {
@@ -490,6 +498,92 @@ function renderReservationEnquiryLandingPageRows(containerId, rows) {
     editBtn.setAttribute('aria-label', 'Edit ' + (rowData.name || 'landing page'));
     editBtn.addEventListener('click', () => {
       window.location.href = '/reservation-enquiry-landing-page.html?id=' + encodeURIComponent(rowData.id);
+    });
+
+    actions.appendChild(previewBtn);
+    actions.appendChild(copyBtn);
+    actions.appendChild(editBtn);
+
+    row.appendChild(name);
+    row.appendChild(actions);
+    container.appendChild(row);
+  });
+}
+
+function renderFacilityEnquiryLandingPageRows(containerId, rows) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(rows) || !rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'config-item-empty';
+    empty.textContent = 'No facility enquiry landing pages yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  rows.forEach((rowData) => {
+    const row = document.createElement('div');
+    row.className = 'config-item-row';
+
+    const name = document.createElement('span');
+    name.className = 'config-item-name';
+    const facilityName = String(rowData.shared_resource_name || '').trim();
+    const label = (rowData.name || ('Landing Page #' + rowData.id)) + (facilityName ? (' - ' + facilityName) : '');
+    name.textContent = label + (rowData.is_active === false ? ' (Inactive)' : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'config-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'btn secondary config-mini-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.title = 'Open public URL in new tab';
+    previewBtn.setAttribute('aria-label', 'Preview public URL for ' + (rowData.name || 'landing page'));
+    previewBtn.addEventListener('click', () => {
+      const url = buildFacilityEnquiryLandingPublicUrl(rowData);
+      if (!url) {
+        setMessage('Public URL is not available yet.', true);
+        return;
+      }
+      const tab = window.open(url, '_blank', 'noopener');
+      if (!tab) {
+        window.location.href = url;
+      }
+    });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn secondary config-mini-btn';
+    copyBtn.textContent = 'Copy URL';
+    copyBtn.title = 'Copy public URL';
+    copyBtn.setAttribute('aria-label', 'Copy public URL for ' + (rowData.name || 'landing page'));
+    copyBtn.addEventListener('click', async () => {
+      const url = buildFacilityEnquiryLandingPublicUrl(rowData);
+      if (!url) {
+        setMessage('Public URL is not available yet.', true);
+        return;
+      }
+      try {
+        await copyTextToClipboard(url);
+        setMessage('Copied facility landing page URL.', false);
+      } catch {
+        setMessage('Could not copy facility landing page URL.', true);
+      }
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn secondary config-edit-btn';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Edit';
+    editBtn.setAttribute('aria-label', 'Edit ' + (rowData.name || 'landing page'));
+    editBtn.addEventListener('click', () => {
+      window.location.href = '/facility-enquiry-landing-page.html?id=' + encodeURIComponent(rowData.id);
     });
 
     actions.appendChild(previewBtn);
@@ -1260,6 +1354,33 @@ async function fetchReservationEnquiryLandingPages() {
   } catch (err) {
     renderReservationEnquiryLandingPageRows(containerId, []);
     setMessage(err.message || 'Failed to load reservation enquiry landing pages.', true);
+  }
+}
+
+async function fetchFacilityEnquiryLandingPages() {
+  const containerId = 'configFacilityEnquiryLandingPagesList';
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/facility-enquiry-landing-pages');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load facility enquiry landing pages.');
+    }
+
+    const rows = Array.isArray(data.landingPages) ? data.landingPages : [];
+    renderFacilityEnquiryLandingPageRows(containerId, rows);
+  } catch (err) {
+    renderFacilityEnquiryLandingPageRows(containerId, []);
+    setMessage(err.message || 'Failed to load facility enquiry landing pages.', true);
   }
 }
 
@@ -3612,6 +3733,7 @@ async function loadDashboardData() {
   await fetchManagerAssignments();
   await fetchGuests();
   await fetchReservationEnquiryLandingPages();
+  await fetchFacilityEnquiryLandingPages();
   await fetchStripeConnectStatus();
   await fetchBankDetails();
 
@@ -3977,6 +4099,13 @@ const createReservationEnquiryLandingPageConfigBtn = document.getElementById('cr
 if (createReservationEnquiryLandingPageConfigBtn) {
   createReservationEnquiryLandingPageConfigBtn.addEventListener('click', () => {
     window.location.href = '/reservation-enquiry-landing-page.html?new=1';
+  });
+}
+
+const createFacilityEnquiryLandingPageConfigBtn = document.getElementById('createFacilityEnquiryLandingPageConfigBtn');
+if (createFacilityEnquiryLandingPageConfigBtn) {
+  createFacilityEnquiryLandingPageConfigBtn.addEventListener('click', () => {
+    window.location.href = '/facility-enquiry-landing-page.html?new=1';
   });
 }
 
