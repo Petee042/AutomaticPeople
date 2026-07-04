@@ -14177,7 +14177,6 @@ registerWorkflow2PrivateReservationRoutes(app, {
   getPreferredAppBaseUrl,
   formatDateTimeForMessage,
   createReservationActivityForListing,
-  sendSiteUserValidationEmail,
   sendPasswordResetEmail
 });
 

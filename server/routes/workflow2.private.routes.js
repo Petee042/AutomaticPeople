@@ -28,7 +28,6 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
     getPreferredAppBaseUrl,
     formatDateTimeForMessage,
     createReservationActivityForListing,
-    sendSiteUserValidationEmail,
     sendPasswordResetEmail
   } = deps;
 
@@ -472,26 +471,6 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
           sourceType: 'private_reservation',
           sourceId: String(reservation.id)
         });
-      }
-
-      if (paymentMethod === 'Online Payment') {
-        const guestSiteUser = await ensureGuestSiteUserForClientAccount({
-          clientAccountId: req.accessContext.activeClientAccountId,
-          ownerUserId: req.accessContext.effectiveOwnerUserId,
-          firstName,
-          familyName,
-          email: emailAddress,
-          sourceType: 'private_reservation',
-          sourceId: String(reservation.id)
-        });
-
-        if (guestSiteUser && guestSiteUser.is_validated === false) {
-          const validationEmailResult = await sendSiteUserValidationEmail(req, guestSiteUser);
-          if (!validationEmailResult.ok) {
-            emailDeliveryReason = String(validationEmailResult.error || '').trim();
-            emailDeliveryWarning = true;
-          }
-        }
       }
 
       return res.json({
