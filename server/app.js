@@ -7406,14 +7406,15 @@ async function reassignGuestReferencesForClientAccount(clientAccountId, targetUs
     `
       UPDATE guest_relationships
       SET guest_user_id = $1,
-          guest_email = $2,
+          guest_email = 'deleted+guest-rel-' || id::text || '@automaticpeople.local',
+          guest_phone = '',
           guest_first_name = $3,
           guest_family_name = $4,
           updated_at = CURRENT_TIMESTAMP
       WHERE client_account_id = $5
         AND guest_user_id = $6
     `,
-    [deleted.deletedUserId, deleted.deletedEmail, deleted.deletedFirstName, deleted.deletedFamilyName, accountId, targetId]
+    [deleted.deletedUserId, deleted.deletedFirstName, deleted.deletedFamilyName, accountId, targetId]
   );
 
   await pool.query(
