@@ -9164,6 +9164,76 @@ async function logEmailSentForCurrentRequest(detail) {
   });
 }
 
+function buildCalendarSyncEventDescription(eventTypeLabel, listingName) {
+  const label = String(eventTypeLabel || '').trim() || 'Calendar Sync';
+  const name = String(listingName || '').trim() || 'Listing';
+  return label + ' - ' + name;
+}
+
+async function logCalendarSyncImportEvent(input) {
+  const listing = input && input.listing ? input.listing : null;
+  const actorUserId = Number(listing && listing.user_id || 0);
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return;
+  }
+
+  const clientAccountIdRaw = Number(input && input.clientAccountId || listing && listing.client_account_id || 0);
+  const clientAccountId = Number.isInteger(clientAccountIdRaw) && clientAccountIdRaw > 0 ? clientAccountIdRaw : null;
+  const listingName = String(listing && listing.name || ('Listing #' + String(listing && listing.id || ''))).trim();
+  const status = String(input && input.status || 'success').trim().toLowerCase();
+
+  await writeUserEventLog({
+    actorUserId,
+    clientAccountId,
+    eventType: 'calendar_sync_import',
+    description: buildCalendarSyncEventDescription('Cron Import Calendar Sync', listingName),
+    detail: {
+      dtg: new Date().toISOString(),
+      status,
+      listingId: Number(listing && listing.id || 0),
+      listingName,
+      importingChannelLabel: String(input && input.importingChannelLabel || '').trim(),
+      exportingChannelLabel: String(input && input.exportingChannelLabel || '').trim(),
+      importUrl: String(input && input.importUrl || '').trim(),
+      importedEvent: input && input.importedEvent ? input.importedEvent : null,
+      processingOutcome: String(input && input.processingOutcome || '').trim(),
+      error: String(input && input.error || '').trim()
+    }
+  });
+}
+
+async function logCalendarSyncExportRequestEvent(input) {
+  const listing = input && input.listing ? input.listing : null;
+  const actorUserId = Number(listing && listing.user_id || 0);
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return;
+  }
+
+  const clientAccountIdRaw = Number(input && input.clientAccountId || listing && listing.client_account_id || 0);
+  const clientAccountId = Number.isInteger(clientAccountIdRaw) && clientAccountIdRaw > 0 ? clientAccountIdRaw : null;
+  const listingName = String(listing && listing.name || ('Listing #' + String(listing && listing.id || ''))).trim();
+
+  await writeUserEventLog({
+    actorUserId,
+    clientAccountId,
+    eventType: 'calendar_sync_export_request',
+    description: buildCalendarSyncEventDescription('Calendar Sync Export Request', listingName),
+    detail: {
+      dtg: new Date().toISOString(),
+      listingId: Number(listing && listing.id || 0),
+      listingName,
+      requestSource: String(input && input.requestSource || '').trim(),
+      eventCount: Number(input && input.eventCount || 0),
+      consolidated: input && input.consolidated === true,
+      requestPath: String(input && input.requestPath || '').trim(),
+      query: input && input.query ? input.query : {},
+      exportedEventsPreview: Array.isArray(input && input.exportedEventsPreview)
+        ? input.exportedEventsPreview
+        : []
+    }
+  });
+}
+
 async function getManagerEmailsForClientAccount(clientAccountId) {
   const accountId = Number(clientAccountId);
   if (!Number.isInteger(accountId) || accountId <= 0) {
@@ -9415,6 +9485,17 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
     console.error(`[CalendarSync] Listing ${listingId} channel "${channel.label}": ${fetched.error}`);
     const exportingLabelErr = await findExportingChannelLabel(importUrl);
     await logIcsTransaction({ listingId, channelId, importingChannelLabel: channel.label, exportingChannelLabel: exportingLabelErr, importUrl, status: 'error', eventCount: 0, rawPayload: '', errorText: fetched.error });
+    await logCalendarSyncImportEvent({
+      listing,
+      clientAccountId,
+      importingChannelLabel: channel.label,
+      exportingChannelLabel: exportingLabelErr,
+      importUrl,
+      status: 'error',
+      processingOutcome: 'fetch_error',
+      error: fetched.error,
+      importedEvent: null
+    });
     return;
   }
 
@@ -9484,12 +9565,44 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
           subject: `Calendar Conflict - Listing ${listingId}`,
           introText: conflictDesc
         });
+
+        await logCalendarSyncImportEvent({
+          listing,
+          clientAccountId,
+          importingChannelLabel: channel.label,
+          exportingChannelLabel: exportingLabel,
+          importUrl,
+          status: 'success',
+          processingOutcome: 'exact_match_conflict_flagged',
+          importedEvent: {
+            start: importStart,
+            end: importEnd,
+            title: String(processedEvent.title || '').trim(),
+            calendarEventId: Number(exactMatch.id)
+          }
+        });
       } else {
         // If already in conflict, no further action (avoid duplicate alerts)
         await pool.query(
           'UPDATE listing_calendar_events SET last_synced_at = $1 WHERE id = $2',
           [now, exactMatch.id]
         );
+
+        await logCalendarSyncImportEvent({
+          listing,
+          clientAccountId,
+          importingChannelLabel: channel.label,
+          exportingChannelLabel: exportingLabel,
+          importUrl,
+          status: 'success',
+          processingOutcome: 'exact_match_refreshed',
+          importedEvent: {
+            start: importStart,
+            end: importEnd,
+            title: String(processedEvent.title || '').trim(),
+            calendarEventId: Number(exactMatch.id)
+          }
+        });
       }
       continue;
     }
@@ -9530,6 +9643,24 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
           affectedEventId: Number(existing.id)
         });
       }
+
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: 'existing_event_date_changed',
+        importedEvent: {
+          oldStart,
+          oldEnd,
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: Number(existing.id)
+        }
+      });
       continue;
     }
 
@@ -9608,6 +9739,39 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         listingId,
         subject: `Calendar Conflict - Listing ${listingId}`,
         introText: conflictDesc
+      });
+
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: 'new_event_conflict_created',
+        importedEvent: {
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: newEventId,
+          conflictingEventIds: conflictEventIds
+        }
+      });
+    } else {
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: 'new_event_created',
+        importedEvent: {
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: newEventId
+        }
       });
     }
   }
@@ -14211,6 +14375,24 @@ app.get('/api/listings/:listingId/calendar.ics', async (req, res) => {
     if (requestSource) {
       res.setHeader('X-Calendar-Excluded-Source', String(requestSource));
     }
+
+    await logCalendarSyncExportRequestEvent({
+      listing,
+      clientAccountId: Number(listing.client_account_id || 0),
+      requestSource,
+      eventCount: events.length,
+      consolidated: false,
+      requestPath: String(req.originalUrl || req.path || ''),
+      query: req.query || {},
+      exportedEventsPreview: events.slice(0, 25).map((event) => ({
+        start: String(event && event.start || ''),
+        end: String(event && event.end || ''),
+        title: String(event && event.title || ''),
+        source: String(event && event.source || ''),
+        eventType: String(event && event.eventType || '')
+      }))
+    });
+
     return res.send(icsContent);
   } catch (err) {
     console.error(err);
@@ -14275,6 +14457,30 @@ app.get('/api/calendar.ics', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="all-listings.ics"');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.setHeader('X-Calendar-Event-Count', String(combinedEvents.length));
+
+    await logCalendarSyncExportRequestEvent({
+      listing: {
+        id: 0,
+        user_id: Number(userId || 0),
+        client_account_id: Number(resolvedAccess && resolvedAccess.activeClientAccountId || 0) || null,
+        name: 'All Listings'
+      },
+      clientAccountId: Number(resolvedAccess && resolvedAccess.activeClientAccountId || 0) || null,
+      requestSource: detectCalendarRequestSource(req),
+      eventCount: combinedEvents.length,
+      consolidated: true,
+      requestPath: String(req.originalUrl || req.path || ''),
+      query: req.query || {},
+      exportedEventsPreview: combinedEvents.slice(0, 25).map((event) => ({
+        listingName: String(event && event.listingName || ''),
+        start: String(event && event.start || ''),
+        end: String(event && event.end || ''),
+        title: String(event && event.title || ''),
+        source: String(event && event.source || ''),
+        eventType: String(event && event.eventType || '')
+      }))
+    });
+
     return res.send(icsContent);
   } catch (err) {
     console.error(err);
