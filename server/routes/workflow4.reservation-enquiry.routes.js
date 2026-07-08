@@ -38,7 +38,10 @@ function registerWorkflow4ReservationEnquiryRoutes(app, deps) {
     updateReservationActivityPaymentById,
     normaliseLandingPageSlug,
     finalizeReservationActivityPaymentIntent,
-    rankSplitStayOptions
+    rankSplitStayOptions,
+    ensureGuestSiteUserForClientAccount,
+    findUserByEmail,
+    sendPasswordResetEmail
   } = deps;
 
   app.get('/api/reservation-enquiry-landing-pages', requireScopedRole('Staff'), async (req, res) => {
@@ -491,6 +494,37 @@ function registerWorkflow4ReservationEnquiryRoutes(app, deps) {
         emailDeliveryReason = String(emailResult.error || '').trim();
       }
 
+      // Mirror Workflow 2 behavior for paid reservations: ensure guest account exists and
+      // send password-setup email for first-time site users.
+      const existingGuestSiteUser = await findUserByEmail(emailAddress);
+      const firstReservation = reservationRows[0] && reservationRows[0].reservation
+        ? reservationRows[0].reservation
+        : null;
+      const guestSiteUser = await ensureGuestSiteUserForClientAccount({
+        clientAccountId: Number(landingPage.client_account_id || 0),
+        ownerUserId: Number(landingPage.user_id || 0),
+        firstName,
+        familyName,
+        email: emailAddress,
+        sourceType: 'private_reservation',
+        sourceId: String(firstReservation && firstReservation.id || '')
+      });
+
+      if (!existingGuestSiteUser && guestSiteUser) {
+        let passwordSetupUser = guestSiteUser;
+        if (!passwordSetupUser.password_hash) {
+          passwordSetupUser = await findUserByEmail(emailAddress);
+        }
+
+        const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
+        if (!setupEmailResult.ok) {
+          emailDeliveryWarning = true;
+          if (!emailDeliveryReason) {
+            emailDeliveryReason = String(setupEmailResult.error || '').trim();
+          }
+        }
+      }
+
       return res.status(201).json({
         message: 'Payment request sent and reservation enquiry logged.',
         reservationIdentifiers: reservationRows.map((row) => String(row.reservation && row.reservation.reservation_identifier || '')).filter(Boolean),
@@ -644,12 +678,43 @@ function registerWorkflow4ReservationEnquiryRoutes(app, deps) {
         paymentLastError: ''
       })));
 
+      // Mirror Workflow 2 behavior for paid reservations: ensure guest account exists and
+      // send password-setup email for first-time site users.
+      let accountEmailDeliveryWarning = false;
+      let accountEmailDeliveryReason = '';
+      const existingGuestSiteUser = await findUserByEmail(emailAddress);
+      const firstReservation = reservationRows[0] || null;
+      const guestSiteUser = await ensureGuestSiteUserForClientAccount({
+        clientAccountId: Number(landingPage.client_account_id || 0),
+        ownerUserId: Number(landingPage.user_id || 0),
+        firstName,
+        familyName,
+        email: emailAddress,
+        sourceType: 'private_reservation',
+        sourceId: String(firstReservation && firstReservation.id || '')
+      });
+
+      if (!existingGuestSiteUser && guestSiteUser) {
+        let passwordSetupUser = guestSiteUser;
+        if (!passwordSetupUser.password_hash) {
+          passwordSetupUser = await findUserByEmail(emailAddress);
+        }
+
+        const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
+        if (!setupEmailResult.ok) {
+          accountEmailDeliveryWarning = true;
+          accountEmailDeliveryReason = String(setupEmailResult.error || '').trim();
+        }
+      }
+
       return res.status(201).json({
         publishableKey: STRIPE_PUBLISHABLE_KEY,
         clientSecret: paymentIntent.client_secret,
         paymentIntentId: paymentIntent.id,
         reservationIdentifiers: reservationRows.map((row) => String(row && row.reservation_identifier || '')).filter(Boolean),
-        payableAmount
+        payableAmount,
+        accountEmailDeliveryWarning,
+        accountEmailDeliveryReason
       });
     } catch (err) {
       console.error(err);

@@ -12824,7 +12824,10 @@ registerWorkflow4ReservationEnquiryRoutes(app, {
   updateReservationActivityPaymentById,
   normaliseLandingPageSlug,
   finalizeReservationActivityPaymentIntent,
-  rankSplitStayOptions
+  rankSplitStayOptions,
+  ensureGuestSiteUserForClientAccount,
+  findUserByEmail,
+  sendPasswordResetEmail
 });
 
 registerWorkflow5FacilityEnquiryRoutes(app, {
