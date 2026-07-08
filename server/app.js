@@ -14933,6 +14933,22 @@ app.get('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
     }
 
     const activeClientAccountId = Number(req.accessContext && req.accessContext.activeClientAccountId || 0);
+    const searchText = String(req.query && req.query.q || '').trim();
+    const params = [
+      actorUserId,
+      Number.isInteger(activeClientAccountId) && activeClientAccountId > 0 ? activeClientAccountId : null
+    ];
+    let searchClause = '';
+    if (searchText) {
+      params.push('%' + searchText + '%');
+      searchClause = `
+          AND (
+            description ILIKE $3
+            OR COALESCE(detail_json::text, '') ILIKE $3
+          )
+      `;
+    }
+
     const result = await pool.query(
       `
         SELECT id,
@@ -14942,13 +14958,11 @@ app.get('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
         FROM user_event_log
         WHERE actor_user_id = $1
           AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+          ${searchClause}
         ORDER BY created_at DESC
         LIMIT 500
       `,
-      [
-        actorUserId,
-        Number.isInteger(activeClientAccountId) && activeClientAccountId > 0 ? activeClientAccountId : null
-      ]
+      params
     );
 
     return res.json({
@@ -14962,6 +14976,54 @@ app.get('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load user event log.' });
+  }
+});
+
+// DELETE /api/user-event-log — clear user-scoped event log entries for active context
+app.delete('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
+  try {
+    const actorUserId = Number(req.session && req.session.userId || 0);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const activeClientAccountId = Number(req.accessContext && req.accessContext.activeClientAccountId || 0);
+    const scopedClientAccountId = Number.isInteger(activeClientAccountId) && activeClientAccountId > 0
+      ? activeClientAccountId
+      : null;
+
+    const scope = String(req.body && req.body.scope || 'all').trim().toLowerCase();
+    if (!['all', 'older_7_days', 'older_31_days'].includes(scope)) {
+      return res.status(400).json({ error: 'Invalid delete scope.' });
+    }
+
+    let result;
+    if (scope === 'all') {
+      result = await pool.query(
+        `
+          DELETE FROM user_event_log
+          WHERE actor_user_id = $1
+            AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+        `,
+        [actorUserId, scopedClientAccountId]
+      );
+    } else {
+      const days = scope === 'older_31_days' ? 31 : 7;
+      result = await pool.query(
+        `
+          DELETE FROM user_event_log
+          WHERE actor_user_id = $1
+            AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+            AND created_at < (CURRENT_TIMESTAMP - ($3::text || ' days')::interval)
+        `,
+        [actorUserId, scopedClientAccountId, String(days)]
+      );
+    }
+
+    return res.json({ ok: true, deletedCount: Number(result.rowCount || 0), scope });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete user event log entries.' });
   }
 });
 

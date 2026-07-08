@@ -1,5 +1,7 @@
 'use strict';
 
+let viewLoggingFilterText = '';
+
 function setViewLoggingMessage(text, isError) {
   const el = document.getElementById('viewLoggingMessage');
   if (!el) {
@@ -96,7 +98,10 @@ async function loadViewLoggingEntries() {
   setViewLoggingMessage('', false);
 
   try {
-    const response = await fetch('/api/user-event-log');
+    const query = viewLoggingFilterText
+      ? ('?q=' + encodeURIComponent(viewLoggingFilterText))
+      : '';
+    const response = await fetch('/api/user-event-log' + query);
     if (response.status === 401) {
       window.location.href = '/';
       return;
@@ -198,11 +203,118 @@ async function loadViewLoggingEntries() {
   }
 }
 
+function getViewLoggingDeleteLabel(scope) {
+  if (scope === 'older_7_days') {
+    return 'entries older than 7 days';
+  }
+  if (scope === 'older_31_days') {
+    return 'entries older than 31 days';
+  }
+  return 'all entries';
+}
+
+async function deleteViewLoggingEntries() {
+  const deleteBtn = document.getElementById('viewLoggingDeleteBtn');
+  const scopeEl = document.getElementById('viewLoggingDeleteScope');
+  if (!deleteBtn || !scopeEl) {
+    return;
+  }
+
+  const scope = String(scopeEl.value || 'all').trim();
+  const label = getViewLoggingDeleteLabel(scope);
+  const confirmed = window.confirm('Delete ' + label + '? This cannot be undone.');
+  if (!confirmed) {
+    return;
+  }
+
+  deleteBtn.disabled = true;
+  setViewLoggingMessage('Deleting ' + label + '...', false);
+  try {
+    const response = await fetch('/api/user-event-log', {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ scope })
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+    if (response.status === 403) {
+      setViewLoggingMessage('Access restricted.', true);
+      return;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setViewLoggingMessage(data.error || 'Failed to delete log entries.', true);
+      return;
+    }
+
+    setViewLoggingMessage(
+      'Deleted ' + String(Number(data.deletedCount || 0)) + ' ' + label + '.',
+      false
+    );
+    await loadViewLoggingEntries();
+  } catch (err) {
+    setViewLoggingMessage(err.message || 'Failed to delete log entries.', true);
+  } finally {
+    deleteBtn.disabled = false;
+  }
+}
+
+function applyViewLoggingFilter() {
+  const filterInput = document.getElementById('viewLoggingFilterInput');
+  if (!filterInput) {
+    return;
+  }
+  viewLoggingFilterText = String(filterInput.value || '').trim();
+  loadViewLoggingEntries().catch(() => {
+    setViewLoggingMessage('Failed to apply log filter.', true);
+  });
+}
+
 (function initViewLoggingPage() {
   const backBtn = document.getElementById('backBtn');
   if (backBtn) {
     backBtn.addEventListener('click', () => {
       window.location.href = '/dashboard.html?tab=panel-dashboard';
+    });
+  }
+
+  const filterBtn = document.getElementById('viewLoggingFilterBtn');
+  if (filterBtn) {
+    filterBtn.addEventListener('click', () => {
+      applyViewLoggingFilter();
+    });
+  }
+
+  const filterClearBtn = document.getElementById('viewLoggingFilterClearBtn');
+  const filterInput = document.getElementById('viewLoggingFilterInput');
+  if (filterClearBtn && filterInput) {
+    filterClearBtn.addEventListener('click', () => {
+      filterInput.value = '';
+      applyViewLoggingFilter();
+    });
+  }
+
+  if (filterInput) {
+    filterInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        applyViewLoggingFilter();
+      }
+    });
+  }
+
+  const deleteBtn = document.getElementById('viewLoggingDeleteBtn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      deleteViewLoggingEntries().catch(() => {
+        setViewLoggingMessage('Failed to delete log entries.', true);
+      });
     });
   }
 

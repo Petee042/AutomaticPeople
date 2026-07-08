@@ -31,6 +31,32 @@
       <p id="viewLoggingMessage" class="message"></p>
 
       <section class="listing-form-section">
+        <div class="view-logging-toolbar" aria-label="View logging controls">
+          <div class="view-logging-filter-group">
+            <label for="viewLoggingFilterInput" class="view-logging-toolbar-label">Text filter</label>
+            <input
+              id="viewLoggingFilterInput"
+              type="text"
+              placeholder="Search description or detail"
+              autocomplete="off"
+            />
+            <button id="viewLoggingFilterBtn" type="button" class="btn secondary">Filter</button>
+            <button id="viewLoggingFilterClearBtn" type="button" class="btn secondary">Clear</button>
+          </div>
+
+          <div class="view-logging-delete-group">
+            <label for="viewLoggingDeleteScope" class="view-logging-toolbar-label">Delete entries</label>
+            <select id="viewLoggingDeleteScope">
+              <option value="all">All Entries</option>
+              <option value="older_7_days">Entries older than 7 days</option>
+              <option value="older_31_days">Entries older than 31 days</option>
+            </select>
+            <button id="viewLoggingDeleteBtn" type="button" class="btn secondary event-log-clear-btn" title="Delete selected log entries" aria-label="Delete selected log entries">x</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="listing-form-section">
         <div class="table-wrap">
           <table class="calendar-table" aria-label="User event log">
             <thead>

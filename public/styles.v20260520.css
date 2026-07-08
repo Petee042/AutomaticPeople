@@ -2090,6 +2090,36 @@ textarea:focus {
   color: #23314f;
 }
 
+.view-logging-toolbar {
+  display: grid;
+  gap: 0.7rem;
+  margin-bottom: 0.2rem;
+}
+
+.view-logging-filter-group,
+.view-logging-delete-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.view-logging-toolbar-label {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #4b5e84;
+  min-width: 5.8rem;
+}
+
+#viewLoggingFilterInput {
+  flex: 1;
+  min-width: 220px;
+}
+
+#viewLoggingDeleteScope {
+  min-width: 220px;
+}
+
 .feed-actions {
   display: flex;
   gap: 0.45rem;
