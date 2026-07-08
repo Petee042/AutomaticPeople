@@ -2047,6 +2047,49 @@ textarea:focus {
   font-weight: 700;
 }
 
+.event-log-toggle-btn {
+  font-family: inherit;
+  line-height: 1;
+}
+
+.event-log-detail-row.hidden {
+  display: none;
+}
+
+.event-log-detail-row td {
+  background: #f8fbff;
+  border-top: 0;
+}
+
+.event-log-inline-detail {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.2rem 0;
+  font-size: 0.88rem;
+  color: #1f2937;
+}
+
+.event-log-inline-detail-loading {
+  font-size: 0.86rem;
+  color: #31415f;
+}
+
+.event-log-inline-detail-error {
+  font-size: 0.86rem;
+  color: #721c24;
+}
+
+.event-log-detail-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  background: #ffffff;
+  border: 1px solid #dbe1ef;
+  border-radius: 6px;
+  padding: 0.55rem;
+  font-size: 0.82rem;
+  color: #23314f;
+}
+
 .feed-actions {
   display: flex;
   gap: 0.45rem;

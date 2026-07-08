@@ -29,67 +29,61 @@ function escapeHtml(value) {
     .replace(/\"/g, '&quot;');
 }
 
-function openEntryDetailsInNewTab(entry) {
-  const row = entry || {};
-  const detail = row.detail && typeof row.detail === 'object' ? row.detail : {};
-
-  const fullDetail = {
-    dtg: String(detail.dtg || row.dtg || ''),
-    fromAddress: String(detail.fromAddress || ''),
-    toAddress: String(detail.toAddress || ''),
-    subject: String(detail.subject || ''),
-    messageContent: String(detail.messageContent || '')
-  };
-
-  const popup = window.open('', '_blank', 'noopener');
-  if (!popup) {
-    setViewLoggingMessage('Popup blocked. Please allow popups to view details.', true);
-    return;
+function formatDetailObject(detailObject) {
+  const detail = detailObject && typeof detailObject === 'object' ? detailObject : {};
+  try {
+    return JSON.stringify(detail, null, 2);
+  } catch {
+    return '{}';
   }
-
-  const title = 'Event Log Detail #' + String(row.id || '');
-  popup.document.open();
-  popup.document.write(
-    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>' + escapeHtml(title) + '</title>'
-    + '<style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:1.2rem;color:#1f2937}h1{font-size:1.1rem;margin:0 0 0.9rem}dl{display:grid;grid-template-columns:160px 1fr;gap:0.6rem 0.9rem}dt{font-weight:700}dd{margin:0;white-space:pre-wrap}pre{white-space:pre-wrap;background:#f5f7fb;border:1px solid #dbe1ef;padding:0.8rem;border-radius:8px}</style>'
-    + '</head><body>'
-    + '<h1>' + escapeHtml(title) + '</h1>'
-    + '<dl>'
-    + '<dt>DTG</dt><dd>' + escapeHtml(fullDetail.dtg || row.dtg || '') + '</dd>'
-    + '<dt>From Address</dt><dd>' + escapeHtml(fullDetail.fromAddress) + '</dd>'
-    + '<dt>To Address</dt><dd>' + escapeHtml(fullDetail.toAddress) + '</dd>'
-    + '<dt>Subject</dt><dd>' + escapeHtml(fullDetail.subject) + '</dd>'
-    + '</dl>'
-    + '<h2 style="font-size:1rem;margin:1rem 0 0.5rem">Message Content</h2>'
-    + '<pre>' + escapeHtml(fullDetail.messageContent) + '</pre>'
-    + '</body></html>'
-  );
-  popup.document.close();
 }
 
-async function openViewLoggingEntryDetails(entryId) {
+function buildInlineDetailHtml(entry) {
+  const row = entry && typeof entry === 'object' ? entry : {};
+  const detail = row.detail && typeof row.detail === 'object' ? row.detail : {};
+
+  const dtg = String(detail.dtg || row.dtg || '').trim();
+  const fromAddress = String(detail.fromAddress || '').trim();
+  const toAddress = String(detail.toAddress || '').trim();
+  const subject = String(detail.subject || '').trim();
+  const eventType = String(row.eventType || '').trim();
+  const messageContent = String(detail.messageContent || '').trim();
+  const detailJson = formatDetailObject(detail);
+
+  const lines = [];
+  if (dtg) lines.push('<div><strong>DTG:</strong> ' + escapeHtml(dtg) + '</div>');
+  if (eventType) lines.push('<div><strong>Event Type:</strong> ' + escapeHtml(eventType) + '</div>');
+  if (fromAddress) lines.push('<div><strong>From Address:</strong> ' + escapeHtml(fromAddress) + '</div>');
+  if (toAddress) lines.push('<div><strong>To Address:</strong> ' + escapeHtml(toAddress) + '</div>');
+  if (subject) lines.push('<div><strong>Subject:</strong> ' + escapeHtml(subject) + '</div>');
+  if (messageContent) {
+    lines.push('<div><strong>Message Content:</strong></div>');
+    lines.push('<pre class="event-log-detail-pre">' + escapeHtml(messageContent) + '</pre>');
+  }
+  lines.push('<div><strong>Full Detail:</strong></div>');
+  lines.push('<pre class="event-log-detail-pre">' + escapeHtml(detailJson) + '</pre>');
+
+  return '<div class="event-log-inline-detail">' + lines.join('') + '</div>';
+}
+
+async function loadViewLoggingEntryDetails(entryId) {
   const id = Number(entryId || 0);
   if (!Number.isInteger(id) || id <= 0) {
-    setViewLoggingMessage('Select a valid log entry first.', true);
-    return;
+    throw new Error('Select a valid log entry first.');
   }
 
-  try {
-    const response = await fetch('/api/user-event-log/' + encodeURIComponent(String(id)) + '/details');
-    if (response.status === 401) {
-      window.location.href = '/';
-      return;
-    }
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to load log entry details.');
-    }
-
-    openEntryDetailsInNewTab(data.entry || {});
-  } catch (err) {
-    setViewLoggingMessage(err.message || 'Failed to load log entry details.', true);
+  const response = await fetch('/api/user-event-log/' + encodeURIComponent(String(id)) + '/details');
+  if (response.status === 401) {
+    window.location.href = '/';
+    return null;
   }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load log entry details.');
+  }
+
+  return data.entry || {};
 }
 
 async function loadViewLoggingEntries() {
@@ -126,6 +120,7 @@ async function loadViewLoggingEntries() {
     tbody.innerHTML = '';
     entries.forEach((entry) => {
       const tr = document.createElement('tr');
+      tr.className = 'event-log-main-row';
 
       const dtgCell = document.createElement('td');
       dtgCell.textContent = formatViewLoggingDateTime(entry.dtg);
@@ -139,21 +134,63 @@ async function loadViewLoggingEntries() {
       descriptionCell.appendChild(descriptionBox);
 
       const infoCell = document.createElement('td');
-      const infoBtn = document.createElement('button');
-      infoBtn.type = 'button';
-      infoBtn.className = 'btn secondary config-icon-btn event-log-info-btn';
-      infoBtn.textContent = 'i';
-      infoBtn.title = 'View event details';
-      infoBtn.setAttribute('aria-label', 'View event details');
-      infoBtn.addEventListener('click', () => {
-        openViewLoggingEntryDetails(entry.id);
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'btn secondary config-icon-btn event-log-info-btn event-log-toggle-btn';
+      toggleBtn.textContent = 'v';
+      toggleBtn.title = 'Expand event details';
+      toggleBtn.setAttribute('aria-label', 'Expand event details');
+      toggleBtn.setAttribute('aria-expanded', 'false');
+      infoCell.appendChild(toggleBtn);
+
+      const detailRow = document.createElement('tr');
+      detailRow.className = 'event-log-detail-row hidden';
+      const detailCell = document.createElement('td');
+      detailCell.colSpan = 3;
+      detailCell.innerHTML = '<div class="event-log-inline-detail-loading">Loading details...</div>';
+      detailRow.appendChild(detailCell);
+
+      let detailLoaded = false;
+      toggleBtn.addEventListener('click', async () => {
+        const isOpen = !detailRow.classList.contains('hidden');
+        if (isOpen) {
+          detailRow.classList.add('hidden');
+          toggleBtn.textContent = 'v';
+          toggleBtn.title = 'Expand event details';
+          toggleBtn.setAttribute('aria-label', 'Expand event details');
+          toggleBtn.setAttribute('aria-expanded', 'false');
+          return;
+        }
+
+        detailRow.classList.remove('hidden');
+        toggleBtn.textContent = '^';
+        toggleBtn.title = 'Collapse event details';
+        toggleBtn.setAttribute('aria-label', 'Collapse event details');
+        toggleBtn.setAttribute('aria-expanded', 'true');
+
+        if (!detailLoaded) {
+          try {
+            detailCell.innerHTML = '<div class="event-log-inline-detail-loading">Loading details...</div>';
+            const fullEntry = await loadViewLoggingEntryDetails(entry.id);
+            if (!fullEntry) {
+              return;
+            }
+            detailCell.innerHTML = buildInlineDetailHtml(fullEntry);
+            detailLoaded = true;
+          } catch (err) {
+            detailCell.innerHTML = '<div class="event-log-inline-detail-error">'
+              + escapeHtml(err.message || 'Failed to load log entry details.')
+              + '</div>';
+            setViewLoggingMessage(err.message || 'Failed to load log entry details.', true);
+          }
+        }
       });
-      infoCell.appendChild(infoBtn);
 
       tr.appendChild(dtgCell);
       tr.appendChild(descriptionCell);
       tr.appendChild(infoCell);
       tbody.appendChild(tr);
+      tbody.appendChild(detailRow);
     });
   } catch (err) {
     tbody.innerHTML = '<tr><td colspan="3">Failed to load log entries.</td></tr>';
