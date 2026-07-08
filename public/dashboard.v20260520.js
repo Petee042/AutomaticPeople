@@ -1116,6 +1116,15 @@ function getDashboardContextStorageKey() {
   return 'dashboardContextMode';
 }
 
+function getDashboardContextPersistentStorageKey() {
+  const identity = currentUserEmail || 'anonymous';
+  return 'dashboardContextMode:v1:' + identity;
+}
+
+function hasDashboardContextSwitchAvailable() {
+  return dashboardContextAvailability.hosting === true && dashboardContextAvailability.guest === true;
+}
+
 function updateDashboardContextAvailabilityFromMemberships() {
   const memberships = currentAccessContext && Array.isArray(currentAccessContext.memberships)
     ? currentAccessContext.memberships
@@ -1207,7 +1216,7 @@ function renderDashboardContextToggle() {
     return;
   }
 
-  const canSwitchModes = dashboardContextAvailability.hosting && dashboardContextAvailability.guest;
+  const canSwitchModes = hasDashboardContextSwitchAvailable();
   toggleBtn.classList.toggle('hidden', !canSwitchModes);
   toggleBtn.disabled = !canSwitchModes;
   if (!canSwitchModes) {
@@ -1240,6 +1249,14 @@ async function applyDashboardContextMode(mode, options) {
   } catch {
     // ignore
   }
+
+  try {
+    window.localStorage.setItem(getDashboardContextPersistentStorageKey(), normalizedMode);
+  } catch {
+    // ignore
+  }
+
+  saveDashboardState({ contextMode: normalizedMode });
 
   const activePanelId = dashboardTabController ? dashboardTabController.getActivePanel() : '';
   const allowedPanels = getAllowedPanelsForContext(normalizedMode);
@@ -4080,11 +4097,20 @@ async function sendScheduleEmailToRecipient(toEmail) {
 
     await fetchAccessContext();
 
-    let persistedMode = '';
-    try {
-      persistedMode = String(sessionStorage.getItem(getDashboardContextStorageKey()) || '').trim().toLowerCase();
-    } catch {
-      persistedMode = '';
+    let persistedMode = String(savedDashboardState && savedDashboardState.contextMode || '').trim().toLowerCase();
+    if (!persistedMode) {
+      try {
+        persistedMode = String(window.localStorage.getItem(getDashboardContextPersistentStorageKey()) || '').trim().toLowerCase();
+      } catch {
+        persistedMode = '';
+      }
+    }
+    if (!persistedMode) {
+      try {
+        persistedMode = String(sessionStorage.getItem(getDashboardContextStorageKey()) || '').trim().toLowerCase();
+      } catch {
+        persistedMode = '';
+      }
     }
     const initialMode = normalizeDashboardContextMode(persistedMode || (dashboardContextAvailability.guest && !dashboardContextAvailability.hosting ? 'guest' : 'hosting'));
     await applyDashboardContextMode(initialMode, { loadData: false });
@@ -4483,7 +4509,7 @@ if (_guestAccountForm) _guestAccountForm.addEventListener('submit', async (e) =>
 
 const _dashboardContextToggle = document.getElementById('dashboardContextToggle');
 if (_dashboardContextToggle) _dashboardContextToggle.addEventListener('click', async () => {
-  if (!(dashboardContextAvailability.hosting && dashboardContextAvailability.guest)) {
+  if (!hasDashboardContextSwitchAvailable()) {
     return;
   }
 
