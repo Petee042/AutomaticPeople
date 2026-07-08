@@ -3674,6 +3674,54 @@ async function sendSiteUserValidationEmail(req, user) {
   });
 }
 
+async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource) {
+  const emailAddress = normaliseOptionalEmail(reservation && reservation.email_address);
+  if (!emailAddress) {
+    return { ok: false, error: 'No guest email address found for reservation notification.' };
+  }
+
+  const baseUrl = getPreferredAppBaseUrl(req);
+  if (!baseUrl) {
+    return { ok: false, error: 'Cannot build login URL because APP_BASE_URL is not configured.' };
+  }
+
+  const loginUrl = baseUrl.replace(/\/$/, '') + '/index.html';
+  const guestName = [String(reservation.first_name || '').trim(), String(reservation.family_name || '').trim()]
+    .filter(Boolean)
+    .join(' ')
+    .trim() || 'Guest';
+  const arrivalDateTime = formatDateTimeForMessage(String(reservation.requested_start_at || ''));
+  const departureDateTime = formatDateTimeForMessage(String(reservation.requested_end_at || ''));
+  const amountText = Number(reservation.reservation_amount || 0).toFixed(2);
+  const resourceName = String(resource && resource.short_description || '').trim() || 'Reservation';
+  const reservationIdentifier = String(reservation.reservation_identifier || '').trim();
+  const lines = [
+    'Reservation Created - Online Payment Required',
+    '',
+    'Guest: ' + guestName,
+    'Reservation reference: ' + (reservationIdentifier || '-'),
+    'Resource: ' + resourceName,
+    'Arrival date & time: ' + arrivalDateTime,
+    'Departure date & time: ' + departureDateTime,
+    'Number of units: ' + String(Number(reservation.spaces_required || 1) || 1),
+    'Amount due: ' + amountText,
+    '',
+    'Please log in to your AutomaticPeople account to make payment: ',
+    loginUrl,
+    '',
+    'If you are new to the site, please follow the link in the separate email you receive to set up your password before you can complete payment.',
+    '',
+    'If you did not expect this email, you can ignore it.'
+  ];
+
+  const subject = 'Reservation created - online payment required';
+  return sendAppEmail({
+    to: emailAddress,
+    subject,
+    textBody: lines.join('\n')
+  });
+}
+
 async function sendPasswordResetEmail(req, user) {
   if (!user || !user.email) {
     return { ok: false, error: 'Cannot send password reset email without a user email.' };
@@ -13289,6 +13337,12 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
       if (!emailResult.ok) {
         emailDeliveryWarning = true;
         emailDeliveryReason = String(emailResult.error || '').trim();
+      }
+    } else if (paymentOption === 'online_payment') {
+      const onlineEmailResult = await sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource);
+      if (!onlineEmailResult.ok) {
+        emailDeliveryWarning = true;
+        emailDeliveryReason = String(onlineEmailResult.error || '').trim();
       }
     }
 
