@@ -27,7 +27,8 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
     updateSharedResourceReservationForUser,
     deleteSharedResourceReservationForUser,
     deleteSharedResourceForUser,
-    getReservationGuestOptionsForClientAccount
+    getReservationGuestOptionsForClientAccount,
+    writeUserEventLog
   } = deps;
 
   app.get('/api/shared-resources/all-reservations', requireScopedRole('Staff'), async (req, res) => {
@@ -250,6 +251,40 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
         return res.status(400).json({ error: result.error });
       }
 
+      const nextStatus = String(result && result.reservation && result.reservation.status || '').trim().toLowerCase();
+      const nextStatusIsPaid = nextStatus === 'confirmed' || nextStatus === 'paid';
+      if (nextStatusIsPaid) {
+        await writeUserEventLog({
+          actorUserId: Number(req.session && req.session.userId || 0),
+          clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+          eventType: 'facility_payment_received',
+          description: 'Facility Payment Received - ' + String(result && result.reservation && result.reservation.reservation_identifier || ''),
+          detail: {
+            dtg: new Date().toISOString(),
+            reservationId: Number(result && result.reservation && result.reservation.id || 0),
+            reservationIdentifier: String(result && result.reservation && result.reservation.reservation_identifier || ''),
+            resourceId,
+            resourceName: String(resource && resource.short_description || ''),
+            nextStatus: String(result && result.reservation && result.reservation.status || '')
+          }
+        });
+
+        await writeUserEventLog({
+          actorUserId: Number(req.session && req.session.userId || 0),
+          clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+          eventType: 'provisional_reservation_paid',
+          description: 'Provisional Reservation Confirmed Paid - ' + String(result && result.reservation && result.reservation.reservation_identifier || ''),
+          detail: {
+            dtg: new Date().toISOString(),
+            reservationId: Number(result && result.reservation && result.reservation.id || 0),
+            reservationIdentifier: String(result && result.reservation && result.reservation.reservation_identifier || ''),
+            resourceId,
+            resourceName: String(resource && resource.short_description || ''),
+            nextStatus: String(result && result.reservation && result.reservation.status || '')
+          }
+        });
+      }
+
       return res.json({ reservation: result.reservation });
     } catch (err) {
       console.error(err);
@@ -271,6 +306,15 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
       }
       if (!isSharedResourceAllowedByScope(req, resource)) {
         return res.status(404).json({ error: 'Shared resource not found.' });
+      }
+
+      const existingReservation = await getSharedResourceReservationByIdForUser(
+        reservationId,
+        resourceId,
+        req.accessContext.effectiveOwnerUserId
+      );
+      if (!existingReservation) {
+        return res.status(404).json({ error: 'Reservation not found.' });
       }
 
       const reservation = await getSharedResourceReservationByIdForUser(reservationId, resourceId, req.accessContext.effectiveOwnerUserId);
@@ -406,6 +450,27 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
       }
       if (result.error) {
         return res.status(400).json({ error: result.error });
+      }
+
+      const statusBeforeDelete = String(existingReservation.status || '').trim();
+      const isProvisional = statusBeforeDelete.toLowerCase().startsWith('awaiting_');
+      if (isProvisional) {
+        await writeUserEventLog({
+          actorUserId: Number(req.session && req.session.userId || 0),
+          clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+          eventType: 'provisional_reservation_deleted',
+          description: 'Provisional Reservation Deleted - ' + String(existingReservation.reservation_identifier || ''),
+          detail: {
+            dtg: new Date().toISOString(),
+            reservationId: Number(existingReservation.id || 0),
+            reservationIdentifier: String(existingReservation.reservation_identifier || ''),
+            resourceId,
+            resourceName: String(resource && resource.short_description || ''),
+            statusBeforeDelete,
+            requestedStartAt: String(existingReservation.requested_start_at || ''),
+            requestedEndAt: String(existingReservation.requested_end_at || '')
+          }
+        });
       }
 
       return res.json({ deleted: true, id: reservationId });

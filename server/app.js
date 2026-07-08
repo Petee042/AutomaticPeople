@@ -2635,6 +2635,22 @@ async function finalizeReservationActivityPaymentIntent(paymentIntent, options) 
       emailResult = await sendReservationActivityConfirmationEmail(reservationRows, intent);
     }
 
+    await writeUserEventLog({
+      actorUserId: Number(firstReservation && firstReservation.user_id || 0),
+      clientAccountId: Number(firstReservation && firstReservation.client_account_id || 0),
+      eventType: 'reservation_payment_received',
+      description: 'Reservation Payment Received - ' + reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', '),
+      detail: {
+        dtg: new Date().toISOString(),
+        paymentIntentId,
+        paymentStatus,
+        amountMinor: Number(commonUpdate.paymentAmountMinor || 0),
+        currency: String(commonUpdate.paymentCurrency || ''),
+        reservationIds: reservationRows.map((row) => Number(row.id || 0)).filter((value) => Number.isInteger(value) && value > 0),
+        reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean)
+      }
+    });
+
     return {
       found: true,
       paymentStatus,
@@ -2652,6 +2668,22 @@ async function finalizeReservationActivityPaymentIntent(paymentIntent, options) 
       ...commonUpdate,
       status: 'awaiting_online_payment'
     })));
+
+    const firstReservation = reservationRows[0] || null;
+    await writeUserEventLog({
+      actorUserId: Number(firstReservation && firstReservation.user_id || 0),
+      clientAccountId: Number(firstReservation && firstReservation.client_account_id || 0),
+      eventType: 'reservation_payment_failed',
+      description: 'Reservation Payment Failed - ' + reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', '),
+      detail: {
+        dtg: new Date().toISOString(),
+        paymentIntentId,
+        paymentStatus,
+        error: String(commonUpdate.paymentLastError || ''),
+        reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean)
+      }
+    });
+
     return { found: true, paymentStatus, confirmed: false };
   }
 
@@ -2660,6 +2692,22 @@ async function finalizeReservationActivityPaymentIntent(paymentIntent, options) 
       ...commonUpdate,
       status: 'cancelled'
     })));
+
+    const firstReservation = reservationRows[0] || null;
+    await writeUserEventLog({
+      actorUserId: Number(firstReservation && firstReservation.user_id || 0),
+      clientAccountId: Number(firstReservation && firstReservation.client_account_id || 0),
+      eventType: 'reservation_payment_failed',
+      description: 'Reservation Payment Failed - ' + reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', '),
+      detail: {
+        dtg: new Date().toISOString(),
+        paymentIntentId,
+        paymentStatus,
+        error: String(commonUpdate.paymentLastError || ''),
+        reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean)
+      }
+    });
+
     return { found: true, paymentStatus, confirmed: false };
   }
 
@@ -3462,7 +3510,38 @@ async function markUserValidated(userId) {
     [id]
   );
 
-  return getUserById(id);
+  const user = await getUserById(id);
+  const membershipsResult = await pool.query(
+    `
+      SELECT client_account_id, role, status
+      FROM client_memberships
+      WHERE user_id = $1
+        AND status = 'active'
+    `,
+    [id]
+  );
+
+  for (const membership of (membershipsResult.rows || [])) {
+    const clientAccountId = Number(membership && membership.client_account_id || 0);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0) {
+      continue;
+    }
+    await writeUserEventLog({
+      actorUserId: id,
+      clientAccountId,
+      eventType: 'client_user_validated',
+      description: 'Client Scoped User Validated - ' + String(user && user.email || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        userId: id,
+        userEmail: String(user && user.email || ''),
+        role: String(membership && membership.role || ''),
+        status: String(membership && membership.status || '')
+      }
+    });
+  }
+
+  return user;
 }
 
 async function sendAppEmail(input) {
@@ -4226,7 +4305,25 @@ async function createUnvalidatedSiteUserForInvite(input) {
     [username, email, passwordHash, firstName, familyName, country]
   );
 
-  return { user: result.rows[0] };
+  const createdUser = result.rows[0] || null;
+  if (createdUser && Number.isInteger(Number(createdUser.id)) && Number(createdUser.id) > 0) {
+    await writeUserEventLog({
+      actorUserId: Number(input && input.invitedByUserId || 0),
+      clientAccountId: Number(input && input.clientAccountId || 0),
+      eventType: 'spawned_user_created',
+      description: 'Spawned User Created - ' + String(createdUser.email || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        createdUserId: Number(createdUser.id),
+        createdUserEmail: String(createdUser.email || ''),
+        createdUserFirstName: String(createdUser.first_name || ''),
+        createdUserFamilyName: String(createdUser.family_name || ''),
+        source: 'team_invite'
+      }
+    });
+  }
+
+  return { user: createdUser };
 }
 
 async function setClientTeamRolesForUser(clientAccountId, invitedByUserId, targetUserId, rolesInput) {
@@ -4706,6 +4803,7 @@ async function ensureGuestSiteUserForClientAccount(input) {
   }
 
   let user = await findUserByEmail(email);
+  let spawnedNewUser = false;
   if (!user) {
     const username = await generateUniqueUsernameFromEmail(email);
     const temporaryPasswordHash = await bcrypt.hash(randomUUID() + 'Aa1!', SALT_ROUNDS);
@@ -4718,6 +4816,7 @@ async function ensureGuestSiteUserForClientAccount(input) {
       [username, email, temporaryPasswordHash, firstName, familyName]
     );
     user = created.rows[0] || null;
+    spawnedNewUser = true;
   }
 
   if (!user || !Number.isInteger(Number(user.id)) || Number(user.id) <= 0) {
@@ -4788,6 +4887,24 @@ async function ensureGuestSiteUserForClientAccount(input) {
       sourceId
     ]
   );
+
+  if (spawnedNewUser) {
+    await writeUserEventLog({
+      actorUserId: ownerUserId,
+      clientAccountId,
+      eventType: 'spawned_user_created',
+      description: 'Spawned User Created - ' + String(email || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        createdUserId: Number(user.id || 0),
+        createdUserEmail: String(email || ''),
+        createdUserFirstName: String(firstName || ''),
+        createdUserFamilyName: String(familyName || ''),
+        sourceType,
+        sourceId: String(sourceId || '')
+      }
+    });
+  }
 
   return user;
 }
@@ -12231,6 +12348,22 @@ app.post('/api/stripe/webhook', async (req, res) => {
               status: 'Confirmed'
             });
 
+            await writeUserEventLog({
+              actorUserId: Number(reservation.user_id || 0),
+              clientAccountId: Number(reservation.client_account_id || 0),
+              eventType: 'facility_payment_received',
+              description: 'Facility Payment Received - ' + String(reservation.reservation_identifier || ''),
+              detail: {
+                dtg: new Date().toISOString(),
+                paymentIntentId,
+                paymentStatus: String(paymentIntent && paymentIntent.status || ''),
+                amountMinor: Number(commonUpdate.paymentAmountMinor || 0),
+                currency: String(commonUpdate.paymentCurrency || ''),
+                reservationId: Number(reservation.id || 0),
+                reservationIdentifier: String(reservation.reservation_identifier || '')
+              }
+            });
+
             await ensureGuestSiteUserForClientAccount({
               clientAccountId: reservation.client_account_id,
               ownerUserId: reservation.user_id,
@@ -12269,10 +12402,40 @@ app.post('/api/stripe/webhook', async (req, res) => {
               ...commonUpdate,
               status: 'Awaiting Online Confirmation'
             });
+
+            await writeUserEventLog({
+              actorUserId: Number(reservation.user_id || 0),
+              clientAccountId: Number(reservation.client_account_id || 0),
+              eventType: 'facility_payment_failed',
+              description: 'Facility Payment Failed - ' + String(reservation.reservation_identifier || ''),
+              detail: {
+                dtg: new Date().toISOString(),
+                paymentIntentId,
+                paymentStatus: String(paymentIntent && paymentIntent.status || ''),
+                error: String(commonUpdate.paymentLastError || ''),
+                reservationId: Number(reservation.id || 0),
+                reservationIdentifier: String(reservation.reservation_identifier || '')
+              }
+            });
           } else if (event.type === 'payment_intent.canceled') {
             await updateSharedResourceReservationPaymentById(reservation.id, {
               ...commonUpdate,
               status: 'Declined'
+            });
+
+            await writeUserEventLog({
+              actorUserId: Number(reservation.user_id || 0),
+              clientAccountId: Number(reservation.client_account_id || 0),
+              eventType: 'facility_payment_failed',
+              description: 'Facility Payment Failed - ' + String(reservation.reservation_identifier || ''),
+              detail: {
+                dtg: new Date().toISOString(),
+                paymentIntentId,
+                paymentStatus: String(paymentIntent && paymentIntent.status || ''),
+                error: String(commonUpdate.paymentLastError || ''),
+                reservationId: Number(reservation.id || 0),
+                reservationIdentifier: String(reservation.reservation_identifier || '')
+              }
             });
           } else {
             await updateSharedResourceReservationPaymentById(reservation.id, commonUpdate);
@@ -12607,7 +12770,8 @@ registerWorkflow3FacilityBookingRoutes(app, {
   updateSharedResourceReservationForUser,
   deleteSharedResourceReservationForUser,
   deleteSharedResourceForUser,
-  getReservationGuestOptionsForClientAccount
+  getReservationGuestOptionsForClientAccount,
+  writeUserEventLog
 });
 
 
@@ -15137,7 +15301,8 @@ registerWorkflow2PrivateReservationRoutes(app, {
   getPreferredAppBaseUrl,
   formatDateTimeForMessage,
   createReservationActivityForListing,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  writeUserEventLog
 });
 
 // GET /api/calendar-entries?url=... — load and parse ICS events

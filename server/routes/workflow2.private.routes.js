@@ -28,7 +28,8 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
     getPreferredAppBaseUrl,
     formatDateTimeForMessage,
     createReservationActivityForListing,
-    sendPasswordResetEmail
+    sendPasswordResetEmail,
+    writeUserEventLog
   } = deps;
 
   app.get('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
@@ -117,12 +118,32 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
       }]);
 
       const guestEmail = normaliseOptionalEmail(existing.email_address);
+      const isProvisional = String(existing.status || '').trim().toLowerCase().startsWith('awaiting_');
+
+      if (isProvisional) {
+        await writeUserEventLog({
+          actorUserId: Number(req.session && req.session.userId || 0),
+          clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+          eventType: 'provisional_reservation_deleted',
+          description: 'Provisional Reservation Deleted - ' + String(existing.reservation_identifier || ''),
+          detail: {
+            dtg: new Date().toISOString(),
+            reservationId: Number(existing.id || 0),
+            reservationIdentifier: String(existing.reservation_identifier || ''),
+            listingId: Number(existing.listing_id || 0),
+            listingName: String(listing && listing.name || ''),
+            statusBeforeDelete: String(existing.status || ''),
+            arrivalDate: String(existing.reservation_checkin_date || ''),
+            departureDate: String(existing.reservation_checkout_date || '')
+          }
+        });
+      }
+
       if (guestEmail) {
         const guestName = [
           String(existing.first_name || '').trim(),
           String(existing.family_name || '').trim()
         ].filter(Boolean).join(' ').trim() || 'Guest';
-        const isProvisional = String(existing.status || '').trim().toLowerCase().startsWith('awaiting_');
         const subject = isProvisional ? 'Provisional Reservation Cancelled' : 'Reservation Cancelled';
         const reservationIdentifier = String(existing.reservation_identifier || '').trim();
         const messageLines = [
@@ -244,6 +265,42 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
       );
 
       const updated = updateResult.rows[0] || null;
+
+      await writeUserEventLog({
+        actorUserId: Number(req.session && req.session.userId || 0),
+        clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+        eventType: 'reservation_payment_received',
+        description: 'Reservation Payment Received - ' + String(updated && updated.reservation_identifier || ''),
+        detail: {
+          dtg: new Date().toISOString(),
+          reservationId: Number(updated && updated.id || 0),
+          reservationIdentifier: String(updated && updated.reservation_identifier || ''),
+          listingId: Number(updated && updated.listing_id || 0),
+          listingName: String(listing && listing.name || ''),
+          paymentMethod: String(updated && updated.payment_method || ''),
+          amount: Number(updated && updated.reservation_amount || 0),
+          previousStatus: String(existing && existing.status || ''),
+          currentStatus: String(updated && updated.status || '')
+        }
+      });
+
+      await writeUserEventLog({
+        actorUserId: Number(req.session && req.session.userId || 0),
+        clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+        eventType: 'provisional_reservation_paid',
+        description: 'Provisional Reservation Confirmed Paid - ' + String(updated && updated.reservation_identifier || ''),
+        detail: {
+          dtg: new Date().toISOString(),
+          reservationId: Number(updated && updated.id || 0),
+          reservationIdentifier: String(updated && updated.reservation_identifier || ''),
+          listingId: Number(updated && updated.listing_id || 0),
+          listingName: String(listing && listing.name || ''),
+          paymentMethod: String(updated && updated.payment_method || ''),
+          amount: Number(updated && updated.reservation_amount || 0),
+          statusBeforeConfirm: String(existing && existing.status || ''),
+          statusAfterConfirm: String(updated && updated.status || '')
+        }
+      });
 
       const guestEmail = normaliseOptionalEmail(updated && updated.email_address);
       if (guestEmail) {
