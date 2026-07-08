@@ -11895,6 +11895,62 @@ app.post('/api/guest/dashboard/reservations/:reservationId/pay-now', requireAuth
   }
 });
 
+// POST /api/guest/dashboard/reservations/:reservationId/sync-payment — reconcile a guest online payment after returning from Stripe
+app.post('/api/guest/dashboard/reservations/:reservationId/sync-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+    if (String(reservation.payment_method || '').trim() !== 'Online Payment') {
+      return res.status(400).json({ error: 'This reservation is not configured for online payment.' });
+    }
+
+    const paymentIntentId = String(reservation.payment_intent_id || '').trim();
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: 'No payment intent is linked to this reservation yet.' });
+    }
+
+    const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+    const finalized = await finalizeReservationActivityPaymentIntent(paymentIntent, { source: 'guest_return' });
+
+    const refreshedReservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    return res.json({
+      reconciled: Boolean(finalized && finalized.found),
+      paymentIntentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
+      reservation: refreshedReservation || reservation,
+      finalized: finalized || null
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to reconcile reservation payment.' });
+  }
+});
+
 // POST /api/guest/dashboard/reservations/:reservationId/notify-payment — guest notifies host a bank transfer was made
 app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requireAuth, async (req, res) => {
   const reservationId = Number(req.params.reservationId || 0);
