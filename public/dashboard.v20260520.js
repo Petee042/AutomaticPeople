@@ -4911,20 +4911,24 @@ function getGuestAccommodationReservationAction(reservation) {
 function consumeGuestReservationReturnMessageFromUrl() {
   let paymentState = '';
   let reservationId = '';
+  let sessionId = '';
   try {
     const params = new URLSearchParams(window.location.search);
     paymentState = String(params.get('payment') || '').trim().toLowerCase();
     reservationId = String(params.get('reservationId') || '').trim();
+    sessionId = String(params.get('session_id') || params.get('sessionId') || '').trim();
     if (!paymentState) {
-      return;
+      return { paymentState: '', reservationId: '', sessionId: '' };
     }
 
     params.delete('payment');
     params.delete('reservationId');
+    params.delete('session_id');
+    params.delete('sessionId');
     const nextQuery = params.toString();
     window.history.replaceState({}, '', window.location.pathname + (nextQuery ? ('?' + nextQuery) : ''));
   } catch {
-    return { paymentState: '', reservationId: '' };
+    return { paymentState: '', reservationId: '', sessionId: '' };
   }
 
   if (paymentState === 'success') {
@@ -4932,22 +4936,25 @@ function consumeGuestReservationReturnMessageFromUrl() {
       'Payment completed for reservation' + (reservationId ? (' #' + reservationId) : '') + '. Status will refresh once payment is confirmed.',
       false
     );
-    return { paymentState, reservationId };
+    return { paymentState, reservationId, sessionId };
   }
 
   if (paymentState === 'cancelled') {
     setGuestReservationsMessage('Payment was cancelled. You can try again using Pay Now.', true);
   }
 
-  return { paymentState, reservationId };
+  return { paymentState, reservationId, sessionId };
 }
 
-async function reconcileGuestReservationPaymentIfNeeded(paymentState, reservationId) {
+async function reconcileGuestReservationPaymentIfNeeded(paymentState, reservationId, sessionId) {
   if (paymentState !== 'success' || !reservationId) {
     return null;
   }
 
-  const response = await fetch('/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/sync-payment', {
+  const syncUrl = '/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/sync-payment'
+    + (sessionId ? ('?sessionId=' + encodeURIComponent(String(sessionId))) : '');
+
+  const response = await fetch(syncUrl, {
     method: 'POST'
   });
 
@@ -5043,9 +5050,9 @@ async function loadGuestReservations() {
     return;
   }
 
-  let returnMessage = { paymentState: '', reservationId: '' };
+  let returnMessage = { paymentState: '', reservationId: '', sessionId: '' };
   if (!hasAppliedGuestReservationReturnMessage) {
-    returnMessage = consumeGuestReservationReturnMessageFromUrl() || { paymentState: '', reservationId: '' };
+    returnMessage = consumeGuestReservationReturnMessageFromUrl() || { paymentState: '', reservationId: '', sessionId: '' };
     hasAppliedGuestReservationReturnMessage = true;
   }
 
@@ -5058,7 +5065,7 @@ async function loadGuestReservations() {
   try {
     if (returnMessage.paymentState === 'success' && returnMessage.reservationId) {
       setGuestReservationsMessage('Reconciling payment status...', false);
-      const syncResult = await reconcileGuestReservationPaymentIfNeeded(returnMessage.paymentState, returnMessage.reservationId);
+      const syncResult = await reconcileGuestReservationPaymentIfNeeded(returnMessage.paymentState, returnMessage.reservationId, returnMessage.sessionId);
       const reservationStatus = String(syncResult && syncResult.reservation && syncResult.reservation.status || '').trim().toLowerCase();
       if (reservationStatus === 'confirmed') {
         setGuestReservationsMessage(

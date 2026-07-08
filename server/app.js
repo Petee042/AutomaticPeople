@@ -11823,8 +11823,8 @@ app.post('/api/guest/dashboard/reservations/:reservationId/pay-now', requireAuth
       return res.status(400).json({ error: 'Unable to determine application URL for payment redirect.' });
     }
 
-    const successUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=success&reservationId=' + encodeURIComponent(String(reservation.id));
-    const cancelUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=cancelled&reservationId=' + encodeURIComponent(String(reservation.id));
+    const successUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=success&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const cancelUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=cancelled&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
     const listingName = String(reservation.listing_name || '').trim();
     const propertyName = String(reservation.property_name || '').trim();
 
@@ -11887,7 +11887,8 @@ app.post('/api/guest/dashboard/reservations/:reservationId/pay-now', requireAuth
     return res.json({
       checkoutUrl: String(checkoutSession.url),
       reservationId: Number(reservation.id),
-      reservationIdentifier: String(reservation.reservation_identifier || '')
+      reservationIdentifier: String(reservation.reservation_identifier || ''),
+      checkoutSessionId: String(checkoutSession.id || '')
     });
   } catch (err) {
     console.error(err);
@@ -11925,9 +11926,25 @@ app.post('/api/guest/dashboard/reservations/:reservationId/sync-payment', requir
       return res.status(400).json({ error: 'This reservation is not configured for online payment.' });
     }
 
-    const paymentIntentId = String(reservation.payment_intent_id || '').trim();
+    const providedSessionId = String(req.body && req.body.sessionId || req.query && req.query.sessionId || req.query && req.query.session_id || '').trim();
+    let paymentIntentId = String(reservation.payment_intent_id || '').trim();
+    if (!paymentIntentId && providedSessionId) {
+      const checkoutSession = await stripeClient.checkout.sessions.retrieve(providedSessionId);
+      if (checkoutSession && String(checkoutSession.payment_intent || '').trim()) {
+        paymentIntentId = String(checkoutSession.payment_intent).trim();
+        await updateReservationActivityPaymentById(reservation.id, {
+          paymentProvider: 'stripe',
+          paymentIntentId,
+          paymentStatus: String(checkoutSession.payment_status || '').toLowerCase() || 'requires_payment_method',
+          paymentCurrency: 'gbp',
+          paymentAmountMinor: toMinorUnits(reservation.reservation_amount),
+          paymentLastError: '',
+          status: 'awaiting_online_payment'
+        });
+      }
+    }
     if (!paymentIntentId) {
-      return res.status(400).json({ error: 'No payment intent is linked to this reservation yet.' });
+      return res.status(400).json({ error: 'No payment intent is linked to this reservation yet. Please wait a moment and try again.' });
     }
 
     const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
