@@ -5786,6 +5786,21 @@ async function loadAllReservations() {
   const menuEl = document.getElementById('tabContextMenu');
   if (!menuBtn || !menuEl) return;
 
+  function hasVisibleTopLevelTabs() {
+    return Array.from(document.querySelectorAll('.dashboard-tab-btn'))
+      .some((btn) => !btn.classList.contains('hidden'));
+  }
+
+  function refreshMenuButtonVisibility() {
+    const shouldShow = hasVisibleTopLevelTabs();
+    menuBtn.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) {
+      menuEl.classList.add('hidden');
+      menuBtn.setAttribute('aria-expanded', 'false');
+      menuBtn.classList.remove('open');
+    }
+  }
+
   function getActivePanel() {
     const active = document.querySelector('.dashboard-tab-btn.active');
     return active ? active.dataset.panel : getDefaultPanelForContext(currentDashboardContextMode);
@@ -5805,6 +5820,10 @@ async function loadAllReservations() {
   }
 
   function openMenu() {
+    refreshMenuButtonVisibility();
+    if (menuBtn.classList.contains('hidden')) {
+      return;
+    }
     buildMenu(getActivePanel());
     menuEl.classList.remove('hidden');
     menuBtn.setAttribute('aria-expanded', 'true');
@@ -5836,11 +5855,25 @@ async function loadAllReservations() {
   // Rebuild submenu if user changes tab while menu is open
   document.querySelectorAll('.dashboard-tab-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
+      refreshMenuButtonVisibility();
       if (!menuEl.classList.contains('hidden')) {
         buildMenu(btn.dataset.panel);
       }
     });
   });
+
+  // Keep menu icon visibility in sync when tab buttons are shown/hidden during context switches.
+  const tabButtons = Array.from(document.querySelectorAll('.dashboard-tab-btn'));
+  if (tabButtons.length && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(() => {
+      refreshMenuButtonVisibility();
+    });
+    tabButtons.forEach((btn) => {
+      observer.observe(btn, { attributes: true, attributeFilter: ['class'] });
+    });
+  }
+
+  refreshMenuButtonVisibility();
 })();
 
 // ── Calendar Event Log ────────────────────────────────────────
