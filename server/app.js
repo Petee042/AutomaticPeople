@@ -10,6 +10,7 @@ const Stripe = require('stripe');
 const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
+const { AsyncLocalStorage } = require('async_hooks');
 const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
 const { Pool } = require('pg');
 const { registerWorkflow2PrivateReservationRoutes } = require('./routes/workflow2.private.routes');
@@ -54,6 +55,7 @@ const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
 const LANDING_PAGE_WORKFLOW_4 = 'workflow4_reservation_enquiry_public';
 const LANDING_PAGE_WORKFLOW_5 = 'workflow5_facility_enquiry_public';
 const stripeClient = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+const requestContextStore = new AsyncLocalStorage();
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is required. Legacy local JSON storage mode has been removed.');
@@ -653,6 +655,29 @@ async function initializeUserStore() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_listing_event_log_listing
     ON listing_event_log (listing_id, created_at DESC)
+  `);
+
+  // ── User event log: user-scoped audit events such as outbound emails
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_event_log (
+      id BIGSERIAL PRIMARY KEY,
+      actor_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      description TEXT NOT NULL,
+      detail_json TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_event_log_actor_created
+    ON user_event_log (actor_user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_event_log_client_created
+    ON user_event_log (client_account_id, created_at DESC)
   `);
 
   // ── ICS transaction log: records every ICS fetch attempt for admin diagnostics
@@ -3475,6 +3500,14 @@ async function sendAppEmail(input) {
           postmarkResponse: result
         };
       }
+      await logEmailSentForCurrentRequest({
+        to,
+        fromAddress: POSTMARK_FROM,
+        subject,
+        textBody,
+        provider: 'postmark',
+        messageId: result && result.MessageID ? String(result.MessageID) : ''
+      });
       return {
         ok: true,
         messageId: result && result.MessageID ? String(result.MessageID) : null,
@@ -3512,6 +3545,14 @@ async function sendAppEmail(input) {
       to,
       subject,
       text: textBody
+    });
+    await logEmailSentForCurrentRequest({
+      to,
+      fromAddress: String(transportResult.from || ''),
+      subject,
+      textBody,
+      provider: 'smtp',
+      messageId: ''
     });
     return { ok: true };
   } catch {
@@ -9038,6 +9079,91 @@ async function writeEventLog(entry) {
   }
 }
 
+function getRequestContext() {
+  const store = requestContextStore.getStore();
+  if (!store || typeof store !== 'object') {
+    return { sessionUserId: null, activeClientAccountId: null };
+  }
+  const sessionUserId = Number(store.sessionUserId || 0);
+  const activeClientAccountId = Number(store.activeClientAccountId || 0);
+  return {
+    sessionUserId: Number.isInteger(sessionUserId) && sessionUserId > 0 ? sessionUserId : null,
+    activeClientAccountId: Number.isInteger(activeClientAccountId) && activeClientAccountId > 0 ? activeClientAccountId : null
+  };
+}
+
+async function writeUserEventLog(entry) {
+  const actorUserId = Number(entry && entry.actorUserId || 0);
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return;
+  }
+
+  const clientAccountIdRaw = Number(entry && entry.clientAccountId || 0);
+  const clientAccountId = Number.isInteger(clientAccountIdRaw) && clientAccountIdRaw > 0
+    ? clientAccountIdRaw
+    : null;
+  const eventType = String(entry && entry.eventType || '').trim();
+  const description = String(entry && entry.description || '').trim();
+  if (!eventType || !description) {
+    return;
+  }
+
+  let detailJson = '{}';
+  try {
+    detailJson = JSON.stringify(entry && entry.detail ? entry.detail : {});
+  } catch {
+    detailJson = '{}';
+  }
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO user_event_log (
+          actor_user_id,
+          client_account_id,
+          event_type,
+          description,
+          detail_json
+        )
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [actorUserId, clientAccountId, eventType, description, detailJson]
+    );
+  } catch (logErr) {
+    console.error('[UserEventLog] Failed to write user event log:', logErr && logErr.message ? logErr.message : logErr);
+  }
+}
+
+async function logEmailSentForCurrentRequest(detail) {
+  const context = getRequestContext();
+  if (!context.sessionUserId) {
+    return;
+  }
+
+  const toAddress = normaliseOptionalEmail(detail && detail.to);
+  const subject = String(detail && detail.subject || '').trim();
+  const fromAddress = normaliseOptionalEmail(detail && detail.fromAddress) || String(detail && detail.fromAddress || '').trim();
+  const textBody = String(detail && detail.textBody || '');
+  const provider = String(detail && detail.provider || '').trim();
+  const messageId = String(detail && detail.messageId || '').trim();
+
+  await writeUserEventLog({
+    actorUserId: context.sessionUserId,
+    clientAccountId: context.activeClientAccountId,
+    eventType: 'email_sent',
+    description: 'Email sent to ' + String(toAddress || 'recipient'),
+    detail: {
+      dtg: new Date().toISOString(),
+      fromAddress: fromAddress || '',
+      toAddress: toAddress || '',
+      subject,
+      messageContent: textBody,
+      provider,
+      messageId
+    }
+  });
+}
+
 async function getManagerEmailsForClientAccount(clientAccountId) {
   const accountId = Number(clientAccountId);
   if (!Number.isInteger(accountId) || accountId <= 0) {
@@ -9649,6 +9775,15 @@ app.use(session({
     maxAge: 1000 * 60 * 60 // 1 hour
   }
 }));
+
+app.use((req, _res, next) => {
+  requestContextStore.run({
+    sessionUserId: req.session && req.session.userId ? Number(req.session.userId) : null,
+    activeClientAccountId: req.session && req.session.activeClientAccountId ? Number(req.session.activeClientAccountId) : null
+  }, () => {
+    next();
+  });
+});
 
 // Serve admin page at root for admin subdomain hostnames.
 app.use((req, res, next) => {
@@ -12164,6 +12299,25 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
       text: textContent,
       attachments
     });
+
+    await writeUserEventLog({
+      actorUserId: Number(req.session && req.session.userId || 0),
+      clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+      eventType: 'email_sent',
+      description: 'Email sent to ' + String(to || 'recipient'),
+      detail: {
+        dtg: new Date().toISOString(),
+        fromAddress: String(transportResult.from || ''),
+        toAddress: String(to || ''),
+        subject,
+        messageContent: textContent,
+        provider: 'smtp',
+        messageId: '',
+        hasAttachments: attachments.length > 0,
+        attachmentCount: attachments.length
+      }
+    });
+
     return res.json({ message: 'Schedule email sent.' });
   } catch (err) {
     console.error('Failed to send schedule email:', err);
@@ -14397,6 +14551,108 @@ app.get('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load event log.' });
+  }
+});
+
+// GET /api/user-event-log — user-scoped event log for hosting actions
+app.get('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
+  try {
+    const actorUserId = Number(req.session && req.session.userId || 0);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const activeClientAccountId = Number(req.accessContext && req.accessContext.activeClientAccountId || 0);
+    const result = await pool.query(
+      `
+        SELECT id,
+               event_type,
+               description,
+               created_at
+        FROM user_event_log
+        WHERE actor_user_id = $1
+          AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+        ORDER BY created_at DESC
+        LIMIT 500
+      `,
+      [
+        actorUserId,
+        Number.isInteger(activeClientAccountId) && activeClientAccountId > 0 ? activeClientAccountId : null
+      ]
+    );
+
+    return res.json({
+      entries: result.rows.map((row) => ({
+        id: Number(row.id || 0),
+        eventType: String(row.event_type || '').trim(),
+        description: String(row.description || '').trim(),
+        dtg: row.created_at ? String(row.created_at) : ''
+      }))
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load user event log.' });
+  }
+});
+
+// GET /api/user-event-log/:entryId/details — user-scoped event log details
+app.get('/api/user-event-log/:entryId/details', requireScopedRole('Staff'), async (req, res) => {
+  const entryId = Number(req.params.entryId || 0);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).json({ error: 'Invalid event log entry id.' });
+  }
+
+  try {
+    const actorUserId = Number(req.session && req.session.userId || 0);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const result = await pool.query(
+      `
+        SELECT id,
+               actor_user_id,
+               client_account_id,
+               event_type,
+               description,
+               detail_json,
+               created_at
+        FROM user_event_log
+        WHERE id = $1
+          AND actor_user_id = $2
+        LIMIT 1
+      `,
+      [entryId, actorUserId]
+    );
+
+    const row = result.rows[0] || null;
+    if (!row) {
+      return res.status(404).json({ error: 'Event log entry not found.' });
+    }
+
+    let detail = {};
+    try {
+      detail = row.detail_json ? JSON.parse(String(row.detail_json)) : {};
+    } catch {
+      detail = {};
+    }
+
+    return res.json({
+      entry: {
+        id: Number(row.id || 0),
+        actorUserId: Number(row.actor_user_id || 0),
+        clientAccountId: row.client_account_id !== null && row.client_account_id !== undefined
+          ? Number(row.client_account_id)
+          : null,
+        eventType: String(row.event_type || '').trim(),
+        description: String(row.description || '').trim(),
+        dtg: row.created_at ? String(row.created_at) : '',
+        detail
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load user event log details.' });
   }
 });
 

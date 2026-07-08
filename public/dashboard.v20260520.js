@@ -5696,18 +5696,11 @@ async function loadAllReservations() {
 // -- Tab context menu ------------------------------------------
 
 (function initTabContextMenu() {
-  const HOST_SUBMENUS = {
-    'panel-dashboard': [
-      { label: 'View Private Reservations', href: '/dashboard-private-reservations.html' },
-      { label: 'View Facility Reservations', href: '/dashboard-facility-reservations.html' }
-    ],
-    'panel-config': [],
-    'panel-ops': [
-      { label: 'New Private Reservation', href: '/private-reservation.html' },
-      { label: 'New Facility Booking', href: '/resource-booking.html' }
-    ],
-    'panel-account': []
-  };
+  const HOST_SUBMENU_ITEMS = [
+    { label: 'Private Reservations', href: '/dashboard-private-reservations.html' },
+    { label: 'Facility Reservations', href: '/dashboard-facility-reservations.html' },
+    { label: 'View Logging', href: '/dashboard-view-logging.html' }
+  ];
 
   const GUEST_SUBMENUS = {
     'panel-guest-reservations': [],
@@ -5724,8 +5717,9 @@ async function loadAllReservations() {
   }
 
   function buildMenu(panelId) {
-    const activeMap = currentDashboardContextMode === 'guest' ? GUEST_SUBMENUS : HOST_SUBMENUS;
-    const items = activeMap[panelId] || [];
+    const items = currentDashboardContextMode === 'guest'
+      ? (GUEST_SUBMENUS[panelId] || [])
+      : HOST_SUBMENU_ITEMS;
     if (!items.length) {
       menuEl.innerHTML = '<span class="tab-context-menu-empty">No actions for this section.</span>';
     } else {

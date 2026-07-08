@@ -1,6 +1,6 @@
 'use strict';
 
-function setMessage(text, isError) {
+function setPrivateReservationsPageMessage(text, isError) {
   const el = document.getElementById('dashboardPageMessage');
   if (!el) {
     return;
@@ -230,6 +230,6 @@ async function loadPrivateReservations() {
   }
 
   loadPrivateReservations().catch(() => {
-    setMessage('Failed to load private reservations page.', true);
+    setPrivateReservationsPageMessage('Failed to load private reservations page.', true);
   });
 })();

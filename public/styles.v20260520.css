@@ -2025,6 +2025,28 @@ textarea:focus {
   color: #31415f;
 }
 
+.event-log-description-box {
+  width: 100%;
+  min-height: 3rem;
+  resize: vertical;
+  border: 1px solid #dbe1ef;
+  border-radius: 6px;
+  padding: 0.45rem;
+  font-size: 0.86rem;
+  color: #1f2937;
+  background: #f8fbff;
+}
+
+.event-log-info-btn {
+  width: 2rem !important;
+  height: 2rem !important;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
 .feed-actions {
   display: flex;
   gap: 0.45rem;
