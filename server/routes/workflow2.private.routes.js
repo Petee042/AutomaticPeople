@@ -244,6 +244,40 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
       );
 
       const updated = updateResult.rows[0] || null;
+
+      const guestEmail = normaliseOptionalEmail(updated && updated.email_address);
+      if (guestEmail) {
+        const guestName = [
+          String(updated.first_name || '').trim(),
+          String(updated.family_name || '').trim()
+        ].filter(Boolean).join(' ').trim() || 'Guest';
+        const receiptLines = [
+          'Reservation Payment Received',
+          '',
+          'Reservation ID: ' + String(updated.reservation_identifier || '').trim(),
+          'Guest: ' + guestName,
+          'Property: ' + String(listing.property_name || '').trim(),
+          'Listing: ' + String(listing.name || '').trim(),
+          'Arrival date: ' + String(updated.reservation_checkin_date || '').trim(),
+          'Departure date: ' + String(updated.reservation_checkout_date || '').trim(),
+          'Nights: ' + String(Number(updated.stay_nights || 0) || 0),
+          'Amount received: ' + Number(updated.reservation_amount || 0).toFixed(2),
+          'Payment method: ' + String(updated.payment_method || '').trim(),
+          '',
+          'Your payment has been received and your reservation is now confirmed.'
+        ];
+
+        const receiptEmail = await sendAppEmail({
+          to: guestEmail,
+          subject: 'Reservation Payment Received',
+          textBody: receiptLines.join('\n')
+        });
+
+        if (!receiptEmail.ok) {
+          console.warn('Failed to send private reservation payment receipt email to guest.', receiptEmail.error || 'unknown email error');
+        }
+      }
+
       return res.json({
         reservation: mapPrivateReservationRow({
           ...updated,

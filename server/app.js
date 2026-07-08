@@ -9151,7 +9151,7 @@ async function logEmailSentForCurrentRequest(detail) {
     actorUserId: context.sessionUserId,
     clientAccountId: context.activeClientAccountId,
     eventType: 'email_sent',
-    description: 'Email sent to ' + String(toAddress || 'recipient'),
+    description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(toAddress || 'recipient'),
     detail: {
       dtg: new Date().toISOString(),
       fromAddress: fromAddress || '',
@@ -12304,7 +12304,7 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
       actorUserId: Number(req.session && req.session.userId || 0),
       clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
       eventType: 'email_sent',
-      description: 'Email sent to ' + String(to || 'recipient'),
+      description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(to || 'recipient'),
       detail: {
         dtg: new Date().toISOString(),
         fromAddress: String(transportResult.from || ''),
