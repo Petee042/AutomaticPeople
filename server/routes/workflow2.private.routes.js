@@ -568,6 +568,48 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
           sourceType: 'private_reservation',
           sourceId: String(reservation.id)
         });
+      } else if (paymentMethod === 'Online Payment') {
+        const loginUrl = (baseUrl ? baseUrl.replace(/\/$/, '') : '') + '/index.html';
+        const guestName = [firstName, familyName].filter(Boolean).join(' ').trim();
+        const onlinePaymentEmail = await sendAppEmail({
+          to: emailAddress,
+          subject: 'Reservation Request - Online Payment Required',
+          textBody: [
+            'Reservation Request Submitted',
+            '',
+            'Reservation ID: ' + reservationIdentifier,
+            'Guest: ' + guestName,
+            'Arrival date: ' + arrivalDate,
+            'Departure date: ' + departureDate,
+            'Number of guests: ' + String(guestCount),
+            'Property: ' + String(listing.property_name || '').trim(),
+            'Listing: ' + String(listing.name || '').trim(),
+            'Amount due: ' + reservationAmountValue.toFixed(2),
+            '',
+            'Please log in to your AutomaticPeople account to complete payment: ',
+            loginUrl,
+            '',
+            'If you are new to the site, please use the separate email you receive to set up your password before you can complete payment.',
+            '',
+            termsStatement,
+            'Terms and Conditions: ' + termsUrl
+          ].join('\n')
+        });
+
+        if (!onlinePaymentEmail.ok) {
+          emailDeliveryReason = String(onlinePaymentEmail.error || '').trim();
+          emailDeliveryWarning = true;
+        }
+
+        await ensureGuestSiteUserForClientAccount({
+          clientAccountId: req.accessContext.activeClientAccountId,
+          ownerUserId: req.accessContext.effectiveOwnerUserId,
+          firstName,
+          familyName,
+          email: emailAddress,
+          sourceType: 'private_reservation',
+          sourceId: String(reservation.id)
+        });
       }
 
       return res.json({
