@@ -3347,7 +3347,7 @@ function buildPasswordResetToken(user, issuedAtMs) {
   const email = String(user && user.email || '').trim().toLowerCase();
   const passwordHash = String(user && user.password_hash || '');
   const issued = Number(issuedAtMs || Date.now());
-  if (!Number.isInteger(userId) || userId <= 0 || !email || !passwordHash || !Number.isFinite(issued) || issued <= 0) {
+  if (!Number.isInteger(userId) || userId <= 0 || !email || !Number.isFinite(issued) || issued <= 0) {
     return null;
   }
   const signature = buildPasswordResetSignature(userId, email, passwordHash, issued);
@@ -3397,7 +3397,7 @@ async function validatePasswordResetToken(token) {
   }
 
   const user = await getUserById(parsed.userId);
-  if (!user || !user.email || !user.password_hash) {
+  if (!user || !user.email) {
     return { error: 'Password reset link is invalid.' };
   }
 
@@ -11780,6 +11780,23 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
       if (!passwordEmailSent) {
         passwordEmailError = String(passwordEmailResult.error || 'Failed to send password setup email.');
       }
+
+      await writeUserEventLog({
+        actorUserId: Number(req.session.userId || 0),
+        clientAccountId: Number(req.accessContext.activeClientAccountId || 0),
+        eventType: passwordEmailSent ? 'team_member_password_setup_email_sent' : 'team_member_password_setup_email_failed',
+        description: passwordEmailSent
+          ? ('Team member password setup email sent - ' + String(normalizedEmail || ''))
+          : ('Team member password setup email failed - ' + String(normalizedEmail || '')),
+        detail: {
+          dtg: new Date().toISOString(),
+          invitedUserId: Number(siteUser && siteUser.id || 0),
+          invitedUserEmail: String(normalizedEmail || ''),
+          createdNewUser: true,
+          passwordSetupEmailSent: passwordEmailSent,
+          passwordSetupEmailError: passwordEmailError
+        }
+      });
     }
 
     const result = await setClientTeamRolesForUser(

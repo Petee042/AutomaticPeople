@@ -206,7 +206,15 @@ document.getElementById('teamMemberForm').addEventListener('submit', async (even
         return;
       }
 
-      await createTeamMember({ firstName, familyName, country, email, roles });
+      const createResult = await createTeamMember({ firstName, familyName, country, email, roles });
+      if (createResult && createResult.createdNewUser && createResult.passwordSetupEmailSent === false) {
+        setMessage(
+          (createResult.passwordSetupEmailError || 'Team member was created, but the password setup email could not be sent.')
+          + ' Please ask the user to use "Forgot your password" on the login page.',
+          true
+        );
+        return;
+      }
       goBackToConfig();
       return;
     }
