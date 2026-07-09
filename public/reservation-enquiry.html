@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reservation Enquiry - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.v20260520.css" />
+</head>
+<body class="reservation-enquiry-page">
+  <main class="dashboard">
+    <div class="card-container wide public-booking-card reservation-enquiry-card">
+      <h2 id="reservationEnquiryTitle">Reservation Enquiry</h2>
+      <p id="reservationEnquiryMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <div id="reservationEnquiryDescription" class="reservation-enquiry-description"></div>
+      </section>
+
+      <section class="listing-form-section">
+        <div class="reservation-enquiry-month-header">
+          <button type="button" id="reservationEnquiryPrevMonthBtn" class="btn secondary reservation-enquiry-month-icon-btn" aria-label="Previous month">&lt;</button>
+          <div id="reservationEnquiryMonthLabel" class="reservation-enquiry-month-label"></div>
+          <button type="button" id="reservationEnquiryNextMonthBtn" class="btn secondary reservation-enquiry-month-icon-btn" aria-label="Next month">&gt;</button>
+        </div>
+        <div id="reservationEnquiryCalendarGrid" class="reservation-enquiry-calendar-grid"></div>
+      </section>
+
+      <section class="listing-form-section">
+        <div class="reservation-enquiry-section-header">
+          <h3>Check Availability</h3>
+          <button type="submit" form="reservationEnquirySearchForm" id="reservationEnquiryCheckAvailabilityBtn" class="btn secondary reservation-enquiry-check-btn" aria-label="Check Availability">?</button>
+        </div>
+        <form id="reservationEnquirySearchForm" novalidate>
+          <div class="reservation-enquiry-request-grid">
+            <label for="reservationEnquiryArrivalDate">Requested Arrival Date</label>
+            <input id="reservationEnquiryArrivalDate" type="date" required />
+
+            <label for="reservationEnquiryDepartureDate">Requested Departure Date</label>
+            <input id="reservationEnquiryDepartureDate" type="date" required />
+
+            <label for="reservationEnquiryGuestCount">Number of Guests</label>
+            <input id="reservationEnquiryGuestCount" type="number" min="1" max="50" step="1" value="1" required />
+          </div>
+        </form>
+      </section>
+
+      <section id="reservationEnquiryResultsSection" class="listing-form-section hidden">
+        <h3>Available Options</h3>
+        <div class="table-wrap">
+          <table class="calendar-table reservation-enquiry-results-table" aria-label="Reservation enquiry options">
+            <thead>
+              <tr>
+                <th>Property</th>
+                <th>Listing</th>
+                <th>Price</th>
+                <th id="reservationEnquiryDiscountHeader" class="hidden">Discounted Price</th>
+                <th>Select</th>
+              </tr>
+            </thead>
+            <tbody id="reservationEnquiryResultsBody"></tbody>
+          </table>
+        </div>
+        <div class="reservation-enquiry-footer-actions">
+          <span id="reservationEnquirySelectionSummary" class="reservation-enquiry-selection-summary">No reservation option selected.</span>
+          <div class="reservation-enquiry-footer-buttons">
+            <button type="button" id="reservationEnquiryClearSelectionBtn" class="btn secondary action-icon action-cancel reservation-enquiry-clear-btn" aria-label="Clear settings"></button>
+            <button type="button" id="reservationEnquiryContinueBtn" class="btn primary action-icon action-save" aria-label="Continue">Continue</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="reservationEnquiryNotesSection" class="listing-form-section hidden">
+        <h3>Notes</h3>
+        <div id="reservationEnquiryNotes" class="reservation-enquiry-notes"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="reservation-enquiry.js"></script>
+</body>
+</html>

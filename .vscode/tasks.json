@@ -23,7 +23,7 @@
     {
       "label": "Publish: Beta → Production (staging → main)",
       "type": "shell",
-      "command": "git checkout main && git merge --no-ff staging -m \"Publish tested changes\" && git push origin main && git checkout develop && echo Done: staging merged into main and pushed.",
+      "command": "git checkout main && git merge --no-ff staging -m \"Beta testing completed, now deploying to live\" && git push origin main && git checkout develop && echo Done: staging merged into main and pushed.",
       "options": {
         "shell": {
           "executable": "cmd.exe",

@@ -1,6 +1,7 @@
 'use strict';
 
 let currentUserId = null;
+let currentLoadedUser = null;
 
 function setMessage(text, isError) {
   const el = document.getElementById('editSiteUserMessage');
@@ -24,6 +25,28 @@ function isStrongPassword(password) {
     && /[A-Z]/.test(value)
     && /[0-9]/.test(value)
     && /[^A-Za-z0-9]/.test(value);
+}
+
+function isDeletedPlaceholderUser(user) {
+  const email = String(user && user.email || '').trim().toLowerCase();
+  return /^deleted\+client-\d+@automaticpeople\.local$/.test(email);
+}
+
+function updateDeleteControls(user) {
+  const deleteBtn = document.getElementById('deleteSiteUserBtn');
+  const deleteNotice = document.getElementById('deleteSiteUserNotice');
+  if (!deleteBtn) {
+    return;
+  }
+
+  const isSpecialDeletedUser = isDeletedPlaceholderUser(user);
+  deleteBtn.disabled = isSpecialDeletedUser;
+  deleteBtn.hidden = isSpecialDeletedUser;
+  deleteBtn.setAttribute('aria-hidden', isSpecialDeletedUser ? 'true' : 'false');
+
+  if (deleteNotice) {
+    deleteNotice.hidden = !isSpecialDeletedUser;
+  }
 }
 
 async function checkAdminSession() {
@@ -59,7 +82,9 @@ async function loadSiteUser() {
     return;
   }
 
-  populateForm(data.user || {});
+  currentLoadedUser = data.user || {};
+  populateForm(currentLoadedUser);
+  updateDeleteControls(currentLoadedUser);
 }
 
 async function saveSiteUser() {
@@ -120,6 +145,11 @@ async function saveSiteUser() {
 }
 
 async function deleteSiteUser() {
+  if (isDeletedPlaceholderUser(currentLoadedUser)) {
+    setMessage('Deleted placeholder users cannot be deleted.', true);
+    return;
+  }
+
   const confirmed = window.confirm('Delete this site user and all associated data? This cannot be undone.');
   if (!confirmed) {
     return;

@@ -2,6 +2,7 @@
 
 const params = new URLSearchParams(window.location.search);
 const resourceId = Number(params.get('resourceId'));
+const facilityLandingSlug = String(params.get('facilityLandingPage') || '').trim();
 const paymentOption = String(params.get('paymentOption') || '');
 const startDateTimeParam = params.get('startDateTime') || '';
 const endDateTimeParam = params.get('endDateTime') || '';
@@ -12,6 +13,7 @@ const spacesRequiredParam = params.get('spacesRequired') || '';
 
 let currentResource = null;
 let reservationGuestOptions = [];
+let facilityLandingPage = null;
 
 function formatReservationDateTime(isoStr) {
   if (!isoStr) return '-';
@@ -125,7 +127,11 @@ async function recheckAvailabilityOrThrow() {
     throw new Error('Reservation start and end date/time are missing.');
   }
 
-  const res = await fetch('/api/public/shared-resources/' + resourceId + '/check-availability', {
+  const endpoint = facilityLandingSlug
+    ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug) + '/check-availability')
+    : ('/api/public/shared-resources/' + resourceId + '/check-availability');
+
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -219,21 +225,36 @@ async function loadReservationGuestOptions() {
 }
 
 async function loadPublicResource() {
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
+  if (!facilityLandingSlug && (!Number.isInteger(resourceId) || resourceId <= 0)) {
     setReservationMessage('Invalid resource id.', true);
     return;
   }
 
   try {
-    const res = await fetch('/api/public/shared-resources/' + resourceId);
+    const endpoint = facilityLandingSlug
+      ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug))
+      : ('/api/public/shared-resources/' + resourceId);
+    const res = await fetch(endpoint);
     const data = await res.json();
 
     if (!res.ok) {
       throw new Error(data.error || 'Failed to load shared resource.');
     }
 
-    currentResource = data.resource;
-    document.getElementById('reservationTitle').textContent = (currentResource.short_description || 'Reservation') + ' - Bank Transfer';
+    if (facilityLandingSlug) {
+      facilityLandingPage = data.landingPage || null;
+      currentResource = facilityLandingPage && facilityLandingPage.facility ? facilityLandingPage.facility : null;
+      if (!facilityLandingPage || !currentResource) {
+        throw new Error('Facility enquiry landing page was not found.');
+      }
+      if (String(facilityLandingPage.payment_method || '') !== 'bank_transfer') {
+        throw new Error('This landing page is not configured for bank transfer.');
+      }
+      document.getElementById('reservationTitle').textContent = (facilityLandingPage.title || currentResource.short_description || 'Reservation') + ' - Bank Transfer';
+    } else {
+      currentResource = data.resource;
+      document.getElementById('reservationTitle').textContent = (currentResource.short_description || 'Reservation') + ' - Bank Transfer';
+    }
 
     renderPaymentMethodMessage(currentResource, paymentOption);
   } catch (err) {
@@ -284,22 +305,28 @@ document.getElementById('submitReservationBtn').addEventListener('click', async 
   try {
     await recheckAvailabilityOrThrow();
 
-    const res = await fetch('/api/public/shared-resources/' + resourceId + '/reservations', {
+    const endpoint = facilityLandingSlug
+      ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug) + '/bank-transfer-submit')
+      : ('/api/public/shared-resources/' + resourceId + '/reservations');
+
+    const body = {
+      paymentOption,
+      checkinDate: checkinDateParam,
+      checkoutDate: checkoutDateParam,
+      requestedStartAt: startDateTimeParam,
+      requestedEndAt: endDateTimeParam,
+      spacesRequired: spacesRequiredParam,
+      reservationAmount: priceParam,
+      firstName: guest.payload.firstName,
+      familyName: guest.payload.familyName,
+      emailAddress: guest.payload.emailAddress,
+      telephone: guest.payload.telephone
+    };
+
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        paymentOption,
-        checkinDate: checkinDateParam,
-        checkoutDate: checkoutDateParam,
-        requestedStartAt: startDateTimeParam,
-        requestedEndAt: endDateTimeParam,
-        spacesRequired: spacesRequiredParam,
-        reservationAmount: priceParam,
-        firstName: guest.payload.firstName,
-        familyName: guest.payload.familyName,
-        emailAddress: guest.payload.emailAddress,
-        telephone: guest.payload.telephone
-      })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
     if (!res.ok) {

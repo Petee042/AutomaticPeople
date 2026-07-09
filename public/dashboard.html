@@ -10,11 +10,17 @@
   <div class="sticky-page-chrome">
     <div class="sticky-page-inner">
       <div class="tab-bar-row">
+        <button id="dashboardContextToggle" class="context-toggle-btn" type="button" aria-label="Switch dashboard context" title="Switch dashboard context">
+          <span id="dashboardContextToggleIcon" class="context-toggle-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"></circle><path d="M5.5 18.5c1.2-3.2 3.6-4.8 6.5-4.8s5.3 1.6 6.5 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path></svg>
+          </span>
+          <span id="dashboardContextLabel" class="context-toggle-label">Hosting</span>
+        </button>
         <nav class="dashboard-tab-bar" role="tablist" aria-label="Main sections">
-          <button class="dashboard-tab-btn active" data-panel="panel-dashboard" role="tab" aria-selected="true" aria-controls="panel-dashboard">Dashboard</button>
-          <button class="dashboard-tab-btn" data-panel="panel-config" role="tab" aria-selected="false" aria-controls="panel-config">Config</button>
-          <button class="dashboard-tab-btn" data-panel="panel-ops" role="tab" aria-selected="false" aria-controls="panel-ops">Ops</button>
-          <button class="dashboard-tab-btn" data-panel="panel-account" role="tab" aria-selected="false" aria-controls="panel-account">Account</button>
+          <button id="tabBtnPrimary" class="dashboard-tab-btn active" data-panel="panel-dashboard" role="tab" aria-selected="true" aria-controls="panel-dashboard">Dashboard</button>
+          <button id="tabBtnSecondary" class="dashboard-tab-btn" data-panel="panel-config" role="tab" aria-selected="false" aria-controls="panel-config">Config</button>
+          <button id="tabBtnTertiary" class="dashboard-tab-btn" data-panel="panel-ops" role="tab" aria-selected="false" aria-controls="panel-ops">Ops</button>
+          <button id="tabBtnQuaternary" class="dashboard-tab-btn" data-panel="panel-account" role="tab" aria-selected="false" aria-controls="panel-account">Host Account</button>
         </nav>
         <button id="tabMenuBtn" class="tab-menu-btn" aria-label="Section menu" aria-expanded="false" aria-haspopup="true">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
@@ -123,6 +129,22 @@
             <button id="createGuestConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Guest" aria-label="Create New Guest">+</button>
           </div>
           <div id="configGuestsList" class="config-item-list" aria-label="Guests"></div>
+        </section>
+
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Reservation Enquiry Landing Pages</h3>
+            <button id="createReservationEnquiryLandingPageConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Reservation Enquiry Landing Page" aria-label="Create New Reservation Enquiry Landing Page">+</button>
+          </div>
+          <div id="configReservationEnquiryLandingPagesList" class="config-item-list" aria-label="Reservation Enquiry Landing Pages"></div>
+        </section>
+
+        <section class="listing-form-section config-block-section">
+          <div class="config-block-header">
+            <h3>Facility Enquiry Landing Pages</h3>
+            <button id="createFacilityEnquiryLandingPageConfigBtn" type="button" class="btn secondary config-icon-btn" title="Create New Facility Enquiry Landing Page" aria-label="Create New Facility Enquiry Landing Page">+</button>
+          </div>
+          <div id="configFacilityEnquiryLandingPagesList" class="config-item-list" aria-label="Facility Enquiry Landing Pages"></div>
         </section>
 
       </div><!-- /panel-config -->
@@ -238,6 +260,14 @@
               <label for="bankAccountNumber">Account Number</label>
               <input id="bankAccountNumber" type="text" maxlength="20" />
             </div>
+            <div class="calendar-source-row">
+              <label for="bankIban">IBAN</label>
+              <input id="bankIban" type="text" maxlength="34" required />
+            </div>
+            <div class="calendar-source-row">
+              <label for="bankBic">BIC</label>
+              <input id="bankBic" type="text" maxlength="11" required />
+            </div>
             <div class="calendar-source-row checkbox-row">
               <label for="bankIsBusiness">Business Account</label>
               <input id="bankIsBusiness" type="checkbox" />
@@ -249,6 +279,103 @@
         </section>
 
       </div><!-- /panel-account -->
+
+      <!-- ── Guest reservations tab ────────────────────────── -->
+      <div id="panel-guest-reservations" class="dashboard-tab-panel hidden" role="tabpanel">
+        <section class="listing-form-section">
+          <h3>Reservations</h3>
+          <p id="guestReservationsMessage" class="message"></p>
+          <p class="hint">Your confirmed and active reservation activity appears below.</p>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Accommodation</h3>
+          <div class="table-wrap">
+            <table class="calendar-table" aria-label="Guest accommodation reservations">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>Reservation ID</th>
+                  <th>Listing</th>
+                  <th>Arrival</th>
+                  <th>Departure</th>
+                  <th>Nights</th>
+                  <th>Amount</th>
+                  <th>Payment Status</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="guestAccommodationTableBody">
+                <tr>
+                  <td colspan="9">Loading accommodation reservations...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Facilities</h3>
+          <div class="table-wrap">
+            <table class="calendar-table" aria-label="Guest facility reservations">
+              <thead>
+                <tr>
+                  <th>Facility</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Amount</th>
+                  <th>Payment Status</th>
+                  <th>Booking Status</th>
+                </tr>
+              </thead>
+              <tbody id="guestFacilityTableBody">
+                <tr>
+                  <td colspan="6">Loading facility reservations...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div><!-- /panel-guest-reservations -->
+
+      <!-- ── Guest account tab ─────────────────────────────── -->
+      <div id="panel-guest-account" class="dashboard-tab-panel hidden" role="tabpanel">
+        <section class="listing-form-section">
+          <h3>Personal Account</h3>
+          <p id="guestAccountMessage" class="message"></p>
+          <p class="hint">Name and email are fixed for login identity. Telephone and postal address can be updated.</p>
+
+          <form id="guestAccountForm" class="bank-details-form" novalidate>
+            <div class="calendar-source-row">
+              <label for="guestAccountFirstName">First Name</label>
+              <input id="guestAccountFirstName" type="text" readonly />
+            </div>
+            <div class="calendar-source-row">
+              <label for="guestAccountFamilyName">Family Name</label>
+              <input id="guestAccountFamilyName" type="text" readonly />
+            </div>
+            <div class="calendar-source-row">
+              <label for="guestAccountEmail">Email</label>
+              <input id="guestAccountEmail" type="email" readonly />
+            </div>
+            <div class="calendar-source-row">
+              <label for="guestTelephone">Telephone</label>
+              <input id="guestTelephone" type="text" maxlength="60" />
+            </div>
+            <div class="calendar-source-row">
+              <label for="guestPostalAddress">Postal Address</label>
+              <textarea id="guestPostalAddress" rows="3" maxlength="500"></textarea>
+            </div>
+            <div class="feed-actions" style="margin-top: 0.9rem; justify-content: flex-end;">
+              <button type="submit" id="saveGuestAccountBtn" class="btn primary action-icon action-save" aria-label="Save Personal Account">Save Personal Account</button>
+            </div>
+          </form>
+
+          <div class="feed-actions" style="margin-top: 1rem;">
+            <button type="button" id="guestLogoutBtn" class="btn secondary">Log Out</button>
+          </div>
+        </section>
+      </div><!-- /panel-guest-account -->
 
     </div>
   </main>

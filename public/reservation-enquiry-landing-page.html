@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reservation Enquiry Landing Page - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.v20260520.css" />
+</head>
+<body class="logged-page">
+  <div class="sticky-page-chrome">
+    <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
+      <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
+    </div>
+  </div>
+
+  <main class="dashboard">
+    <div class="card-container wide">
+      <div class="feed-actions back-row" style="margin-bottom: 0.7rem;">
+        <button id="backBtn" type="button" class="back-arrow-control" aria-label="Back"></button>
+      </div>
+      <h2 id="landingPageTitle">Reservation Enquiry Landing Page</h2>
+      <p id="landingPageMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <h3>Landing Page Configuration</h3>
+        <form id="landingPageForm" class="landing-page-form" novalidate>
+          <div class="calendar-source-row">
+            <label for="landingPageName">Page Title</label>
+            <input id="landingPageName" type="text" maxlength="160" required />
+          </div>
+
+          <div class="calendar-source-row resource-editor-row">
+            <label>Description Text</label>
+            <div class="resource-editor-wrap">
+              <div class="resource-editor-toolbar" role="toolbar" aria-label="Description text formatting toolbar">
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingDescriptionEditor" data-command="bold"><strong>B</strong></button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingDescriptionEditor" data-command="italic"><em>I</em></button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingDescriptionEditor" data-command="underline"><span class="editor-underline">U</span></button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingDescriptionEditor" data-command="insertUnorderedList">Bullets</button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingDescriptionEditor" data-command="insertOrderedList">Numbers</button>
+              </div>
+              <div id="landingDescriptionEditor" class="resource-editor" contenteditable="true" spellcheck="true" aria-label="Description text editor"></div>
+            </div>
+          </div>
+
+          <div class="calendar-source-row resource-editor-row">
+            <label>Notes Text</label>
+            <div class="resource-editor-wrap">
+              <div class="resource-editor-toolbar" role="toolbar" aria-label="Notes text formatting toolbar">
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingNotesEditor" data-command="bold"><strong>B</strong></button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingNotesEditor" data-command="italic"><em>I</em></button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingNotesEditor" data-command="underline"><span class="editor-underline">U</span></button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingNotesEditor" data-command="insertUnorderedList">Bullets</button>
+                <button type="button" class="btn secondary editor-btn landing-editor-btn" data-target="landingNotesEditor" data-command="insertOrderedList">Numbers</button>
+              </div>
+              <div id="landingNotesEditor" class="resource-editor" contenteditable="true" spellcheck="true" aria-label="Notes text editor"></div>
+            </div>
+          </div>
+
+          <div class="calendar-source-row">
+            <label>Listings</label>
+            <div id="landingListingsSelection" class="landing-listing-selection" aria-label="Listings selection"></div>
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="landingPageDiscount">Discount %</label>
+            <input id="landingPageDiscount" type="number" min="0" max="100" step="0.01" inputmode="decimal" required />
+          </div>
+
+          <div class="calendar-source-row resource-payment-row">
+            <label>Payment</label>
+            <div class="resource-payment-options" aria-label="Accepted payment methods">
+              <label class="resource-payment-option" for="landingPaymentBankTransfer">
+                <input id="landingPaymentBankTransfer" type="checkbox" />
+                <span>Bank Transfer</span>
+              </label>
+              <label class="resource-payment-option" for="landingPaymentOnline">
+                <input id="landingPaymentOnline" type="checkbox" />
+                <span>Online</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="calendar-source-row resource-booking-url-row">
+            <label for="landingPagePublicUrl">Public URL</label>
+            <div class="resource-booking-url-wrap">
+              <input id="landingPagePublicUrl" type="text" readonly />
+              <button type="button" id="copyLandingPagePublicUrlBtn" class="btn secondary action-copy" aria-label="Copy public URL">Copy</button>
+            </div>
+          </div>
+
+          <div class="calendar-source-row checkbox-row">
+            <label for="landingPageIsActive">Active</label>
+            <input id="landingPageIsActive" type="checkbox" checked />
+          </div>
+
+          <div class="feed-actions floating-action-bar">
+            <button type="submit" id="saveLandingPageBtn" class="btn primary action-icon action-save" aria-label="Save Landing Page">Save Landing Page</button>
+            <button type="button" id="deleteLandingPageBtn" class="btn secondary action-icon action-delete" aria-label="Delete Landing Page">Delete Landing Page</button>
+            <button type="button" id="cancelLandingPageBtn" class="btn secondary action-icon action-cancel" aria-label="Cancel">Cancel</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="sticky-layout.js"></script>
+  <script src="reservation-enquiry-landing-page.js"></script>
+</body>
+</html>

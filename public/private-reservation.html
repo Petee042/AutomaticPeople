@@ -50,8 +50,11 @@
 
           <div class="calendar-source-row">
             <label>Listings</label>
-            <div id="listingsCheckboxList" class="cleaning-listings" aria-label="Select listings for this reservation">
-              <p class="cleaning-empty">Loading listings&hellip;</p>
+            <div style="flex:1; min-width:0;">
+              <p id="listingRankHint" class="hint private-reservation-rank-hint">Availability check will rank listings by estimated total price.</p>
+              <div id="listingsCheckboxList" class="cleaning-listings" aria-label="Select listings for this reservation">
+                <p class="cleaning-empty">Loading listings&hellip;</p>
+              </div>
             </div>
           </div>
 

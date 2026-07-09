@@ -10,8 +10,13 @@ const Stripe = require('stripe');
 const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
+const { AsyncLocalStorage } = require('async_hooks');
 const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
 const { Pool } = require('pg');
+const { registerWorkflow2PrivateReservationRoutes } = require('./routes/workflow2.private.routes');
+const { registerWorkflow3FacilityBookingRoutes } = require('./routes/workflow3.facility-booking.routes');
+const { registerWorkflow4ReservationEnquiryRoutes } = require('./routes/workflow4.reservation-enquiry.routes');
+const { registerWorkflow5FacilityEnquiryRoutes } = require('./routes/workflow5.facility-enquiry.routes');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -29,10 +34,15 @@ const STAY_API_BASE_URL = 'https://api.stayapi.com';
 const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').trim();
 const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
 const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
+const DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || '').trim().toLowerCase());
+const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE || '').trim().toLowerCase());
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT_COUNTRY || 'GB').trim().toUpperCase();
+const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
+  || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
+  || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
 const DATA_RESET_FLAG_KEY = 'minimal-profile-reset-v1';
 const IS_ALPHA = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'development';
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim();
@@ -42,7 +52,10 @@ const PASSWORD_RESET_TOKEN_VERSION = 'v1';
 const PASSWORD_RESET_TOKEN_TTL_MS = Number(process.env.PASSWORD_RESET_TOKEN_TTL_MS || (1000 * 60 * 60));
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+const LANDING_PAGE_WORKFLOW_4 = 'workflow4_reservation_enquiry_public';
+const LANDING_PAGE_WORKFLOW_5 = 'workflow5_facility_enquiry_public';
 const stripeClient = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+const requestContextStore = new AsyncLocalStorage();
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is required. Legacy local JSON storage mode has been removed.');
@@ -421,6 +434,11 @@ async function initializeUserStore() {
 
   await pool.query(`
     ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS postal_address TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
     ADD COLUMN IF NOT EXISTS is_validated BOOLEAN NOT NULL DEFAULT TRUE
   `);
 
@@ -440,6 +458,11 @@ async function initializeUserStore() {
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
+      per_night_price NUMERIC(12,2),
+      per_stay_price NUMERIC(12,2),
+      max_guests INTEGER,
+      base_occupancy INTEGER,
+      additional_guest_uplift_pct NUMERIC(6,2),
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (user_id, name)
     )
@@ -634,6 +657,29 @@ async function initializeUserStore() {
     ON listing_event_log (listing_id, created_at DESC)
   `);
 
+  // ── User event log: user-scoped audit events such as outbound emails
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_event_log (
+      id BIGSERIAL PRIMARY KEY,
+      actor_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      description TEXT NOT NULL,
+      detail_json TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_event_log_actor_created
+    ON user_event_log (actor_user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_event_log_client_created
+    ON user_event_log (client_account_id, created_at DESC)
+  `);
+
   // ── ICS transaction log: records every ICS fetch attempt for admin diagnostics
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ics_transaction_log (
@@ -815,6 +861,78 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS reservation_enquiry_landing_pages (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      public_slug TEXT NOT NULL,
+      preferred_listing_id BIGINT REFERENCES listings(id) ON DELETE SET NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (client_account_id, public_slug)
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_reservation_enquiry_landing_pages_client
+    ON reservation_enquiry_landing_pages (client_account_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS description_html TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS notes_html TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS listing_filters_json TEXT NOT NULL DEFAULT '[]'
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS percentage_discount NUMERIC(5,2) NOT NULL DEFAULT 0
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'bank_transfer'
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS workflow_type TEXT NOT NULL DEFAULT '${LANDING_PAGE_WORKFLOW_4}'
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_enquiry_landing_pages
+    ADD COLUMN IF NOT EXISTS shared_resource_id BIGINT REFERENCES shared_resources(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    UPDATE reservation_enquiry_landing_pages
+    SET workflow_type = '${LANDING_PAGE_WORKFLOW_4}'
+    WHERE COALESCE(TRIM(workflow_type), '') = ''
+  `);
+
+  await pool.query(`
+    UPDATE reservation_enquiry_landing_pages
+    SET listing_filters_json = CASE
+      WHEN preferred_listing_id IS NOT NULL THEN json_build_array(
+        json_build_object('listingId', preferred_listing_id, 'listingUrl', '')
+      )::text
+      ELSE '[]'
+    END
+    WHERE COALESCE(TRIM(listing_filters_json), '') = ''
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS shared_resource_reservations (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -981,6 +1099,42 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS payment_provider TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS payment_intent_id TEXT
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS payment_currency TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS payment_amount_minor INTEGER
+  `);
+
+  await pool.query(`
+    ALTER TABLE reservation_activity
+    ADD COLUMN IF NOT EXISTS payment_last_error TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_reservation_activity_payment_intent_id
+    ON reservation_activity (payment_intent_id)
+    WHERE payment_intent_id IS NOT NULL
+  `);
+
+  await pool.query(`
     ALTER TABLE listing_calendar_events
     DROP CONSTRAINT IF EXISTS listing_calendar_events_reservation_activity_id_fkey
   `);
@@ -1136,6 +1290,31 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS per_night_price NUMERIC(12,2)
+  `);
+
+  await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS per_stay_price NUMERIC(12,2)
+  `);
+
+  await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS max_guests INTEGER
+  `);
+
+  await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS base_occupancy INTEGER
+  `);
+
+  await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS additional_guest_uplift_pct NUMERIC(6,2)
+  `);
+
+  await pool.query(`
     ALTER TABLE shared_resources
     ADD COLUMN IF NOT EXISTS client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL
   `);
@@ -1189,6 +1368,16 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE client_accounts
     ADD COLUMN IF NOT EXISTS bank_is_business BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_accounts
+    ADD COLUMN IF NOT EXISTS bank_iban TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE client_accounts
+    ADD COLUMN IF NOT EXISTS bank_bic TEXT NOT NULL DEFAULT ''
   `);
 
   await pool.query(`
@@ -1738,6 +1927,837 @@ function normaliseSharedResourceReservationText(value, maxLen) {
   return text.slice(0, maxLen || 200);
 }
 
+function slugifyLandingPageName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+}
+
+function normaliseLandingPageName(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return null;
+  }
+  return text.slice(0, 160);
+}
+
+function normaliseLandingPageSlug(value, fallbackName) {
+  const explicit = slugifyLandingPageName(value);
+  if (explicit) {
+    return explicit;
+  }
+  const fallback = slugifyLandingPageName(fallbackName);
+  return fallback || null;
+}
+
+function normaliseLandingPagePreferredListingId(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function normaliseLandingPageListingUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  if (!/^https?:\/\//i.test(text)) {
+    return null;
+  }
+  return text.slice(0, 1200);
+}
+
+function normaliseLandingPagePercentageDiscount(value) {
+  if (value === null || value === undefined || value === '') {
+    return 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    return null;
+  }
+  return Number(parsed.toFixed(2));
+}
+
+function normaliseLandingPagePaymentMethod(value) {
+  const method = String(value || '').trim().toLowerCase();
+  if (method === 'bank_transfer' || method === 'online') {
+    return method;
+  }
+  return null;
+}
+
+function parseLandingPageListingFilters(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const rows = [];
+
+  value.forEach((item) => {
+    const listingId = Number(item && item.listingId);
+    if (!Number.isInteger(listingId) || listingId <= 0 || seen.has(listingId)) {
+      return;
+    }
+
+    const listingUrl = normaliseLandingPageListingUrl(item && item.listingUrl);
+    if (listingUrl === null) {
+      return;
+    }
+
+    seen.add(listingId);
+    rows.push({
+      listingId,
+      listingUrl: listingUrl || ''
+    });
+  });
+
+  return rows;
+}
+
+function parseLandingPageListingFiltersJson(value) {
+  if (Array.isArray(value)) {
+    return parseLandingPageListingFilters(value);
+  }
+
+  try {
+    const parsed = JSON.parse(String(value || '[]'));
+    return parseLandingPageListingFilters(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function getReservationEnquiryDiscountMultiplier(discountPct) {
+  const discount = Number(discountPct || 0);
+  if (!Number.isFinite(discount) || discount <= 0) {
+    return 1;
+  }
+  return Math.max(0, 1 - (discount / 100));
+}
+
+function calculateReservationEnquiryListingPrice(listing, stayNights, guestCount) {
+  const nights = Number(stayNights || 0);
+  const guests = Number(guestCount || 0);
+  if (!Number.isInteger(nights) || nights <= 0) {
+    return 0;
+  }
+
+  const perNight = Number(listing && listing.per_night_price);
+  const perStay = Number(listing && listing.per_stay_price);
+  const baseOccupancy = Number(listing && listing.base_occupancy);
+  const upliftPct = Number(listing && listing.additional_guest_uplift_pct);
+
+  const baseTotal = (Number.isFinite(perNight) ? perNight : 0) * nights + (Number.isFinite(perStay) ? perStay : 0);
+  const extraGuests = Math.max(0, guests - (Number.isFinite(baseOccupancy) ? baseOccupancy : 0));
+  const perGuestUpliftPct = Number.isFinite(upliftPct) && upliftPct > 0 ? upliftPct : 0;
+  const totalMultiplier = 1 + ((extraGuests * perGuestUpliftPct) / 100);
+
+  return Math.round(baseTotal * totalMultiplier * 100) / 100;
+}
+
+function calculateReservationEnquiryDiscountedPrice(totalPrice, discountPct) {
+  const total = Number(totalPrice || 0);
+  if (!Number.isFinite(total)) {
+    return 0;
+  }
+  return Math.round(total * getReservationEnquiryDiscountMultiplier(discountPct) * 100) / 100;
+}
+
+function getListingConflictRangesForReservationEnquiry(listing, events) {
+  return appendAvailabilityPolicyBlockEvents(listing, Array.isArray(events) ? events : [])
+    .filter((event) => event && (event.isReservation !== false || event.isUnavailableBlock === true))
+    .map((event) => getNormalisedConflictRangeForEvent(event))
+    .filter(Boolean);
+}
+
+function isReservationEnquiryRangeAvailable(conflictRanges, arrivalDate, departureDate) {
+  return !(Array.isArray(conflictRanges) ? conflictRanges : []).some((range) => {
+    return range.startKey < departureDate && range.endKey > arrivalDate;
+  });
+}
+
+function getReservationEnquiryMaxContinuousCheckout(conflictRanges, arrivalDate, finalDepartureDate) {
+  let currentDate = arrivalDate;
+  while (currentDate < finalDepartureDate) {
+    const nextDate = addDaysToDateKey(currentDate, 1);
+    if (!nextDate) {
+      break;
+    }
+    const blocked = (Array.isArray(conflictRanges) ? conflictRanges : []).some((range) => {
+      return range.startKey < nextDate && range.endKey > currentDate;
+    });
+    if (blocked) {
+      return currentDate;
+    }
+    currentDate = nextDate;
+  }
+  return finalDepartureDate;
+}
+
+function buildReservationEnquiryOptionKey(segments) {
+  return (Array.isArray(segments) ? segments : []).map((segment) => {
+    return [
+      Number(segment && segment.listingId || 0),
+      String(segment && segment.arrivalDate || ''),
+      String(segment && segment.departureDate || '')
+    ].join(':');
+  }).join('|');
+}
+
+function buildReservationEnquiryDisplayLabel(segments) {
+  return (Array.isArray(segments) ? segments : []).map((segment) => {
+    const propertyName = String(segment && segment.propertyName || '').trim();
+    const listingName = String(segment && segment.listingName || '').trim() || 'Listing';
+    const stayText = String(segment && segment.arrivalDate || '') + ' to ' + String(segment && segment.departureDate || '');
+    return [propertyName, listingName].filter(Boolean).join(' / ') + ' (' + stayText + ')';
+  }).join(' + ');
+}
+
+function rankReservationEnquirySingleOptions(options) {
+  return (Array.isArray(options) ? options : []).slice().sort((left, right) => {
+    const leftValue = Number(left && left.totalPrice);
+    const rightValue = Number(right && right.totalPrice);
+    const safeLeft = Number.isFinite(leftValue) ? leftValue : Number.POSITIVE_INFINITY;
+    const safeRight = Number.isFinite(rightValue) ? rightValue : Number.POSITIVE_INFINITY;
+    if (safeLeft !== safeRight) {
+      return safeLeft - safeRight;
+    }
+    return String(left && left.label || '').localeCompare(String(right && right.label || ''));
+  });
+}
+
+function buildReservationEnquiryOptionFromSegments(segments, discountPct) {
+  const safeSegments = Array.isArray(segments) ? segments : [];
+  const totalPrice = Math.round(safeSegments.reduce((sum, segment) => {
+    const price = Number(segment && segment.price);
+    return sum + (Number.isFinite(price) ? price : 0);
+  }, 0) * 100) / 100;
+  const discountedTotalPrice = calculateReservationEnquiryDiscountedPrice(totalPrice, discountPct);
+  const label = buildReservationEnquiryDisplayLabel(safeSegments);
+  const propertyName = safeSegments.length === 1 ? String(safeSegments[0].propertyName || '') : 'Multiple properties';
+  const listingName = safeSegments.length === 1 ? String(safeSegments[0].listingName || '') : 'Split stay';
+  const listingUrl = safeSegments.length === 1 ? String(safeSegments[0].listingUrl || '') : '';
+
+  return {
+    key: buildReservationEnquiryOptionKey(safeSegments),
+    optionType: safeSegments.length === 1 ? 'single' : 'split',
+    propertyName,
+    listingName,
+    listingUrl,
+    label,
+    totalPrice,
+    discountedTotalPrice,
+    segments: safeSegments.map((segment) => ({
+      listingId: Number(segment.listingId),
+      propertyName: String(segment.propertyName || ''),
+      listingName: String(segment.listingName || ''),
+      listingUrl: String(segment.listingUrl || ''),
+      arrivalDate: String(segment.arrivalDate || ''),
+      departureDate: String(segment.departureDate || ''),
+      nights: Number(segment.nights || 0),
+      price: Number(segment.price || 0),
+      discountedPrice: calculateReservationEnquiryDiscountedPrice(Number(segment.price || 0), discountPct)
+    }))
+  };
+}
+
+function buildReservationEnquirySingleStayOptions(listings, listingFiltersById, conflictRangesByListingId, arrivalDate, departureDate, guestCount, discountPct) {
+  const nights = Math.max(0, differenceInDaysBetweenDateKeys(arrivalDate, departureDate));
+  if (nights <= 0) {
+    return [];
+  }
+
+  const options = (Array.isArray(listings) ? listings : []).flatMap((listing) => {
+    const listingId = Number(listing && listing.id || 0);
+    if (!Number.isInteger(listingId) || listingId <= 0) {
+      return [];
+    }
+    const maxGuests = Number(listing && listing.max_guests || 0);
+    if (Number.isInteger(maxGuests) && maxGuests > 0 && guestCount > maxGuests) {
+      return [];
+    }
+    const conflictRanges = conflictRangesByListingId.get(listingId) || [];
+    if (!isReservationEnquiryRangeAvailable(conflictRanges, arrivalDate, departureDate)) {
+      return [];
+    }
+
+    const filter = listingFiltersById.get(listingId) || {};
+    const segmentPrice = calculateReservationEnquiryListingPrice(listing, nights, guestCount);
+    const segment = {
+      listingId,
+      propertyName: String(listing.property_name || ''),
+      listingName: String(listing.name || ''),
+      listingUrl: String(filter.listingUrl || ''),
+      arrivalDate,
+      departureDate,
+      nights,
+      price: segmentPrice
+    };
+
+    return [buildReservationEnquiryOptionFromSegments([segment], discountPct)];
+  });
+
+  return rankReservationEnquirySingleOptions(options);
+}
+
+function differenceInDaysBetweenDateKeys(startKey, endKey) {
+  const start = new Date(startKey + 'T00:00:00Z');
+  const end = new Date(endKey + 'T00:00:00Z');
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end.getTime() <= start.getTime()) {
+    return 0;
+  }
+  return Math.round((end.getTime() - start.getTime()) / 86400000);
+}
+
+function buildReservationEnquirySplitStayOptions(listings, listingFiltersById, conflictRangesByListingId, arrivalDate, departureDate, guestCount, discountPct) {
+  const listingMap = new Map((Array.isArray(listings) ? listings : []).map((listing) => [Number(listing.id), listing]));
+  const options = [];
+  const seen = new Set();
+  const maxSegments = Math.min(4, Math.max(2, listingMap.size));
+
+  function walk(currentArrivalDate, segments, usedListingIds) {
+    if (currentArrivalDate >= departureDate) {
+      if (segments.length > 1) {
+        const option = buildReservationEnquiryOptionFromSegments(segments, discountPct);
+        if (!seen.has(option.key)) {
+          seen.add(option.key);
+          options.push(option);
+        }
+      }
+      return;
+    }
+
+    if (segments.length >= maxSegments) {
+      return;
+    }
+
+    listingMap.forEach((listing, listingId) => {
+      const maxGuests = Number(listing && listing.max_guests || 0);
+      if (Number.isInteger(maxGuests) && maxGuests > 0 && guestCount > maxGuests) {
+        return;
+      }
+      const conflictRanges = conflictRangesByListingId.get(listingId) || [];
+      const maxCheckout = getReservationEnquiryMaxContinuousCheckout(conflictRanges, currentArrivalDate, departureDate);
+      if (!maxCheckout || maxCheckout <= currentArrivalDate) {
+        return;
+      }
+
+      let cursorDate = maxCheckout;
+      while (cursorDate > currentArrivalDate) {
+        const nights = differenceInDaysBetweenDateKeys(currentArrivalDate, cursorDate);
+        if (nights > 0) {
+          const filter = listingFiltersById.get(listingId) || {};
+          const nextSegment = {
+            listingId,
+            propertyName: String(listing.property_name || ''),
+            listingName: String(listing.name || ''),
+            listingUrl: String(filter.listingUrl || ''),
+            arrivalDate: currentArrivalDate,
+            departureDate: cursorDate,
+            nights,
+            price: calculateReservationEnquiryListingPrice(listing, nights, guestCount)
+          };
+
+          walk(cursorDate, segments.concat(nextSegment), usedListingIds.concat(listingId));
+        }
+
+        cursorDate = addDaysToDateKey(cursorDate, -1);
+        if (!cursorDate) {
+          break;
+        }
+      }
+    });
+  }
+
+  walk(arrivalDate, [], []);
+
+  return rankSplitStayOptions(options.map((option) => ({
+    ...option,
+    totalPrice: option.totalPrice,
+    segments: option.segments.map((segment) => ({
+      listingId: segment.listingId,
+      nights: segment.nights
+    }))
+  })), null).map((rankedOption) => {
+    return options.find((option) => option.key === rankedOption.key) || rankedOption;
+  }).filter((option) => option && option.key);
+}
+
+async function getActiveReservationEnquiryLandingPageBySlug(slug) {
+  const normalisedSlug = normaliseLandingPageSlug(slug);
+  if (!normalisedSlug) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.name,
+             relp.public_slug,
+             relp.preferred_listing_id,
+             relp.description_html,
+             relp.notes_html,
+             relp.listing_filters_json,
+             relp.percentage_discount,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             l.name AS preferred_listing_name
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN listings l ON l.id = relp.preferred_listing_id
+      WHERE relp.public_slug = $1
+        AND relp.workflow_type = $2
+        AND relp.is_active = TRUE
+      LIMIT 1
+    `,
+    [normalisedSlug, LANDING_PAGE_WORKFLOW_4]
+  );
+
+  return result.rows[0] ? mapReservationEnquiryLandingPageRow(result.rows[0]) : null;
+}
+
+async function getPublicReservationEnquiryListingsForLandingPage(landingPage) {
+  const filters = Array.isArray(landingPage && landingPage.listing_filters) ? landingPage.listing_filters : [];
+  const listingIds = filters.map((item) => Number(item && item.listingId)).filter((id) => Number.isInteger(id) && id > 0);
+  if (!listingIds.length) {
+    return [];
+  }
+
+  const listings = await getListingsForUser(Number(landingPage.user_id || 0));
+  const filterMap = new Map(filters.map((item) => [Number(item.listingId), item]));
+  return listings
+    .filter((listing) => filterMap.has(Number(listing.id)))
+    .map((listing) => ({
+      ...listing,
+      listing_url: String((filterMap.get(Number(listing.id)) || {}).listingUrl || '')
+    }))
+    .sort((left, right) => {
+      const propertySort = String(left.property_name || '').localeCompare(String(right.property_name || ''));
+      if (propertySort !== 0) {
+        return propertySort;
+      }
+      return String(left.name || '').localeCompare(String(right.name || ''));
+    });
+}
+
+async function buildPublicReservationEnquiryCalendarData(landingPage) {
+  const listings = await getPublicReservationEnquiryListingsForLandingPage(landingPage);
+  const listingCalendars = await Promise.all(listings.map(async (listing) => {
+    const events = await getReservationEventsForListing(Number(listing.id));
+    return {
+      listingId: Number(listing.id),
+      propertyName: String(listing.property_name || ''),
+      listingName: String(listing.name || ''),
+      listingUrl: String(listing.listing_url || ''),
+      events: appendAvailabilityPolicyBlockEvents(listing, events).map((event) => ({
+        start: event && event.start ? String(event.start) : '',
+        end: event && event.end ? String(event.end) : '',
+        title: event && event.title ? String(event.title) : '',
+        isReservation: event && event.isReservation !== false,
+        isUnavailableBlock: event && event.isUnavailableBlock === true
+      }))
+    };
+  }));
+
+  return listingCalendars;
+}
+
+async function buildPublicReservationEnquiryAvailability(landingPage, arrivalDate, departureDate, guestCount) {
+  const listings = await getPublicReservationEnquiryListingsForLandingPage(landingPage);
+  const listingFiltersById = new Map((Array.isArray(landingPage.listing_filters) ? landingPage.listing_filters : []).map((row) => [Number(row.listingId), row]));
+  const conflictRangesByListingId = new Map();
+
+  await Promise.all(listings.map(async (listing) => {
+    const events = await getReservationEventsForListing(Number(listing.id));
+    conflictRangesByListingId.set(Number(listing.id), getListingConflictRangesForReservationEnquiry(listing, events));
+  }));
+
+  const singleOptions = buildReservationEnquirySingleStayOptions(
+    listings,
+    listingFiltersById,
+    conflictRangesByListingId,
+    arrivalDate,
+    departureDate,
+    guestCount,
+    landingPage.percentage_discount
+  );
+
+  const splitOptions = singleOptions.length
+    ? []
+    : buildReservationEnquirySplitStayOptions(
+        listings,
+        listingFiltersById,
+        conflictRangesByListingId,
+        arrivalDate,
+        departureDate,
+        guestCount,
+        landingPage.percentage_discount
+      );
+
+  return {
+    paymentMethod: String(landingPage.payment_method || ''),
+    discountPct: Number(landingPage.percentage_discount || 0),
+    options: singleOptions.length ? singleOptions : splitOptions
+  };
+}
+
+async function getReservationActivityRowsByPaymentIntentId(paymentIntentId) {
+  const id = String(paymentIntentId || '').trim();
+  if (!id) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id,
+             user_id,
+             client_account_id,
+             listing_id,
+             reservation_identifier,
+             reservation_checkin_date::text AS reservation_checkin_date,
+             reservation_checkout_date::text AS reservation_checkout_date,
+             first_name,
+             family_name,
+             email_address,
+             guest_count,
+             reservation_amount,
+             hold_until_at,
+             payment_method,
+             payment_due_at,
+             status,
+             payment_provider,
+             payment_intent_id,
+             payment_status,
+             payment_currency,
+             payment_amount_minor,
+             payment_last_error,
+             notes,
+             created_at,
+             updated_at
+      FROM reservation_activity
+      WHERE payment_intent_id = $1
+      ORDER BY id ASC
+    `,
+    [id]
+  );
+
+  return result.rows;
+}
+
+async function updateReservationActivityPaymentById(id, nextState) {
+  const reservationId = Number(id || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE reservation_activity
+      SET payment_provider = COALESCE($2, payment_provider),
+          payment_intent_id = COALESCE($3, payment_intent_id),
+          payment_status = COALESCE($4, payment_status),
+          payment_currency = COALESCE($5, payment_currency),
+          payment_amount_minor = COALESCE($6, payment_amount_minor),
+          payment_last_error = COALESCE($7, payment_last_error),
+          status = COALESCE($8, status),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING id,
+                user_id,
+                client_account_id,
+                listing_id,
+                reservation_identifier,
+                reservation_checkin_date::text AS reservation_checkin_date,
+                reservation_checkout_date::text AS reservation_checkout_date,
+                first_name,
+                family_name,
+                email_address,
+                guest_count,
+                reservation_amount,
+                hold_until_at,
+                payment_method,
+                payment_due_at,
+                status,
+                payment_provider,
+                payment_intent_id,
+                payment_status,
+                payment_currency,
+                payment_amount_minor,
+                payment_last_error,
+                notes,
+                created_at,
+                updated_at
+    `,
+    [
+      reservationId,
+      nextState && nextState.paymentProvider !== undefined ? String(nextState.paymentProvider || '') : null,
+      nextState && nextState.paymentIntentId !== undefined ? String(nextState.paymentIntentId || '') : null,
+      nextState && nextState.paymentStatus !== undefined ? String(nextState.paymentStatus || '') : null,
+      nextState && nextState.paymentCurrency !== undefined ? String(nextState.paymentCurrency || '') : null,
+      nextState && Number.isInteger(nextState.paymentAmountMinor) ? Number(nextState.paymentAmountMinor) : null,
+      nextState && nextState.paymentLastError !== undefined ? String(nextState.paymentLastError || '') : null,
+      nextState && nextState.status !== undefined ? String(nextState.status || '') : null
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function sendReservationActivityConfirmationEmail(reservationRows, paymentIntent) {
+  const rows = Array.isArray(reservationRows) ? reservationRows : [];
+  const firstReservation = rows[0] || null;
+  if (!firstReservation) {
+    return { sent: false, error: 'No reservation row available.' };
+  }
+
+  const confirmationEmailAddress = normaliseOptionalEmail(firstReservation.email_address)
+    || normaliseOptionalEmail(paymentIntent && paymentIntent.receipt_email);
+  if (!confirmationEmailAddress) {
+    return { sent: false, error: 'No recipient email found for reservation confirmation.' };
+  }
+
+  const identifiers = rows
+    .map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', ');
+  const checkinText = String(firstReservation.reservation_checkin_date || '');
+  const checkoutText = String(firstReservation.reservation_checkout_date || '');
+  const totalAmount = rows.reduce((sum, row) => sum + Number(row.reservation_amount || 0), 0);
+  const confirmEmailLines = [
+    'Reservation Payment Confirmed',
+    '',
+    'Guest: ' + String(firstReservation.first_name || '') + ' ' + String(firstReservation.family_name || ''),
+    'Reference(s): ' + (identifiers || '-'),
+    'Check-in: ' + checkinText,
+    'Check-out: ' + checkoutText,
+    'Total paid: ' + totalAmount.toFixed(2),
+    '',
+    'Your reservation is now confirmed. Please keep your reference number(s) for your records.'
+  ];
+  const confirmEmailResult = await sendAppEmail({
+    to: confirmationEmailAddress,
+    subject: 'Reservation Payment Confirmed',
+    textBody: confirmEmailLines.join('\n')
+  });
+  if (!confirmEmailResult.ok) {
+    return { sent: false, error: String(confirmEmailResult.error || 'Failed to send confirmation email.') };
+  }
+
+  return {
+    sent: true,
+    messageId: confirmEmailResult.messageId ? String(confirmEmailResult.messageId) : '',
+    recipient: confirmationEmailAddress
+  };
+}
+
+async function finalizeReservationActivityPaymentIntent(paymentIntent, options) {
+  const intent = paymentIntent && typeof paymentIntent === 'object' ? paymentIntent : null;
+  const paymentIntentId = String(intent && intent.id || '').trim();
+  if (!paymentIntentId) {
+    return { found: false, error: 'Missing payment intent id.' };
+  }
+
+  let reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+  if (!reservationRows.length) {
+    const metadataReservationId = Number(
+      intent
+      && intent.metadata
+      && (intent.metadata.reservation_activity_id || intent.metadata.first_reservation_id)
+    );
+    if (Number.isInteger(metadataReservationId) && metadataReservationId > 0) {
+      await pool.query(
+        `
+          UPDATE reservation_activity
+          SET payment_provider = 'stripe',
+              payment_intent_id = CASE
+                WHEN NULLIF(TRIM(COALESCE(payment_intent_id, '')), '') IS NULL THEN $2
+                ELSE payment_intent_id
+              END,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `,
+        [metadataReservationId, paymentIntentId]
+      );
+      reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+    }
+  }
+
+  if (!reservationRows.length) {
+    return { found: false, paymentIntentId };
+  }
+
+  const commonUpdate = {
+    paymentProvider: 'stripe',
+    paymentIntentId,
+    paymentStatus: String(intent.status || '').toLowerCase(),
+    paymentCurrency: String(intent.currency || 'gbp').toLowerCase(),
+    paymentAmountMinor: Number.isInteger(intent.amount_received)
+      ? intent.amount_received
+      : (Number.isInteger(intent.amount) ? intent.amount : null),
+    paymentLastError: intent.last_payment_error && intent.last_payment_error.message
+      ? String(intent.last_payment_error.message)
+      : ''
+  };
+
+  const paymentStatus = String(intent.status || '').toLowerCase();
+  if (paymentStatus === 'succeeded') {
+    const alreadyConfirmed = reservationRows.every((row) => String(row.status || '').toLowerCase() === 'confirmed');
+
+    await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
+      ...commonUpdate,
+      status: 'confirmed'
+    })));
+
+    const firstReservation = reservationRows[0] || null;
+    if (firstReservation) {
+      await ensureGuestSiteUserForClientAccount({
+        clientAccountId: firstReservation.client_account_id,
+        ownerUserId: firstReservation.user_id,
+        firstName: firstReservation.first_name,
+        familyName: firstReservation.family_name,
+        email: firstReservation.email_address,
+        sourceType: 'private_reservation',
+        sourceId: String(firstReservation.id)
+      });
+    }
+
+    let emailResult = { sent: false, error: '', recipient: '' };
+    if (!alreadyConfirmed || (options && options.forceSendEmail === true)) {
+      emailResult = await sendReservationActivityConfirmationEmail(reservationRows, intent);
+    }
+
+    await writeUserEventLog({
+      actorUserId: Number(firstReservation && firstReservation.user_id || 0),
+      clientAccountId: Number(firstReservation && firstReservation.client_account_id || 0),
+      eventType: 'reservation_payment_received',
+      description: 'Reservation Payment Received - ' + reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', '),
+      detail: {
+        dtg: new Date().toISOString(),
+        paymentIntentId,
+        paymentStatus,
+        amountMinor: Number(commonUpdate.paymentAmountMinor || 0),
+        currency: String(commonUpdate.paymentCurrency || ''),
+        reservationIds: reservationRows.map((row) => Number(row.id || 0)).filter((value) => Number.isInteger(value) && value > 0),
+        reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean)
+      }
+    });
+
+    return {
+      found: true,
+      paymentStatus,
+      confirmed: true,
+      alreadyConfirmed,
+      reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean),
+      emailSent: emailResult.sent === true,
+      emailError: String(emailResult.error || ''),
+      emailRecipient: String(emailResult.recipient || '')
+    };
+  }
+
+  if (paymentStatus === 'requires_payment_method' || paymentStatus === 'requires_action') {
+    await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
+      ...commonUpdate,
+      status: 'awaiting_online_payment'
+    })));
+
+    const firstReservation = reservationRows[0] || null;
+    await writeUserEventLog({
+      actorUserId: Number(firstReservation && firstReservation.user_id || 0),
+      clientAccountId: Number(firstReservation && firstReservation.client_account_id || 0),
+      eventType: 'reservation_payment_failed',
+      description: 'Reservation Payment Failed - ' + reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', '),
+      detail: {
+        dtg: new Date().toISOString(),
+        paymentIntentId,
+        paymentStatus,
+        error: String(commonUpdate.paymentLastError || ''),
+        reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean)
+      }
+    });
+
+    return { found: true, paymentStatus, confirmed: false };
+  }
+
+  if (paymentStatus === 'canceled') {
+    await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, {
+      ...commonUpdate,
+      status: 'cancelled'
+    })));
+
+    const firstReservation = reservationRows[0] || null;
+    await writeUserEventLog({
+      actorUserId: Number(firstReservation && firstReservation.user_id || 0),
+      clientAccountId: Number(firstReservation && firstReservation.client_account_id || 0),
+      eventType: 'reservation_payment_failed',
+      description: 'Reservation Payment Failed - ' + reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean).join(', '),
+      detail: {
+        dtg: new Date().toISOString(),
+        paymentIntentId,
+        paymentStatus,
+        error: String(commonUpdate.paymentLastError || ''),
+        reservationIdentifiers: reservationRows.map((row) => String(row.reservation_identifier || '')).filter(Boolean)
+      }
+    });
+
+    return { found: true, paymentStatus, confirmed: false };
+  }
+
+  await Promise.all(reservationRows.map((row) => updateReservationActivityPaymentById(row.id, commonUpdate)));
+  return { found: true, paymentStatus, confirmed: false };
+}
+
+async function getGuestDashboardReservationByIdForUser(reservationId, userId, normalizedEmail) {
+  const id = Number(reservationId || 0);
+  const uid = Number(userId || 0);
+  const guestEmail = String(normalizedEmail || '').trim().toLowerCase();
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(uid) || uid <= 0) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT ra.id,
+             ra.user_id,
+             ra.client_account_id,
+             ra.listing_id,
+             ra.reservation_identifier,
+             ra.reservation_checkin_date::text AS reservation_checkin_date,
+             ra.reservation_checkout_date::text AS reservation_checkout_date,
+             ra.first_name,
+             ra.family_name,
+             ra.email_address,
+             ra.reservation_amount,
+             ra.payment_method,
+             ra.status,
+             ra.payment_intent_id,
+             ra.created_at,
+             l.name AS listing_name,
+             COALESCE(NULLIF(TRIM(p.name), ''), '') AS property_name
+      FROM reservation_activity ra
+      LEFT JOIN listings l ON l.id = ra.listing_id
+      LEFT JOIN properties p ON p.id = l.property_id
+      WHERE ra.id = $1
+        AND (
+          ra.user_id = $2
+          OR ($3 <> '' AND LOWER(TRIM(COALESCE(ra.email_address, ''))) = $3)
+        )
+      LIMIT 1
+    `,
+    [id, uid, guestEmail]
+  );
+
+  return result.rows[0] || null;
+}
+
 function normaliseSharedResourceReservationEmail(value) {
   const email = String(value || '').trim().toLowerCase();
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
@@ -1772,6 +2792,66 @@ function toMinorUnits(amount) {
     return null;
   }
   return Math.round(numeric * 100);
+}
+
+function normaliseBankIban(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 34);
+}
+
+function normaliseBankBic(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 11);
+}
+
+function isOnlinePaymentAvailableForHostUser(hostUser) {
+  return Boolean(
+    stripeClient
+    && STRIPE_PUBLISHABLE_KEY
+    && hostUser
+    && hostUser.stripe_account_id
+    && hostUser.stripe_charges_enabled === true
+    && hostUser.stripe_payouts_enabled === true
+  );
+}
+
+function rankSplitStayOptions(options, preferredListingId) {
+  const preferredId = Number(preferredListingId || 0);
+  const normalised = (Array.isArray(options) ? options : []).map((option, index) => {
+    const segments = Array.isArray(option && option.segments) ? option.segments : [];
+    const totalPriceRaw = Number(option && option.totalPrice);
+    const totalPrice = Number.isFinite(totalPriceRaw) ? totalPriceRaw : Number.POSITIVE_INFINITY;
+    const moves = Math.max(0, segments.length - 1);
+    const preferredListingNights = segments.reduce((sum, segment) => {
+      const segmentListingId = Number(segment && segment.listingId || 0);
+      const segmentNights = Number(segment && segment.nights || 0);
+      if (!Number.isInteger(preferredId) || preferredId <= 0 || segmentListingId !== preferredId || !Number.isFinite(segmentNights) || segmentNights <= 0) {
+        return sum;
+      }
+      return sum + segmentNights;
+    }, 0);
+
+    return {
+      option,
+      totalPrice,
+      moves,
+      preferredListingNights,
+      originalIndex: index
+    };
+  });
+
+  normalised.sort((left, right) => {
+    if (left.totalPrice !== right.totalPrice) {
+      return left.totalPrice - right.totalPrice;
+    }
+    if (left.moves !== right.moves) {
+      return left.moves - right.moves;
+    }
+    if (left.preferredListingNights !== right.preferredListingNights) {
+      return right.preferredListingNights - left.preferredListingNights;
+    }
+    return left.originalIndex - right.originalIndex;
+  });
+
+  return normalised.map((row) => row.option);
 }
 
 function getDefaultSharedResourceReservationStatus(resource) {
@@ -2176,6 +3256,32 @@ function normaliseCleanerId(value) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function normaliseListingPrice(value) {
+  if (value === null || value === undefined || value === '') {
+    return { value: null };
+  }
+
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue < 0) {
+    return { error: 'Pricing values must be zero or greater.' };
+  }
+
+  return { value: Math.round(numberValue * 100) / 100 };
+}
+
+function normaliseListingWholeNumber(value, fieldName, minValue) {
+  if (value === null || value === undefined || value === '') {
+    return { value: null };
+  }
+
+  const numberValue = Number(value);
+  if (!Number.isInteger(numberValue) || numberValue < minValue) {
+    return { error: fieldName + ' must be a whole number ' + (minValue > 0 ? 'greater than zero.' : 'zero or greater.') };
+  }
+
+  return { value: numberValue };
+}
+
 function isValidEmailAddress(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
 }
@@ -2404,7 +3510,38 @@ async function markUserValidated(userId) {
     [id]
   );
 
-  return getUserById(id);
+  const user = await getUserById(id);
+  const membershipsResult = await pool.query(
+    `
+      SELECT client_account_id, role, status
+      FROM client_memberships
+      WHERE user_id = $1
+        AND status = 'active'
+    `,
+    [id]
+  );
+
+  for (const membership of (membershipsResult.rows || [])) {
+    const clientAccountId = Number(membership && membership.client_account_id || 0);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0) {
+      continue;
+    }
+    await writeUserEventLog({
+      actorUserId: id,
+      clientAccountId,
+      eventType: 'client_user_validated',
+      description: 'Client Scoped User Validated - ' + String(user && user.email || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        userId: id,
+        userEmail: String(user && user.email || ''),
+        role: String(membership && membership.role || ''),
+        status: String(membership && membership.status || '')
+      }
+    });
+  }
+
+  return user;
 }
 
 async function sendAppEmail(input) {
@@ -2435,11 +3572,35 @@ async function sendAppEmail(input) {
 
       const result = await postmarkRes.json().catch(() => ({}));
       if (!postmarkRes.ok) {
-        return { ok: false, error: getPostmarkErrorMessage(result, postmarkRes.status) };
+        return {
+          ok: false,
+          error: getPostmarkErrorMessage(result, postmarkRes.status),
+          postmarkStatusCode: postmarkRes.status,
+          postmarkResponse: result
+        };
       }
-      return { ok: true };
+      await logEmailSentForCurrentRequest({
+        to,
+        fromAddress: POSTMARK_FROM,
+        subject,
+        textBody,
+        provider: 'postmark',
+        messageId: result && result.MessageID ? String(result.MessageID) : ''
+      });
+      return {
+        ok: true,
+        messageId: result && result.MessageID ? String(result.MessageID) : null,
+        postmarkResponse: result
+      };
     } catch (err) {
-      return { ok: false, error: 'Failed to send email via Postmark.' };
+      const errorMsg = 'Failed to send email via Postmark.';
+      console.error('[SendEmail] Postmark API error', {
+        error: errorMsg,
+        exception: String(err && err.message || err),
+        recipient: to,
+        timestamp: new Date().toISOString()
+      });
+      return { ok: false, error: errorMsg, exception: String(err && err.message || err) };
     }
   }
 
@@ -2463,6 +3624,14 @@ async function sendAppEmail(input) {
       to,
       subject,
       text: textBody
+    });
+    await logEmailSentForCurrentRequest({
+      to,
+      fromAddress: String(transportResult.from || ''),
+      subject,
+      textBody,
+      provider: 'smtp',
+      messageId: ''
     });
     return { ok: true };
   } catch {
@@ -2505,6 +3674,54 @@ async function sendSiteUserValidationEmail(req, user) {
   });
 }
 
+async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource) {
+  const emailAddress = normaliseOptionalEmail(reservation && reservation.email_address);
+  if (!emailAddress) {
+    return { ok: false, error: 'No guest email address found for reservation notification.' };
+  }
+
+  const baseUrl = getPreferredAppBaseUrl(req);
+  if (!baseUrl) {
+    return { ok: false, error: 'Cannot build login URL because APP_BASE_URL is not configured.' };
+  }
+
+  const loginUrl = baseUrl.replace(/\/$/, '') + '/index.html';
+  const guestName = [String(reservation.first_name || '').trim(), String(reservation.family_name || '').trim()]
+    .filter(Boolean)
+    .join(' ')
+    .trim() || 'Guest';
+  const arrivalDateTime = formatDateTimeForMessage(String(reservation.requested_start_at || ''));
+  const departureDateTime = formatDateTimeForMessage(String(reservation.requested_end_at || ''));
+  const amountText = Number(reservation.reservation_amount || 0).toFixed(2);
+  const resourceName = String(resource && resource.short_description || '').trim() || 'Reservation';
+  const reservationIdentifier = String(reservation.reservation_identifier || '').trim();
+  const lines = [
+    'Reservation Created - Online Payment Required',
+    '',
+    'Guest: ' + guestName,
+    'Reservation reference: ' + (reservationIdentifier || '-'),
+    'Resource: ' + resourceName,
+    'Arrival date & time: ' + arrivalDateTime,
+    'Departure date & time: ' + departureDateTime,
+    'Number of units: ' + String(Number(reservation.spaces_required || 1) || 1),
+    'Amount due: ' + amountText,
+    '',
+    'Please log in to your AutomaticPeople account to make payment: ',
+    loginUrl,
+    '',
+    'If you are new to the site, please follow the link in the separate email you receive to set up your password before you can complete payment.',
+    '',
+    'If you did not expect this email, you can ignore it.'
+  ];
+
+  const subject = 'Reservation created - online payment required';
+  return sendAppEmail({
+    to: emailAddress,
+    subject,
+    textBody: lines.join('\n')
+  });
+}
+
 async function sendPasswordResetEmail(req, user) {
   if (!user || !user.email) {
     return { ok: false, error: 'Cannot send password reset email without a user email.' };
@@ -2521,11 +3738,11 @@ async function sendPasswordResetEmail(req, user) {
   }
 
   const resetUrl = baseUrl + '/reset-password.html?token=' + encodeURIComponent(token);
-  const subject = 'Reset your AutomaticPeople password';
+  const subject = 'Enter or reset your AutomaticPeople password';
   const textBody = [
-    'A request was made to reset your AutomaticPeople password.',
+    'A request was made to enter or reset your AutomaticPeople password.',
     '',
-    'Reset your password using this link:',
+    'Enter or reset your password using this link:',
     resetUrl,
     '',
     'This link expires in 1 hour.',
@@ -3136,7 +4353,25 @@ async function createUnvalidatedSiteUserForInvite(input) {
     [username, email, passwordHash, firstName, familyName, country]
   );
 
-  return { user: result.rows[0] };
+  const createdUser = result.rows[0] || null;
+  if (createdUser && Number.isInteger(Number(createdUser.id)) && Number(createdUser.id) > 0) {
+    await writeUserEventLog({
+      actorUserId: Number(input && input.invitedByUserId || 0),
+      clientAccountId: Number(input && input.clientAccountId || 0),
+      eventType: 'spawned_user_created',
+      description: 'Spawned User Created - ' + String(createdUser.email || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        createdUserId: Number(createdUser.id),
+        createdUserEmail: String(createdUser.email || ''),
+        createdUserFirstName: String(createdUser.first_name || ''),
+        createdUserFamilyName: String(createdUser.family_name || ''),
+        source: 'team_invite'
+      }
+    });
+  }
+
+  return { user: createdUser };
 }
 
 async function setClientTeamRolesForUser(clientAccountId, invitedByUserId, targetUserId, rolesInput) {
@@ -3265,6 +4500,11 @@ async function removeTeamMemberFromClientScope(clientAccountId, targetUserId) {
     return { error: 'Site user not found.' };
   }
 
+  const deletedUser = await reassignCleanerReferencesForClientAccount(Number(clientAccountId), userId);
+  if (deletedUser && deletedUser.error) {
+    return deletedUser;
+  }
+
   const revokeResult = await pool.query(
     `
       UPDATE client_memberships
@@ -3298,30 +4538,13 @@ async function removeTeamMemberFromClientScope(clientAccountId, targetUserId) {
     );
   }
 
-  const remainingMemberships = await pool.query(
-    `
-      SELECT id
-      FROM client_memberships
-      WHERE user_id = $1
-        AND status IN ('active', 'invited')
-        AND (
-          role = 'Client'
-          OR (role IN ('Manager', 'Staff') AND client_account_id <> $2)
-        )
-      LIMIT 1
-    `,
-    [userId, Number(clientAccountId)]
-  );
-
-  let deletedFromSite = false;
-  if (!remainingMemberships.rows.length) {
-    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
-    deletedFromSite = true;
-  }
+  const cleanupResult = await removeSiteUserIfUnreferenced(userId);
+  const deletedFromSite = cleanupResult.deleted === true;
 
   return {
     removedRoles: revokeResult.rows.map((row) => row.role),
-    deletedFromSite
+    deletedFromSite,
+    reassignedToDeletedUserId: deletedUser ? deletedUser.deletedUserId : null
   };
 }
 
@@ -3336,6 +4559,9 @@ async function getTeamMemberRemovalImpact(clientAccountId, targetUserId) {
   const user = await getUserById(userId);
   if (!user) {
     return { error: 'Site user not found.' };
+  }
+  if (isDeletedSiteUserRecord(user)) {
+    return { error: 'Deleted placeholder users cannot be deleted.' };
   }
 
   const removableRolesResult = await pool.query(
@@ -3372,7 +4598,8 @@ async function getTeamMemberRemovalImpact(clientAccountId, targetUserId) {
 
   return {
     removedRoles: removableRolesResult.rows.map((row) => row.role),
-    deletedFromSite: !remainingMemberships.rows.length
+    willBeReassignedToDeleted: true,
+    willBePermanentlyDeletedAfterReassignment: !remainingMemberships.rows.length
   };
 }
 
@@ -3624,6 +4851,7 @@ async function ensureGuestSiteUserForClientAccount(input) {
   }
 
   let user = await findUserByEmail(email);
+  let spawnedNewUser = false;
   if (!user) {
     const username = await generateUniqueUsernameFromEmail(email);
     const temporaryPasswordHash = await bcrypt.hash(randomUUID() + 'Aa1!', SALT_ROUNDS);
@@ -3631,11 +4859,12 @@ async function ensureGuestSiteUserForClientAccount(input) {
       `
         INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
         VALUES ($1, $2, $3, $4, $5, '', FALSE)
-        RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, created_at
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
       `,
       [username, email, temporaryPasswordHash, firstName, familyName]
     );
     user = created.rows[0] || null;
+    spawnedNewUser = true;
   }
 
   if (!user || !Number.isInteger(Number(user.id)) || Number(user.id) <= 0) {
@@ -3706,6 +4935,24 @@ async function ensureGuestSiteUserForClientAccount(input) {
       sourceId
     ]
   );
+
+  if (spawnedNewUser) {
+    await writeUserEventLog({
+      actorUserId: ownerUserId,
+      clientAccountId,
+      eventType: 'spawned_user_created',
+      description: 'Spawned User Created - ' + String(email || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        createdUserId: Number(user.id || 0),
+        createdUserEmail: String(email || ''),
+        createdUserFirstName: String(firstName || ''),
+        createdUserFamilyName: String(familyName || ''),
+        sourceType,
+        sourceId: String(sourceId || '')
+      }
+    });
+  }
 
   return user;
 }
@@ -4126,6 +5373,685 @@ async function getSharedResourceByIdPublic(resourceId) {
   };
 }
 
+function mapReservationEnquiryLandingPageRow(row) {
+  const listingFilters = parseLandingPageListingFiltersJson(row && row.listing_filters_json);
+  const selectedListingIds = listingFilters.map((item) => Number(item.listingId)).filter((id) => Number.isInteger(id) && id > 0);
+  const paymentMethod = normaliseLandingPagePaymentMethod(row && row.payment_method) || 'bank_transfer';
+  return {
+    id: Number(row && row.id || 0),
+    user_id: Number(row && row.user_id || 0),
+    client_account_id: row && row.client_account_id ? Number(row.client_account_id) : null,
+    name: String(row && row.name || ''),
+    public_slug: String(row && row.public_slug || ''),
+    preferred_listing_id: row && row.preferred_listing_id ? Number(row.preferred_listing_id) : null,
+    preferred_listing_name: String(row && row.preferred_listing_name || ''),
+    description_html: sanitiseRichTextHtml(row && row.description_html || ''),
+    notes_html: sanitiseRichTextHtml(row && row.notes_html || ''),
+    listing_filters: listingFilters,
+    selected_listing_ids: selectedListingIds,
+    percentage_discount: row && row.percentage_discount !== null && row.percentage_discount !== undefined
+      ? Number(row.percentage_discount)
+      : 0,
+    payment_method: paymentMethod,
+    payment_bank_transfer: paymentMethod === 'bank_transfer',
+    payment_online: paymentMethod === 'online',
+    is_active: row && row.is_active === true,
+    created_at: row && row.created_at,
+    updated_at: row && row.updated_at
+  };
+}
+
+async function getReservationEnquiryLandingPagesForUser(userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.name,
+             relp.public_slug,
+             relp.preferred_listing_id,
+              relp.description_html,
+              relp.notes_html,
+              relp.listing_filters_json,
+              relp.percentage_discount,
+              relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             l.name AS preferred_listing_name
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN listings l ON l.id = relp.preferred_listing_id
+      WHERE relp.user_id = $1
+        AND relp.client_account_id = $2
+        AND relp.workflow_type = $3
+      ORDER BY LOWER(relp.name) ASC, relp.id ASC
+    `,
+    [Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_4]
+  );
+  return result.rows.map(mapReservationEnquiryLandingPageRow);
+}
+
+async function getReservationEnquiryLandingPageByIdForUser(id, userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.name,
+             relp.public_slug,
+             relp.preferred_listing_id,
+              relp.description_html,
+              relp.notes_html,
+              relp.listing_filters_json,
+              relp.percentage_discount,
+              relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             l.name AS preferred_listing_name
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN listings l ON l.id = relp.preferred_listing_id
+      WHERE relp.id = $1
+        AND relp.user_id = $2
+        AND relp.client_account_id = $3
+        AND relp.workflow_type = $4
+      LIMIT 1
+    `,
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_4]
+  );
+  return result.rows[0] ? mapReservationEnquiryLandingPageRow(result.rows[0]) : null;
+}
+
+async function ensureUniqueReservationEnquiryLandingPageSlug(clientAccountId, desiredSlug, excludeId) {
+  const baseSlug = slugifyLandingPageName(desiredSlug);
+  if (!baseSlug) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT public_slug
+      FROM reservation_enquiry_landing_pages
+      WHERE client_account_id = $1
+        AND ($2::BIGINT IS NULL OR id <> $2)
+    `,
+    [Number(clientAccountId), excludeId ? Number(excludeId) : null]
+  );
+
+  const existing = new Set(result.rows.map((row) => String(row.public_slug || '').trim().toLowerCase()).filter(Boolean));
+  if (!existing.has(baseSlug)) {
+    return baseSlug;
+  }
+
+  for (let i = 2; i <= 9999; i += 1) {
+    const candidate = (baseSlug + '-' + String(i)).slice(0, 120);
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return (baseSlug + '-' + String(Date.now())).slice(0, 120);
+}
+
+async function createReservationEnquiryLandingPageForUser(input) {
+  const name = normaliseLandingPageName(input && input.name);
+  const requestedSlug = normaliseLandingPageSlug(input && input.publicSlug, name);
+  const listingFilters = parseLandingPageListingFilters(input && input.listingFilters);
+  const preferredListingId = listingFilters[0] ? Number(listingFilters[0].listingId) : null;
+  const descriptionHtml = sanitiseRichTextHtml(input && input.descriptionHtml);
+  const notesHtml = sanitiseRichTextHtml(input && input.notesHtml);
+  const percentageDiscount = normaliseLandingPagePercentageDiscount(input && input.percentageDiscount);
+  const paymentMethod = normaliseLandingPagePaymentMethod(input && input.paymentMethod);
+  const isActive = !(input && input.isActive === false);
+
+  if (!name) {
+    return { error: 'Landing page name is required.' };
+  }
+  if (!requestedSlug) {
+    return { error: 'Landing page slug is required.' };
+  }
+  if (!listingFilters.length) {
+    return { error: 'Select at least one listing for this landing page.' };
+  }
+  if (percentageDiscount === null) {
+    return { error: 'Percentage discount must be between 0 and 100.' };
+  }
+  if (!paymentMethod) {
+    return { error: 'Choose one payment method: Bank Transfer or Online.' };
+  }
+
+  try {
+    const slug = await ensureUniqueReservationEnquiryLandingPageSlug(input.clientAccountId, requestedSlug, null);
+    if (!slug) {
+      return { error: 'Landing page slug is required.' };
+    }
+
+    const result = await pool.query(
+      `
+        INSERT INTO reservation_enquiry_landing_pages (
+          user_id,
+          client_account_id,
+          workflow_type,
+          shared_resource_id,
+          name,
+          public_slug,
+          preferred_listing_id,
+          description_html,
+          notes_html,
+          listing_filters_json,
+          percentage_discount,
+          payment_method,
+          is_active,
+          updated_at
+        )
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+        RETURNING id,
+                  user_id,
+                  client_account_id,
+                  name,
+                  public_slug,
+                  preferred_listing_id,
+                  description_html,
+                  notes_html,
+                  listing_filters_json,
+                  percentage_discount,
+                  payment_method,
+                  is_active,
+                  created_at,
+                  updated_at
+      `,
+      [
+        Number(input.userId),
+        Number(input.clientAccountId),
+        LANDING_PAGE_WORKFLOW_4,
+        name,
+        slug,
+        preferredListingId,
+        descriptionHtml,
+        notesHtml,
+        JSON.stringify(listingFilters),
+        percentageDiscount,
+        paymentMethod,
+        isActive
+      ]
+    );
+    return { landingPage: mapReservationEnquiryLandingPageRow(result.rows[0]) };
+  } catch (err) {
+    throw err;
+  }
+}
+
+async function updateReservationEnquiryLandingPageForUser(input) {
+  const name = normaliseLandingPageName(input && input.name);
+  const requestedSlug = normaliseLandingPageSlug(input && input.publicSlug, name);
+  const listingFilters = parseLandingPageListingFilters(input && input.listingFilters);
+  const preferredListingId = listingFilters[0] ? Number(listingFilters[0].listingId) : null;
+  const descriptionHtml = sanitiseRichTextHtml(input && input.descriptionHtml);
+  const notesHtml = sanitiseRichTextHtml(input && input.notesHtml);
+  const percentageDiscount = normaliseLandingPagePercentageDiscount(input && input.percentageDiscount);
+  const paymentMethod = normaliseLandingPagePaymentMethod(input && input.paymentMethod);
+  const isActive = !(input && input.isActive === false);
+
+  if (!name) {
+    return { error: 'Landing page name is required.' };
+  }
+  if (!requestedSlug) {
+    return { error: 'Landing page slug is required.' };
+  }
+  if (!listingFilters.length) {
+    return { error: 'Select at least one listing for this landing page.' };
+  }
+  if (percentageDiscount === null) {
+    return { error: 'Percentage discount must be between 0 and 100.' };
+  }
+  if (!paymentMethod) {
+    return { error: 'Choose one payment method: Bank Transfer or Online.' };
+  }
+
+  try {
+    const slug = await ensureUniqueReservationEnquiryLandingPageSlug(input.clientAccountId, requestedSlug, input.id);
+    if (!slug) {
+      return { error: 'Landing page slug is required.' };
+    }
+
+    const result = await pool.query(
+      `
+        UPDATE reservation_enquiry_landing_pages
+        SET name = $1,
+            public_slug = $2,
+            preferred_listing_id = $3,
+            workflow_type = $4,
+            shared_resource_id = NULL,
+            description_html = $5,
+            notes_html = $6,
+            listing_filters_json = $7,
+            percentage_discount = $8,
+            payment_method = $9,
+            is_active = $10,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $11
+          AND user_id = $12
+          AND client_account_id = $13
+          AND workflow_type = $14
+        RETURNING id,
+                  user_id,
+                  client_account_id,
+                  name,
+                  public_slug,
+                  preferred_listing_id,
+                  description_html,
+                  notes_html,
+                  listing_filters_json,
+                  percentage_discount,
+                  payment_method,
+                  is_active,
+                  created_at,
+                  updated_at
+      `,
+      [
+        name,
+        slug,
+        preferredListingId,
+        LANDING_PAGE_WORKFLOW_4,
+        descriptionHtml,
+        notesHtml,
+        JSON.stringify(listingFilters),
+        percentageDiscount,
+        paymentMethod,
+        isActive,
+        Number(input.id),
+        Number(input.userId),
+        Number(input.clientAccountId),
+        LANDING_PAGE_WORKFLOW_4
+      ]
+    );
+    if (!result.rows[0]) {
+      return { error: 'Landing page not found.' };
+    }
+    return { landingPage: mapReservationEnquiryLandingPageRow(result.rows[0]) };
+  } catch (err) {
+    throw err;
+  }
+}
+
+async function deleteReservationEnquiryLandingPageForUser(id, userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      DELETE FROM reservation_enquiry_landing_pages
+      WHERE id = $1
+        AND user_id = $2
+        AND client_account_id = $3
+        AND workflow_type = $4
+      RETURNING id
+    `,
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_4]
+  );
+  if (!result.rows[0]) {
+    return { error: 'Landing page not found.' };
+  }
+  return { deletedLandingPageId: Number(result.rows[0].id) };
+}
+
+function mapFacilityEnquiryLandingPageRow(row) {
+  const paymentMethod = normaliseLandingPagePaymentMethod(row && row.payment_method) || 'bank_transfer';
+  return {
+    id: Number(row && row.id || 0),
+    user_id: Number(row && row.user_id || 0),
+    client_account_id: row && row.client_account_id ? Number(row.client_account_id) : null,
+    workflow_type: String(row && row.workflow_type || ''),
+    name: String(row && row.name || ''),
+    public_slug: String(row && row.public_slug || ''),
+    description_html: sanitiseRichTextHtml(row && row.description_html || ''),
+    notes_html: sanitiseRichTextHtml(row && row.notes_html || ''),
+    shared_resource_id: row && row.shared_resource_id ? Number(row.shared_resource_id) : null,
+    shared_resource_name: String(row && row.shared_resource_name || ''),
+    shared_resource_type: String(row && row.shared_resource_type || ''),
+    shared_resource_property_id: row && row.shared_resource_property_id ? Number(row.shared_resource_property_id) : null,
+    shared_resource_listing_id: row && row.shared_resource_listing_id ? Number(row.shared_resource_listing_id) : null,
+    payment_method: paymentMethod,
+    payment_bank_transfer: paymentMethod === 'bank_transfer',
+    payment_online: paymentMethod === 'online',
+    is_active: row && row.is_active === true,
+    created_at: row && row.created_at,
+    updated_at: row && row.updated_at
+  };
+}
+
+async function getFacilityEnquiryLandingPagesForUser(userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.workflow_type,
+             relp.name,
+             relp.public_slug,
+             relp.description_html,
+             relp.notes_html,
+             relp.shared_resource_id,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             sr.short_description AS shared_resource_name,
+             sr.resource_type AS shared_resource_type,
+             sr.property_id AS shared_resource_property_id,
+             sr.listing_id AS shared_resource_listing_id
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN shared_resources sr ON sr.id = relp.shared_resource_id
+      WHERE relp.user_id = $1
+        AND relp.client_account_id = $2
+        AND relp.workflow_type = $3
+      ORDER BY LOWER(relp.name) ASC, relp.id ASC
+    `,
+    [Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_5]
+  );
+  return result.rows.map(mapFacilityEnquiryLandingPageRow);
+}
+
+async function getFacilityEnquiryLandingPageByIdForUser(id, userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.workflow_type,
+             relp.name,
+             relp.public_slug,
+             relp.description_html,
+             relp.notes_html,
+             relp.shared_resource_id,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             sr.short_description AS shared_resource_name,
+             sr.resource_type AS shared_resource_type,
+             sr.property_id AS shared_resource_property_id,
+             sr.listing_id AS shared_resource_listing_id
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN shared_resources sr ON sr.id = relp.shared_resource_id
+      WHERE relp.id = $1
+        AND relp.user_id = $2
+        AND relp.client_account_id = $3
+        AND relp.workflow_type = $4
+      LIMIT 1
+    `,
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_5]
+  );
+  return result.rows[0] ? mapFacilityEnquiryLandingPageRow(result.rows[0]) : null;
+}
+
+async function getActiveFacilityEnquiryLandingPageBySlug(slug) {
+  const normalisedSlug = normaliseLandingPageSlug(slug);
+  if (!normalisedSlug) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT relp.id,
+             relp.user_id,
+             relp.client_account_id,
+             relp.workflow_type,
+             relp.name,
+             relp.public_slug,
+             relp.description_html,
+             relp.notes_html,
+             relp.shared_resource_id,
+             relp.payment_method,
+             relp.is_active,
+             relp.created_at,
+             relp.updated_at,
+             sr.short_description AS shared_resource_name,
+             sr.resource_type AS shared_resource_type,
+             sr.property_id AS shared_resource_property_id,
+             sr.listing_id AS shared_resource_listing_id
+      FROM reservation_enquiry_landing_pages relp
+      LEFT JOIN shared_resources sr ON sr.id = relp.shared_resource_id
+      WHERE relp.public_slug = $1
+        AND relp.workflow_type = $2
+        AND relp.is_active = TRUE
+      LIMIT 1
+    `,
+    [normalisedSlug, LANDING_PAGE_WORKFLOW_5]
+  );
+
+  return result.rows[0] ? mapFacilityEnquiryLandingPageRow(result.rows[0]) : null;
+}
+
+async function createFacilityEnquiryLandingPageForUser(input) {
+  const name = normaliseLandingPageName(input && input.name);
+  const requestedSlug = normaliseLandingPageSlug(input && input.publicSlug, name);
+  const descriptionHtml = sanitiseRichTextHtml(input && input.descriptionHtml);
+  const notesHtml = sanitiseRichTextHtml(input && input.notesHtml);
+  const paymentMethod = normaliseLandingPagePaymentMethod(input && input.paymentMethod);
+  const isActive = !(input && input.isActive === false);
+  const sharedResourceId = normaliseOptionalPositiveInteger(input && input.sharedResourceId);
+
+  if (!name) {
+    return { error: 'Landing page name is required.' };
+  }
+  if (!requestedSlug) {
+    return { error: 'Landing page slug is required.' };
+  }
+  if (!sharedResourceId) {
+    return { error: 'Select one facility for this landing page.' };
+  }
+  if (!paymentMethod) {
+    return { error: 'Choose one payment method: Bank Transfer or Online.' };
+  }
+
+  const sharedResource = await getSharedResourceByIdForUser(sharedResourceId, Number(input.userId));
+  if (!sharedResource) {
+    return { error: 'Selected facility was not found.' };
+  }
+  if (Number(sharedResource.client_account_id || 0) !== Number(input.clientAccountId || 0)) {
+    return { error: 'Selected facility is not in your active account.' };
+  }
+
+  const slug = await ensureUniqueReservationEnquiryLandingPageSlug(input.clientAccountId, requestedSlug, null);
+  if (!slug) {
+    return { error: 'Landing page slug is required.' };
+  }
+
+  const result = await pool.query(
+    `
+      INSERT INTO reservation_enquiry_landing_pages (
+        user_id,
+        client_account_id,
+        workflow_type,
+        shared_resource_id,
+        name,
+        public_slug,
+        preferred_listing_id,
+        description_html,
+        notes_html,
+        listing_filters_json,
+        percentage_discount,
+        payment_method,
+        is_active,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, '[]', 0, $9, $10, CURRENT_TIMESTAMP)
+      RETURNING id,
+                user_id,
+                client_account_id,
+                workflow_type,
+                name,
+                public_slug,
+                description_html,
+                notes_html,
+                shared_resource_id,
+                payment_method,
+                is_active,
+                created_at,
+                updated_at
+    `,
+    [
+      Number(input.userId),
+      Number(input.clientAccountId),
+      LANDING_PAGE_WORKFLOW_5,
+      Number(sharedResourceId),
+      name,
+      slug,
+      descriptionHtml,
+      notesHtml,
+      paymentMethod,
+      isActive
+    ]
+  );
+
+  return { landingPage: mapFacilityEnquiryLandingPageRow(result.rows[0]) };
+}
+
+async function updateFacilityEnquiryLandingPageForUser(input) {
+  const name = normaliseLandingPageName(input && input.name);
+  const requestedSlug = normaliseLandingPageSlug(input && input.publicSlug, name);
+  const descriptionHtml = sanitiseRichTextHtml(input && input.descriptionHtml);
+  const notesHtml = sanitiseRichTextHtml(input && input.notesHtml);
+  const paymentMethod = normaliseLandingPagePaymentMethod(input && input.paymentMethod);
+  const isActive = !(input && input.isActive === false);
+  const sharedResourceId = normaliseOptionalPositiveInteger(input && input.sharedResourceId);
+
+  if (!name) {
+    return { error: 'Landing page name is required.' };
+  }
+  if (!requestedSlug) {
+    return { error: 'Landing page slug is required.' };
+  }
+  if (!sharedResourceId) {
+    return { error: 'Select one facility for this landing page.' };
+  }
+  if (!paymentMethod) {
+    return { error: 'Choose one payment method: Bank Transfer or Online.' };
+  }
+
+  const sharedResource = await getSharedResourceByIdForUser(sharedResourceId, Number(input.userId));
+  if (!sharedResource) {
+    return { error: 'Selected facility was not found.' };
+  }
+  if (Number(sharedResource.client_account_id || 0) !== Number(input.clientAccountId || 0)) {
+    return { error: 'Selected facility is not in your active account.' };
+  }
+
+  const slug = await ensureUniqueReservationEnquiryLandingPageSlug(input.clientAccountId, requestedSlug, input.id);
+  if (!slug) {
+    return { error: 'Landing page slug is required.' };
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE reservation_enquiry_landing_pages
+      SET name = $1,
+          public_slug = $2,
+          workflow_type = $3,
+          shared_resource_id = $4,
+          preferred_listing_id = NULL,
+          description_html = $5,
+          notes_html = $6,
+          listing_filters_json = '[]',
+          percentage_discount = 0,
+          payment_method = $7,
+          is_active = $8,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9
+        AND user_id = $10
+        AND client_account_id = $11
+        AND workflow_type = $12
+      RETURNING id,
+                user_id,
+                client_account_id,
+                workflow_type,
+                name,
+                public_slug,
+                description_html,
+                notes_html,
+                shared_resource_id,
+                payment_method,
+                is_active,
+                created_at,
+                updated_at
+    `,
+    [
+      name,
+      slug,
+      LANDING_PAGE_WORKFLOW_5,
+      Number(sharedResourceId),
+      descriptionHtml,
+      notesHtml,
+      paymentMethod,
+      isActive,
+      Number(input.id),
+      Number(input.userId),
+      Number(input.clientAccountId),
+      LANDING_PAGE_WORKFLOW_5
+    ]
+  );
+
+  if (!result.rows[0]) {
+    return { error: 'Landing page not found.' };
+  }
+
+  return { landingPage: mapFacilityEnquiryLandingPageRow(result.rows[0]) };
+}
+
+async function deleteFacilityEnquiryLandingPageForUser(id, userId, clientAccountId) {
+  const result = await pool.query(
+    `
+      DELETE FROM reservation_enquiry_landing_pages
+      WHERE id = $1
+        AND user_id = $2
+        AND client_account_id = $3
+        AND workflow_type = $4
+      RETURNING id
+    `,
+    [Number(id), Number(userId), Number(clientAccountId), LANDING_PAGE_WORKFLOW_5]
+  );
+  if (!result.rows[0]) {
+    return { error: 'Landing page not found.' };
+  }
+  return { deletedLandingPageId: Number(result.rows[0].id) };
+}
+
+function isFacilityEnquiryLandingPageAllowedByScope(req, row) {
+  if (!hasManagerAssignmentScope(req)) {
+    return true;
+  }
+
+  const sharedResource = {
+    id: Number(row && row.shared_resource_id || 0),
+    property_id: Number(row && row.shared_resource_property_id || 0) || null,
+    listing_id: Number(row && row.shared_resource_listing_id || 0) || null
+  };
+
+  if (!sharedResource.id) {
+    return false;
+  }
+
+  return isSharedResourceAllowedByScope(req, sharedResource);
+}
+
+function isReservationEnquiryLandingPageAllowedByScope(req, row) {
+  if (!hasManagerAssignmentScope(req)) {
+    return true;
+  }
+
+  const selectedListingIds = Array.isArray(row && row.selected_listing_ids)
+    ? row.selected_listing_ids
+    : [];
+  if (selectedListingIds.length) {
+    return selectedListingIds.some((listingId) => req.accessContext.assignmentScope.listingIdSet.has(Number(listingId)));
+  }
+
+  const listingId = Number(row && row.preferred_listing_id || 0);
+  if (Number.isInteger(listingId) && listingId > 0) {
+    return req.accessContext.assignmentScope.listingIdSet.has(listingId);
+  }
+
+  return false;
+}
+
 async function getListingIdsForSharedResource(resource) {
   const listings = await getListingsForUser(resource.user_id);
   if (resource.listing_id) {
@@ -4194,9 +6120,12 @@ function getPrivateReservationPaymentStatusLabel(row) {
     return status === 'awaiting_bank_transfer' ? 'outstanding' : 'paid';
   }
   if (paymentMethod === 'Online Payment') {
-    return 'paid';
+    return status === 'awaiting_online_payment' ? 'outstanding' : 'paid';
   }
-  return 'paid';
+  if (status.indexOf('awaiting_') === 0) {
+    return 'outstanding';
+  }
+  return status || 'paid';
 }
 
 function canConfirmPrivateReservationPayment(row) {
@@ -5368,13 +7297,39 @@ async function resolvePropertyForListing(userId, propertyId) {
   return ensureDefaultPropertyForUser(userId);
 }
 
-async function getAllUsers() {
-  
+function buildDeletedSiteUserUsername(clientAccountId) {
+  return 'deleted-client-' + String(clientAccountId || '').trim();
+}
 
-  const result = await pool.query(
-    'SELECT id, email, created_at FROM users ORDER BY email ASC'
-  );
-  return result.rows;
+function buildDeletedSiteUserEmail(clientAccountId) {
+  return 'deleted+client-' + String(clientAccountId || '').trim() + '@automaticpeople.local';
+}
+
+function isDeletedSiteUserRecord(user) {
+  const username = String(user && user.username || '').trim().toLowerCase();
+  const email = String(user && user.email || '').trim().toLowerCase();
+  return username.startsWith('deleted-client-') || (email.startsWith('deleted+client-') && email.endsWith('@automaticpeople.local'));
+}
+
+function filterVisibleSiteUsers(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (isDeletedSiteUserRecord(row)) {
+      return false;
+    }
+    return Array.isArray(row.memberships) && row.memberships.some((membership) => {
+      const status = String(membership && membership.status || '').trim();
+      return status === 'active' || status === 'invited';
+    });
+  });
+}
+
+async function getAllUsers() {
+  const users = await getAllSiteUsersWithMemberships();
+  return users.map((row) => ({
+    id: Number(row.id),
+    email: row.email,
+    created_at: row.created_at
+  }));
 }
 
 async function getAllSiteUsersWithMemberships() {
@@ -5412,11 +7367,11 @@ async function getAllSiteUsersWithMemberships() {
     `
   );
 
-  return result.rows.map((row) => ({
+  return filterVisibleSiteUsers(result.rows.map((row) => ({
     ...row,
     id: Number(row.id),
     memberships: Array.isArray(row.memberships) ? row.memberships : []
-  }));
+  })));
 }
 
 async function getSiteUserForAdmin(userId) {
@@ -5515,15 +7470,494 @@ async function updateSiteUserForAdmin(userId, input) {
   return { user: updated };
 }
 
-async function deleteUserAndData(userId) {
-  
+async function ensureDeletedSiteUserForClientAccount(clientAccountId) {
+  const accountId = Number(clientAccountId);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    return { error: 'Client account is required.' };
+  }
 
-  const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [userId]);
-  if (!result.rows[0]) {
+  const ownerUserId = await getClientOwnerUserId(accountId);
+  const ownerUser = ownerUserId ? await getUserById(ownerUserId) : null;
+  const familyName = String(ownerUser && ownerUser.family_name || '').trim() || ('Client ' + String(accountId));
+  const username = buildDeletedSiteUserUsername(accountId);
+  const email = buildDeletedSiteUserEmail(accountId);
+
+  let deletedUser = await findUserByEmail(email);
+  if (!deletedUser) {
+    const passwordHash = await bcrypt.hash(randomUUID() + 'Aa1!', SALT_ROUNDS);
+    const created = await pool.query(
+      `
+        INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
+        VALUES ($1, $2, $3, 'Deleted', $4, '', TRUE)
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
+      `,
+      [username, email, passwordHash, familyName]
+    );
+    deletedUser = created.rows[0] || null;
+  } else {
+    await pool.query(
+      `
+        UPDATE users
+        SET first_name = 'Deleted',
+            family_name = $2,
+            is_validated = TRUE
+        WHERE id = $1
+      `,
+      [Number(deletedUser.id), familyName]
+    );
+    deletedUser = await getUserById(Number(deletedUser.id));
+  }
+
+  if (!deletedUser || !Number.isInteger(Number(deletedUser.id)) || Number(deletedUser.id) <= 0) {
+    return { error: 'Failed to resolve Deleted site user.' };
+  }
+
+  for (const role of ['Manager', 'Staff', 'Guest']) {
+    await pool.query(
+      `
+        INSERT INTO client_memberships (client_account_id, user_id, role, status, invited_by_user_id)
+        VALUES ($1, $2, $3, 'active', $4)
+        ON CONFLICT (client_account_id, user_id, role)
+        DO UPDATE SET status = 'active', updated_at = CURRENT_TIMESTAMP
+      `,
+      [accountId, Number(deletedUser.id), role, ownerUserId || null]
+    );
+  }
+
+  let deletedCleanerId = null;
+  if (ownerUserId) {
+    await ensureCleanerRowsForStaffMembers(accountId, ownerUserId);
+    const cleanerResult = await pool.query(
+      `
+        SELECT id
+        FROM cleaners
+        WHERE user_id = $1
+          AND client_account_id = $2
+          AND cleaner_user_id = $3
+        ORDER BY id ASC
+        LIMIT 1
+      `,
+      [ownerUserId, accountId, Number(deletedUser.id)]
+    );
+    deletedCleanerId = cleanerResult.rows[0] ? Number(cleanerResult.rows[0].id) : null;
+  }
+
+  return {
+    deletedUserId: Number(deletedUser.id),
+    deletedCleanerId,
+    deletedEmail: email,
+    deletedFirstName: 'Deleted',
+    deletedFamilyName: familyName,
+    ownerUserId: ownerUserId || null
+  };
+}
+
+async function removeSiteUserIfUnreferenced(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { deleted: false };
+  }
+
+  const referenceResult = await pool.query(
+    `
+      SELECT (
+        EXISTS(SELECT 1 FROM client_memberships WHERE user_id = $1 AND status IN ('active', 'invited'))
+        OR EXISTS(SELECT 1 FROM guest_relationships WHERE guest_user_id = $1)
+        OR EXISTS(SELECT 1 FROM cleaners WHERE cleaner_user_id = $1)
+        OR EXISTS(SELECT 1 FROM booked_in_changes WHERE cleaner_user_id = $1)
+        OR EXISTS(SELECT 1 FROM listing_calendar_events WHERE guest_user_id = $1)
+      ) AS in_use
+    `,
+    [id]
+  );
+
+  if (referenceResult.rows[0] && referenceResult.rows[0].in_use === true) {
+    return { deleted: false };
+  }
+
+  const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+  return { deleted: Boolean(result.rows[0]) };
+}
+
+async function reassignCleanerReferencesForClientAccount(clientAccountId, targetUserId) {
+  const accountId = Number(clientAccountId);
+  const targetId = Number(targetUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(targetId) || targetId <= 0) {
+    return { error: 'Invalid scope or site user.' };
+  }
+
+  const deleted = await ensureDeletedSiteUserForClientAccount(accountId);
+  if (deleted.error) {
+    return deleted;
+  }
+
+  const targetCleanerRows = await pool.query(
+    `
+      SELECT id
+      FROM cleaners
+      WHERE client_account_id = $1
+        AND cleaner_user_id = $2
+    `,
+    [accountId, targetId]
+  );
+  const targetCleanerIds = targetCleanerRows.rows
+    .map((row) => Number(row.id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (deleted.deletedCleanerId) {
+    if (targetCleanerIds.length) {
+      await pool.query(
+        `
+          UPDATE listings
+          SET usual_cleaner_id = $1
+          WHERE client_account_id = $2
+            AND usual_cleaner_id = ANY($3::bigint[])
+        `,
+        [deleted.deletedCleanerId, accountId, targetCleanerIds]
+      );
+    }
+
+    await pool.query(
+      `
+        UPDATE booked_in_changes
+        SET cleaner_user_id = $1,
+            cleaner_id = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $3
+          AND (
+            cleaner_user_id = $4
+            OR cleaner_id = ANY($5::bigint[])
+          )
+      `,
+      [deleted.deletedUserId, deleted.deletedCleanerId, accountId, targetId, targetCleanerIds]
+    );
+  } else {
+    await pool.query(
+      `
+        UPDATE listings
+        SET usual_cleaner_id = NULL
+        WHERE client_account_id = $1
+          AND usual_cleaner_id = ANY($2::bigint[])
+      `,
+      [accountId, targetCleanerIds]
+    );
+
+    await pool.query(
+      `
+        UPDATE booked_in_changes
+        SET cleaner_user_id = NULL,
+            cleaner_id = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $1
+          AND (
+            cleaner_user_id = $2
+            OR cleaner_id = ANY($3::bigint[])
+          )
+      `,
+      [accountId, targetId, targetCleanerIds]
+    );
+  }
+
+  if (targetCleanerIds.length) {
+    await pool.query('DELETE FROM cleaners WHERE id = ANY($1::bigint[])', [targetCleanerIds]);
+  }
+
+  return deleted;
+}
+
+async function reassignGuestReferencesForClientAccount(clientAccountId, targetUserId) {
+  const accountId = Number(clientAccountId);
+  const targetId = Number(targetUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(targetId) || targetId <= 0) {
+    return { error: 'Invalid scope or site user.' };
+  }
+
+  const deleted = await ensureDeletedSiteUserForClientAccount(accountId);
+  if (deleted.error) {
+    return deleted;
+  }
+
+  const targetUser = await getUserById(targetId);
+  const targetEmail = String(targetUser && targetUser.email || '').trim().toLowerCase();
+
+  await pool.query(
+    `
+      UPDATE guest_relationships
+      SET guest_user_id = $1,
+          guest_email = 'deleted+guest-rel-' || id::text || '@automaticpeople.local',
+          guest_phone = '',
+          guest_first_name = $2,
+          guest_family_name = $3,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE client_account_id = $4
+        AND guest_user_id = $5
+    `,
+    [deleted.deletedUserId, deleted.deletedFirstName, deleted.deletedFamilyName, accountId, targetId]
+  );
+
+  await pool.query(
+    `
+      UPDATE listing_calendar_events lce
+      SET guest_user_id = $1
+      FROM listings l
+      WHERE l.id = lce.listing_id
+        AND l.client_account_id = $2
+        AND lce.guest_user_id = $3
+    `,
+    [deleted.deletedUserId, accountId, targetId]
+  );
+
+  if (targetEmail) {
+    await pool.query(
+      `
+        UPDATE reservation_activity
+        SET first_name = $1,
+            family_name = $2,
+            email_address = $3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $4
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $5
+      `,
+      [deleted.deletedFirstName, deleted.deletedFamilyName, deleted.deletedEmail, accountId, targetEmail]
+    );
+
+    await pool.query(
+      `
+        UPDATE shared_resource_reservations
+        SET first_name = $1,
+            family_name = $2,
+            email_address = $3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_account_id = $4
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $5
+      `,
+      [deleted.deletedFirstName, deleted.deletedFamilyName, deleted.deletedEmail, accountId, targetEmail]
+    );
+  }
+
+  return deleted;
+}
+
+async function removeGuestSiteUserFromClientScope(clientAccountId, targetUserId) {
+  const accountId = Number(clientAccountId);
+  const userId = Number(targetUserId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Number.isInteger(userId) || userId <= 0) {
+    return { error: 'Invalid guest site user.' };
+  }
+
+  const deleted = await reassignGuestReferencesForClientAccount(accountId, userId);
+  if (deleted.error) {
+    return deleted;
+  }
+
+  await pool.query(
+    `
+      UPDATE client_memberships
+      SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+      WHERE client_account_id = $1
+        AND user_id = $2
+        AND role = 'Guest'
+        AND status IN ('active', 'invited')
+    `,
+    [accountId, userId]
+  );
+
+  await removeSiteUserIfUnreferenced(userId);
+  return { deletedGuestUserId: userId, reassignedToDeletedUserId: deleted.deletedUserId };
+}
+
+async function deleteClientAccountAndScopedData(clientAccountId) {
+  const accountId = Number(clientAccountId);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    return { error: 'Invalid client account.' };
+  }
+
+  const impactedUsersResult = await pool.query(
+    `
+      SELECT DISTINCT user_id
+      FROM client_memberships
+      WHERE client_account_id = $1
+      UNION
+      SELECT DISTINCT guest_user_id AS user_id
+      FROM guest_relationships
+      WHERE client_account_id = $1
+        AND guest_user_id IS NOT NULL
+    `,
+    [accountId]
+  );
+  const impactedUserIds = impactedUsersResult.rows
+    .map((row) => Number(row.user_id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  const managerMembershipIdsResult = await pool.query(
+    `
+      SELECT id
+      FROM client_memberships
+      WHERE client_account_id = $1
+        AND role = 'Manager'
+    `,
+    [accountId]
+  );
+  const managerMembershipIds = managerMembershipIdsResult.rows
+    .map((row) => Number(row.id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (managerMembershipIds.length) {
+    await pool.query('DELETE FROM manager_property_assignments WHERE manager_membership_id = ANY($1::bigint[])', [managerMembershipIds]);
+    await pool.query('DELETE FROM manager_listing_assignments WHERE manager_membership_id = ANY($1::bigint[])', [managerMembershipIds]);
+  }
+
+  await pool.query('DELETE FROM listing_event_log WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM reservation_activity WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM booked_in_changes WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM shared_resource_reservations WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM shared_resources WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM guest_relationships WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM cleaners WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM feed_source_colors WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM listings WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM properties WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM client_memberships WHERE client_account_id = $1', [accountId]);
+  await pool.query('DELETE FROM client_accounts WHERE id = $1', [accountId]);
+
+  for (const impactedUserId of impactedUserIds) {
+    await removeSiteUserIfUnreferenced(impactedUserId);
+  }
+
+  return { deletedClientAccountId: accountId };
+}
+
+async function deleteUserAndData(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return { error: 'Invalid user id.' };
+  }
+
+  const user = await getUserById(id);
+  if (!user) {
     return { error: 'User not found.' };
   }
 
-  return { deletedUserId: Number(result.rows[0].id) };
+  const deletedOwnerClientIds = new Set();
+  const ownerAccountsResult = await pool.query(
+    `
+      SELECT client_account_id
+      FROM client_memberships
+      WHERE user_id = $1
+        AND role = 'Client'
+        AND status IN ('active', 'invited')
+      ORDER BY client_account_id ASC
+    `,
+    [id]
+  );
+
+  for (const row of ownerAccountsResult.rows) {
+    const clientAccountId = Number(row.client_account_id);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || deletedOwnerClientIds.has(clientAccountId)) {
+      continue;
+    }
+    deletedOwnerClientIds.add(clientAccountId);
+    await deleteClientAccountAndScopedData(clientAccountId);
+  }
+
+  const processedTeamClientIds = new Set();
+  const teamAccountsResult = await pool.query(
+    `
+      SELECT DISTINCT client_account_id
+      FROM client_memberships
+      WHERE user_id = $1
+        AND role IN ('Manager', 'Staff')
+        AND status IN ('active', 'invited')
+      ORDER BY client_account_id ASC
+    `,
+    [id]
+  );
+  for (const row of teamAccountsResult.rows) {
+    const clientAccountId = Number(row.client_account_id);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || deletedOwnerClientIds.has(clientAccountId) || processedTeamClientIds.has(clientAccountId)) {
+      continue;
+    }
+    processedTeamClientIds.add(clientAccountId);
+    const teamResult = await removeTeamMemberFromClientScope(clientAccountId, id);
+    if (teamResult && teamResult.error) {
+      // Treat stale team membership records as no-op to keep global admin deletion resilient.
+      if (String(teamResult.error).toLowerCase().indexOf('not a team member') === -1) {
+        return { error: teamResult.error };
+      }
+    }
+  }
+
+  const processedGuestClientIds = new Set();
+  const guestAccountsResult = await pool.query(
+    `
+      SELECT DISTINCT client_account_id
+      FROM (
+        SELECT client_account_id
+        FROM client_memberships
+        WHERE user_id = $1
+          AND role = 'Guest'
+          AND status IN ('active', 'invited')
+        UNION
+        SELECT client_account_id
+        FROM guest_relationships
+        WHERE guest_user_id = $1
+      ) scoped
+      ORDER BY client_account_id ASC
+    `,
+    [id]
+  );
+  for (const row of guestAccountsResult.rows) {
+    const clientAccountId = Number(row.client_account_id);
+    if (!Number.isInteger(clientAccountId) || clientAccountId <= 0 || deletedOwnerClientIds.has(clientAccountId) || processedGuestClientIds.has(clientAccountId)) {
+      continue;
+    }
+    processedGuestClientIds.add(clientAccountId);
+    const guestResult = await removeGuestSiteUserFromClientScope(clientAccountId, id);
+    if (guestResult && guestResult.error) {
+      // Treat stale guest membership records as no-op to keep global admin deletion resilient.
+      if (String(guestResult.error).toLowerCase().indexOf('invalid guest site user') === -1) {
+        return { error: guestResult.error };
+      }
+    }
+  }
+
+  const cleanupResult = await removeSiteUserIfUnreferenced(id);
+  if (cleanupResult.deleted !== true) {
+    const blockingRefs = await pool.query(
+      `
+        SELECT
+          (SELECT COUNT(*)::int FROM client_memberships WHERE user_id = $1 AND status IN ('active', 'invited')) AS active_memberships,
+          (SELECT COUNT(*)::int FROM guest_relationships WHERE guest_user_id = $1) AS guest_relationships,
+          (SELECT COUNT(*)::int FROM cleaners WHERE cleaner_user_id = $1) AS cleaner_links,
+          (SELECT COUNT(*)::int FROM booked_in_changes WHERE cleaner_user_id = $1) AS booked_in_links,
+          (SELECT COUNT(*)::int FROM listing_calendar_events WHERE guest_user_id = $1) AS listing_calendar_guest_links
+      `,
+      [id]
+    );
+    const row = blockingRefs.rows[0] || {};
+    const counts = [
+      Number(row.active_memberships || 0),
+      Number(row.guest_relationships || 0),
+      Number(row.cleaner_links || 0),
+      Number(row.booked_in_links || 0),
+      Number(row.listing_calendar_guest_links || 0)
+    ];
+    const totalBlocking = counts.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+    if (totalBlocking > 0) {
+      return {
+        error: 'User still has linked records and cannot be deleted yet.',
+        blockingReferences: {
+          activeMemberships: Number(row.active_memberships || 0),
+          guestRelationships: Number(row.guest_relationships || 0),
+          cleanerLinks: Number(row.cleaner_links || 0),
+          bookedInLinks: Number(row.booked_in_links || 0),
+          listingCalendarGuestLinks: Number(row.listing_calendar_guest_links || 0)
+        }
+      };
+    }
+  }
+
+  return { deletedUserId: id };
 }
 
 async function getListingsForUser(userId) {
@@ -5542,7 +7976,7 @@ async function getListingsForUser(userId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.no_change_days, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.user_id = $1
@@ -5560,7 +7994,7 @@ async function getListingByIdForUser(listingId, userId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.client_account_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.client_account_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.id = $1 AND l.user_id = $2
@@ -5592,7 +8026,7 @@ async function getListingById(listingId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.id = $1
@@ -5676,7 +8110,7 @@ function isValidIcsAccessToken(listing, token) {
   return timingSafeEqual(expectedBuffer, providedBuffer);
 }
 
-async function createListingForUser(userId, name, propertyId, dateBasis, usualCleanerId, noChangeDays) {
+async function createListingForUser(userId, name, propertyId, dateBasis, usualCleanerId, noChangeDays, perNightPrice, perStayPrice, maxGuests, baseOccupancy, additionalGuestUpliftPct) {
   
 
   try {
@@ -5690,9 +8124,38 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
       return { error: noChangeDaysNormalised.error };
     }
 
+    const perNightPriceNormalised = normaliseListingPrice(perNightPrice);
+    if (perNightPriceNormalised.error) {
+      return { error: perNightPriceNormalised.error };
+    }
+
+    const perStayPriceNormalised = normaliseListingPrice(perStayPrice);
+    if (perStayPriceNormalised.error) {
+      return { error: perStayPriceNormalised.error };
+    }
+
+    const maxGuestsNormalised = normaliseListingWholeNumber(maxGuests, 'Maximum Number Of Guests', 1);
+    if (maxGuestsNormalised.error) {
+      return { error: maxGuestsNormalised.error };
+    }
+
+    const baseOccupancyNormalised = normaliseListingWholeNumber(baseOccupancy, 'Base Occupancy', 0);
+    if (baseOccupancyNormalised.error) {
+      return { error: baseOccupancyNormalised.error };
+    }
+
+    if (maxGuestsNormalised.value !== null && baseOccupancyNormalised.value !== null && baseOccupancyNormalised.value > maxGuestsNormalised.value) {
+      return { error: 'Base Occupancy cannot be greater than Maximum Number Of Guests.' };
+    }
+
+    const additionalGuestUpliftPctNormalised = normaliseListingPrice(additionalGuestUpliftPct);
+    if (additionalGuestUpliftPctNormalised.error) {
+      return { error: 'Percentage Price Uplift per Additional Guest must be zero or greater.' };
+    }
+
     const result = await pool.query(
       `
-        INSERT INTO listings (user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, no_change_days)
+        INSERT INTO listings (user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct)
         VALUES (
           $1,
           (SELECT client_account_id FROM properties WHERE id = $3),
@@ -5700,9 +8163,14 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
           $3,
           $4,
           $5,
-          $6
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11
         )
-        RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, no_change_days, created_at
+        RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct, created_at
       `,
       [
         userId,
@@ -5710,7 +8178,12 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
         property.id,
         normaliseDateBasis(dateBasis),
         normaliseCleanerId(usualCleanerId),
-        noChangeDaysNormalised.text
+        noChangeDaysNormalised.text,
+        perNightPriceNormalised.value,
+        perStayPriceNormalised.value,
+        maxGuestsNormalised.value,
+        baseOccupancyNormalised.value,
+        additionalGuestUpliftPctNormalised.value
       ]
     );
     result.rows[0].property_name = property.name;
@@ -5723,7 +8196,7 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
   }
 }
 
-async function updateListingForUser(listingId, userId, name, propertyId, dateBasis, usualCleanerId, emptyExport, blockAdvanceDays, noChangeDays) {
+async function updateListingForUser(listingId, userId, name, propertyId, dateBasis, usualCleanerId, emptyExport, blockAdvanceDays, noChangeDays, perNightPrice, perStayPrice, maxGuests, baseOccupancy, additionalGuestUpliftPct) {
   
 
   try {
@@ -5737,6 +8210,35 @@ async function updateListingForUser(listingId, userId, name, propertyId, dateBas
       return { error: noChangeDaysNormalised.error };
     }
 
+    const perNightPriceNormalised = normaliseListingPrice(perNightPrice);
+    if (perNightPriceNormalised.error) {
+      return { error: perNightPriceNormalised.error };
+    }
+
+    const perStayPriceNormalised = normaliseListingPrice(perStayPrice);
+    if (perStayPriceNormalised.error) {
+      return { error: perStayPriceNormalised.error };
+    }
+
+    const maxGuestsNormalised = normaliseListingWholeNumber(maxGuests, 'Maximum Number Of Guests', 1);
+    if (maxGuestsNormalised.error) {
+      return { error: maxGuestsNormalised.error };
+    }
+
+    const baseOccupancyNormalised = normaliseListingWholeNumber(baseOccupancy, 'Base Occupancy', 0);
+    if (baseOccupancyNormalised.error) {
+      return { error: baseOccupancyNormalised.error };
+    }
+
+    if (maxGuestsNormalised.value !== null && baseOccupancyNormalised.value !== null && baseOccupancyNormalised.value > maxGuestsNormalised.value) {
+      return { error: 'Base Occupancy cannot be greater than Maximum Number Of Guests.' };
+    }
+
+    const additionalGuestUpliftPctNormalised = normaliseListingPrice(additionalGuestUpliftPct);
+    if (additionalGuestUpliftPctNormalised.error) {
+      return { error: 'Percentage Price Uplift per Additional Guest must be zero or greater.' };
+    }
+
     const result = await pool.query(
       `
         UPDATE listings
@@ -5747,9 +8249,14 @@ async function updateListingForUser(listingId, userId, name, propertyId, dateBas
             usual_cleaner_id = $4,
             empty_export = $7,
             block_advance_days = $8,
-            no_change_days = $9
+            no_change_days = $9,
+            per_night_price = $10,
+            per_stay_price = $11,
+            max_guests = $12,
+            base_occupancy = $13,
+            additional_guest_uplift_pct = $14
         WHERE id = $5 AND user_id = $6
-        RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, empty_export, block_advance_days, no_change_days, created_at
+          RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, empty_export, block_advance_days, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct, created_at
       `,
       [
         name,
@@ -5760,7 +8267,12 @@ async function updateListingForUser(listingId, userId, name, propertyId, dateBas
         userId,
         emptyExport === true,
         (blockAdvanceDays !== null && blockAdvanceDays !== undefined && Number.isInteger(Number(blockAdvanceDays)) && Number(blockAdvanceDays) > 0) ? Number(blockAdvanceDays) : null,
-        noChangeDaysNormalised.text
+        noChangeDaysNormalised.text,
+        perNightPriceNormalised.value,
+        perStayPriceNormalised.value,
+        maxGuestsNormalised.value,
+        baseOccupancyNormalised.value,
+        additionalGuestUpliftPctNormalised.value
       ]
     );
 
@@ -5967,6 +8479,29 @@ async function updateGuestForClientAccount(clientAccountId, guestId, payload) {
 }
 
 async function deleteGuestForClientAccount(clientAccountId, guestId) {
+  const guest = await getGuestByIdForClientAccount(clientAccountId, guestId);
+  if (!guest) {
+    return { error: 'Guest not found.' };
+  }
+
+  const guestEmail = normaliseOptionalEmail(guest.guest_email);
+  if (guestEmail) {
+    const futureCounts = await getFutureReservationCountsForGuestEmail(clientAccountId, guestEmail);
+    const futurePrivateCount = Number(futureCounts.privateCount || 0);
+    const futureSharedCount = Number(futureCounts.sharedCount || 0);
+    if (futurePrivateCount > 0 || futureSharedCount > 0) {
+      return { error: 'Guest cannot be deleted while future reservations exist.' };
+    }
+  }
+
+  const guestUserId = Number(guest.guest_user_id || 0);
+  if (Number.isInteger(guestUserId) && guestUserId > 0) {
+    const removal = await removeGuestSiteUserFromClientScope(clientAccountId, guestUserId);
+    if (removal.error) {
+      return removal;
+    }
+  }
+
   const result = await pool.query(
     `
       DELETE FROM guest_relationships
@@ -5982,6 +8517,42 @@ async function deleteGuestForClientAccount(clientAccountId, guestId) {
   }
 
   return { deletedGuestId: Number(result.rows[0].id) };
+}
+
+async function getFutureReservationCountsForGuestEmail(clientAccountId, guestEmail) {
+  const accountId = Number(clientAccountId || 0);
+  const email = normaliseOptionalEmail(guestEmail);
+  if (!Number.isInteger(accountId) || accountId <= 0 || !email) {
+    return { privateCount: 0, sharedCount: 0 };
+  }
+
+  const futureReservationsResult = await pool.query(
+    `
+      WITH future_private AS (
+        SELECT COUNT(*)::bigint AS count_value
+        FROM reservation_activity
+        WHERE client_account_id = $1
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $2
+          AND reservation_checkout_date >= CURRENT_DATE
+      ),
+      future_shared AS (
+        SELECT COUNT(*)::bigint AS count_value
+        FROM shared_resource_reservations
+        WHERE client_account_id = $1
+          AND LOWER(TRIM(COALESCE(email_address, ''))) = $2
+          AND COALESCE(reservation_checkout_date, DATE(requested_end_at), DATE(requested_start_at)) >= CURRENT_DATE
+      )
+      SELECT
+        COALESCE((SELECT count_value FROM future_private), 0) AS private_count,
+        COALESCE((SELECT count_value FROM future_shared), 0) AS shared_count
+    `,
+    [accountId, email]
+  );
+
+  return {
+    privateCount: Number(futureReservationsResult.rows[0] && futureReservationsResult.rows[0].private_count || 0),
+    sharedCount: Number(futureReservationsResult.rows[0] && futureReservationsResult.rows[0].shared_count || 0)
+  };
 }
 
 async function upsertBookedInChangesForUser(userId, changes) {
@@ -6673,6 +9244,161 @@ async function writeEventLog(entry) {
   }
 }
 
+function getRequestContext() {
+  const store = requestContextStore.getStore();
+  if (!store || typeof store !== 'object') {
+    return { sessionUserId: null, activeClientAccountId: null };
+  }
+  const sessionUserId = Number(store.sessionUserId || 0);
+  const activeClientAccountId = Number(store.activeClientAccountId || 0);
+  return {
+    sessionUserId: Number.isInteger(sessionUserId) && sessionUserId > 0 ? sessionUserId : null,
+    activeClientAccountId: Number.isInteger(activeClientAccountId) && activeClientAccountId > 0 ? activeClientAccountId : null
+  };
+}
+
+async function writeUserEventLog(entry) {
+  const actorUserId = Number(entry && entry.actorUserId || 0);
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return;
+  }
+
+  const clientAccountIdRaw = Number(entry && entry.clientAccountId || 0);
+  const clientAccountId = Number.isInteger(clientAccountIdRaw) && clientAccountIdRaw > 0
+    ? clientAccountIdRaw
+    : null;
+  const eventType = String(entry && entry.eventType || '').trim();
+  const description = String(entry && entry.description || '').trim();
+  if (!eventType || !description) {
+    return;
+  }
+
+  let detailJson = '{}';
+  try {
+    detailJson = JSON.stringify(entry && entry.detail ? entry.detail : {});
+  } catch {
+    detailJson = '{}';
+  }
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO user_event_log (
+          actor_user_id,
+          client_account_id,
+          event_type,
+          description,
+          detail_json
+        )
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [actorUserId, clientAccountId, eventType, description, detailJson]
+    );
+  } catch (logErr) {
+    console.error('[UserEventLog] Failed to write user event log:', logErr && logErr.message ? logErr.message : logErr);
+  }
+}
+
+async function logEmailSentForCurrentRequest(detail) {
+  const context = getRequestContext();
+  if (!context.sessionUserId) {
+    return;
+  }
+
+  const toAddress = normaliseOptionalEmail(detail && detail.to);
+  const subject = String(detail && detail.subject || '').trim();
+  const fromAddress = normaliseOptionalEmail(detail && detail.fromAddress) || String(detail && detail.fromAddress || '').trim();
+  const textBody = String(detail && detail.textBody || '');
+  const provider = String(detail && detail.provider || '').trim();
+  const messageId = String(detail && detail.messageId || '').trim();
+
+  await writeUserEventLog({
+    actorUserId: context.sessionUserId,
+    clientAccountId: context.activeClientAccountId,
+    eventType: 'email_sent',
+    description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(toAddress || 'recipient'),
+    detail: {
+      dtg: new Date().toISOString(),
+      fromAddress: fromAddress || '',
+      toAddress: toAddress || '',
+      subject,
+      messageContent: textBody,
+      provider,
+      messageId
+    }
+  });
+}
+
+function buildCalendarSyncEventDescription(eventTypeLabel, listingName) {
+  const label = String(eventTypeLabel || '').trim() || 'Calendar Sync';
+  const name = String(listingName || '').trim() || 'Listing';
+  return label + ' - ' + name;
+}
+
+async function logCalendarSyncImportEvent(input) {
+  const listing = input && input.listing ? input.listing : null;
+  const actorUserId = Number(listing && listing.user_id || 0);
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return;
+  }
+
+  const clientAccountIdRaw = Number(input && input.clientAccountId || listing && listing.client_account_id || 0);
+  const clientAccountId = Number.isInteger(clientAccountIdRaw) && clientAccountIdRaw > 0 ? clientAccountIdRaw : null;
+  const listingName = String(listing && listing.name || ('Listing #' + String(listing && listing.id || ''))).trim();
+  const status = String(input && input.status || 'success').trim().toLowerCase();
+
+  await writeUserEventLog({
+    actorUserId,
+    clientAccountId,
+    eventType: 'calendar_sync_import',
+    description: buildCalendarSyncEventDescription('Cron Import Calendar Sync', listingName),
+    detail: {
+      dtg: new Date().toISOString(),
+      status,
+      listingId: Number(listing && listing.id || 0),
+      listingName,
+      importingChannelLabel: String(input && input.importingChannelLabel || '').trim(),
+      exportingChannelLabel: String(input && input.exportingChannelLabel || '').trim(),
+      importUrl: String(input && input.importUrl || '').trim(),
+      importedEvent: input && input.importedEvent ? input.importedEvent : null,
+      processingOutcome: String(input && input.processingOutcome || '').trim(),
+      error: String(input && input.error || '').trim()
+    }
+  });
+}
+
+async function logCalendarSyncExportRequestEvent(input) {
+  const listing = input && input.listing ? input.listing : null;
+  const actorUserId = Number(listing && listing.user_id || 0);
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return;
+  }
+
+  const clientAccountIdRaw = Number(input && input.clientAccountId || listing && listing.client_account_id || 0);
+  const clientAccountId = Number.isInteger(clientAccountIdRaw) && clientAccountIdRaw > 0 ? clientAccountIdRaw : null;
+  const listingName = String(listing && listing.name || ('Listing #' + String(listing && listing.id || ''))).trim();
+
+  await writeUserEventLog({
+    actorUserId,
+    clientAccountId,
+    eventType: 'calendar_sync_export_request',
+    description: buildCalendarSyncEventDescription('Calendar Sync Export Request', listingName),
+    detail: {
+      dtg: new Date().toISOString(),
+      listingId: Number(listing && listing.id || 0),
+      listingName,
+      requestSource: String(input && input.requestSource || '').trim(),
+      eventCount: Number(input && input.eventCount || 0),
+      consolidated: input && input.consolidated === true,
+      requestPath: String(input && input.requestPath || '').trim(),
+      query: input && input.query ? input.query : {},
+      exportedEventsPreview: Array.isArray(input && input.exportedEventsPreview)
+        ? input.exportedEventsPreview
+        : []
+    }
+  });
+}
+
 async function getManagerEmailsForClientAccount(clientAccountId) {
   const accountId = Number(clientAccountId);
   if (!Number.isInteger(accountId) || accountId <= 0) {
@@ -6924,6 +9650,17 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
     console.error(`[CalendarSync] Listing ${listingId} channel "${channel.label}": ${fetched.error}`);
     const exportingLabelErr = await findExportingChannelLabel(importUrl);
     await logIcsTransaction({ listingId, channelId, importingChannelLabel: channel.label, exportingChannelLabel: exportingLabelErr, importUrl, status: 'error', eventCount: 0, rawPayload: '', errorText: fetched.error });
+    await logCalendarSyncImportEvent({
+      listing,
+      clientAccountId,
+      importingChannelLabel: channel.label,
+      exportingChannelLabel: exportingLabelErr,
+      importUrl,
+      status: 'error',
+      processingOutcome: 'fetch_error',
+      error: fetched.error,
+      importedEvent: null
+    });
     return;
   }
 
@@ -6993,12 +9730,44 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
           subject: `Calendar Conflict - Listing ${listingId}`,
           introText: conflictDesc
         });
+
+        await logCalendarSyncImportEvent({
+          listing,
+          clientAccountId,
+          importingChannelLabel: channel.label,
+          exportingChannelLabel: exportingLabel,
+          importUrl,
+          status: 'success',
+          processingOutcome: 'exact_match_conflict_flagged',
+          importedEvent: {
+            start: importStart,
+            end: importEnd,
+            title: String(processedEvent.title || '').trim(),
+            calendarEventId: Number(exactMatch.id)
+          }
+        });
       } else {
         // If already in conflict, no further action (avoid duplicate alerts)
         await pool.query(
           'UPDATE listing_calendar_events SET last_synced_at = $1 WHERE id = $2',
           [now, exactMatch.id]
         );
+
+        await logCalendarSyncImportEvent({
+          listing,
+          clientAccountId,
+          importingChannelLabel: channel.label,
+          exportingChannelLabel: exportingLabel,
+          importUrl,
+          status: 'success',
+          processingOutcome: 'exact_match_refreshed',
+          importedEvent: {
+            start: importStart,
+            end: importEnd,
+            title: String(processedEvent.title || '').trim(),
+            calendarEventId: Number(exactMatch.id)
+          }
+        });
       }
       continue;
     }
@@ -7039,6 +9808,24 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
           affectedEventId: Number(existing.id)
         });
       }
+
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: 'existing_event_date_changed',
+        importedEvent: {
+          oldStart,
+          oldEnd,
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: Number(existing.id)
+        }
+      });
       continue;
     }
 
@@ -7117,6 +9904,39 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         listingId,
         subject: `Calendar Conflict - Listing ${listingId}`,
         introText: conflictDesc
+      });
+
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: 'new_event_conflict_created',
+        importedEvent: {
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: newEventId,
+          conflictingEventIds: conflictEventIds
+        }
+      });
+    } else {
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: 'new_event_created',
+        importedEvent: {
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: newEventId
+        }
       });
     }
   }
@@ -7259,14 +10079,14 @@ async function fetchEventsFromCalendarUrl(calendarUrl) {
 }
 
 // ── Middleware ───────────────────────────────────────────────────────────────
-if (process.env.NODE_ENV === 'production') {
+if (TRUST_PROXY_ENABLED) {
   app.set('trust proxy', 1);
 }
 
 app.use(express.json({
   limit: '5mb',
   verify: (req, _res, buf) => {
-    if (req.originalUrl === '/api/stripe/webhook') {
+    if (String(req.originalUrl || '').startsWith('/api/stripe/webhook')) {
       req.rawBody = buf.toString('utf8');
     }
   }
@@ -7284,6 +10104,15 @@ app.use(session({
     maxAge: 1000 * 60 * 60 // 1 hour
   }
 }));
+
+app.use((req, _res, next) => {
+  requestContextStore.run({
+    sessionUserId: req.session && req.session.userId ? Number(req.session.userId) : null,
+    activeClientAccountId: req.session && req.session.activeClientAccountId ? Number(req.session.activeClientAccountId) : null
+  }, () => {
+    next();
+  });
+});
 
 // Serve admin page at root for admin subdomain hostnames.
 app.use((req, res, next) => {
@@ -7480,6 +10309,17 @@ app.use('/api', async (req, res, next) => {
 
   const pathValue = String(req.path || '');
   if (pathValue.startsWith('/admin/')) {
+    return next();
+  }
+
+  const publicAuthWriteEndpoints = new Set([
+    '/signup',
+    '/login',
+    '/account/validate',
+    '/account/password-reset/request',
+    '/account/password-reset/confirm'
+  ]);
+  if (publicAuthWriteEndpoints.has(pathValue)) {
     return next();
   }
 
@@ -8134,7 +10974,7 @@ app.put('/api/admin/site-users/:userId', requireAdminAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/admin/users/:userId
+// DELETE /api/admin/users/:userId — delete site user globally; for each client membership, resources are reassigned to that client's Deleted user; site user is removed if unreferenced after all reassignments
 app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -8144,12 +10984,21 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
   try {
     const result = await deleteUserAndData(userId);
     if (result.error) {
+      if (result.error === 'User still has linked records and cannot be deleted yet.') {
+        return res.status(409).json({
+          error: result.error,
+          blockingReferences: result.blockingReferences || null
+        });
+      }
       return res.status(404).json({ error: result.error });
     }
     return res.json({ message: 'User deleted.', deletedUserId: result.deletedUserId });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Failed to delete user.' });
+    return res.status(500).json({
+      error: err && err.message ? String(err.message) : 'Failed to delete user.',
+      details: err && err.detail ? String(err.detail) : ''
+    });
   }
 });
 
@@ -8274,6 +11123,149 @@ app.post('/api/admin/email/test/send', requireAdminAuth, async (req, res) => {
   } catch (err) {
     console.error('Postmark test email failed:', err);
     return res.status(500).json({ error: 'Failed to send test email.' });
+  }
+});
+
+// GET /api/admin/stripe/payment-intents/:paymentIntentId — diagnostic view for Stripe payment intent linkage
+app.get('/api/admin/stripe/payment-intents/:paymentIntentId', requireAdminAuth, async (req, res) => {
+  const paymentIntentId = String(req.params.paymentIntentId || '').trim();
+  if (!paymentIntentId) {
+    return res.status(400).json({ error: 'Payment intent id is required.' });
+  }
+
+  const diagnostics = {
+    paymentIntentId,
+    stripe: {
+      configured: Boolean(stripeClient),
+      retrieved: false,
+      retrievalError: '',
+      status: '',
+      currency: '',
+      amount: null,
+      amountReceived: null,
+      receiptEmail: '',
+      metadata: {}
+    },
+    postmark: {
+      configured: Boolean(POSTMARK_SERVER_TOKEN && POSTMARK_FROM),
+      from: POSTMARK_FROM,
+      messageStream: POSTMARK_MESSAGE_STREAM
+    },
+    sharedResourceReservation: null,
+    reservationActivity: {
+      rows: [],
+      count: 0,
+      allConfirmed: false,
+      guestRelationshipFound: false
+    },
+    confirmationEmail: {
+      recipientCandidate: '',
+      canAttemptSend: false,
+      likelyAlreadySentByFinalizePath: false
+    },
+    notes: []
+  };
+
+  try {
+    if (stripeClient) {
+      try {
+        const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+        diagnostics.stripe.retrieved = true;
+        diagnostics.stripe.status = String(paymentIntent && paymentIntent.status || '');
+        diagnostics.stripe.currency = String(paymentIntent && paymentIntent.currency || '').toLowerCase();
+        diagnostics.stripe.amount = Number.isInteger(paymentIntent && paymentIntent.amount) ? Number(paymentIntent.amount) : null;
+        diagnostics.stripe.amountReceived = Number.isInteger(paymentIntent && paymentIntent.amount_received)
+          ? Number(paymentIntent.amount_received)
+          : null;
+        diagnostics.stripe.receiptEmail = String(paymentIntent && paymentIntent.receipt_email || '');
+        diagnostics.stripe.metadata = paymentIntent && paymentIntent.metadata ? paymentIntent.metadata : {};
+      } catch (err) {
+        diagnostics.stripe.retrievalError = String(err && err.message || err);
+      }
+    }
+
+    const sharedReservation = await getSharedResourceReservationByPaymentIntentId(paymentIntentId);
+    if (sharedReservation) {
+      diagnostics.sharedResourceReservation = {
+        id: Number(sharedReservation.id),
+        reservationIdentifier: String(sharedReservation.reservation_identifier || ''),
+        status: String(sharedReservation.status || ''),
+        paymentStatus: String(sharedReservation.payment_status || ''),
+        emailAddress: String(sharedReservation.email_address || ''),
+        clientAccountId: Number(sharedReservation.client_account_id || 0) || null
+      };
+
+      diagnostics.confirmationEmail.recipientCandidate = String(sharedReservation.email_address || '').trim();
+      diagnostics.confirmationEmail.canAttemptSend = Boolean(normaliseOptionalEmail(sharedReservation.email_address));
+    }
+
+    const reservationRows = await getReservationActivityRowsByPaymentIntentId(paymentIntentId);
+    diagnostics.reservationActivity.rows = reservationRows.map((row) => ({
+      id: Number(row.id),
+      reservationIdentifier: String(row.reservation_identifier || ''),
+      status: String(row.status || ''),
+      paymentStatus: String(row.payment_status || ''),
+      paymentMethod: String(row.payment_method || ''),
+      emailAddress: String(row.email_address || ''),
+      clientAccountId: Number(row.client_account_id || 0) || null,
+      sourceReservationId: Number(row.id)
+    }));
+    diagnostics.reservationActivity.count = reservationRows.length;
+    diagnostics.reservationActivity.allConfirmed = reservationRows.length > 0
+      && reservationRows.every((row) => String(row.status || '').toLowerCase() === 'confirmed');
+
+    if (!diagnostics.confirmationEmail.recipientCandidate && reservationRows[0]) {
+      diagnostics.confirmationEmail.recipientCandidate = String(reservationRows[0].email_address || '').trim();
+      diagnostics.confirmationEmail.canAttemptSend = Boolean(
+        normaliseOptionalEmail(diagnostics.confirmationEmail.recipientCandidate)
+        || normaliseOptionalEmail(diagnostics.stripe.receiptEmail)
+      );
+    }
+
+    if (reservationRows[0]) {
+      const firstReservation = reservationRows[0];
+      const guestLookup = await pool.query(
+        `
+          SELECT id
+          FROM guest_relationships
+          WHERE client_account_id = $1
+            AND guest_email = $2
+          ORDER BY id DESC
+          LIMIT 1
+        `,
+        [Number(firstReservation.client_account_id || 0), String(firstReservation.email_address || '').trim().toLowerCase()]
+      );
+      diagnostics.reservationActivity.guestRelationshipFound = Boolean(guestLookup.rows[0]);
+    }
+
+    diagnostics.confirmationEmail.likelyAlreadySentByFinalizePath = Boolean(
+      diagnostics.reservationActivity.allConfirmed
+      && diagnostics.reservationActivity.guestRelationshipFound
+    );
+
+    if (!diagnostics.stripe.configured) {
+      diagnostics.notes.push('Stripe is not configured on this server process.');
+    }
+    if (diagnostics.stripe.configured && !diagnostics.stripe.retrieved && diagnostics.stripe.retrievalError) {
+      diagnostics.notes.push('Stripe API lookup failed: ' + diagnostics.stripe.retrievalError);
+    }
+    if (!diagnostics.sharedResourceReservation && diagnostics.reservationActivity.count === 0) {
+      diagnostics.notes.push('No reservations are linked to this payment intent in local DB.');
+    }
+    if (diagnostics.reservationActivity.count > 0 && !diagnostics.reservationActivity.guestRelationshipFound) {
+      diagnostics.notes.push('Reservation rows exist but guest relationship was not found yet.');
+    }
+    if (!diagnostics.postmark.configured) {
+      diagnostics.notes.push('Postmark is not fully configured for application email sending.');
+    }
+
+    return res.json(diagnostics);
+  } catch (err) {
+    console.error('[Admin][StripeDiagnostics] Failed to inspect payment intent', {
+      paymentIntentId,
+      error: String(err && err.message || err)
+    });
+    return res.status(500).json({ error: 'Failed to inspect Stripe payment intent.' });
   }
 });
 
@@ -8519,7 +11511,7 @@ app.put('/api/access/team/:userId', requireScopedRole('Client'), async (req, res
   }
 });
 
-// DELETE /api/access/team/:userId — remove site user from current client team and delete site user if no memberships remain
+// DELETE /api/access/team/:userId — remove site user from current client team; resources are reassigned to Deleted user; site user deleted globally if no other memberships exist
 app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -8531,6 +11523,14 @@ app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, 
   }
 
   try {
+    const targetUser = await getUserById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Site user not found.' });
+    }
+    if (isDeletedSiteUserRecord(targetUser)) {
+      return res.status(400).json({ error: 'Deleted placeholder users cannot be deleted.' });
+    }
+
     const result = await removeTeamMemberFromClientScope(
       req.accessContext.activeClientAccountId,
       userId
@@ -8545,7 +11545,7 @@ app.delete('/api/access/team/:userId', requireScopedRole('Client'), async (req, 
   }
 });
 
-// GET /api/access/team/:userId/delete-impact — preview whether deletion is scope-only or site-wide
+// GET /api/access/team/:userId/delete-impact — preview removal impact: resources will be reassigned to client's Deleted user; site user may also be deleted if no other memberships exist
 app.get('/api/access/team/:userId/delete-impact', requireScopedRole('Client'), async (req, res) => {
   const userId = Number(req.params.userId);
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -8557,6 +11557,14 @@ app.get('/api/access/team/:userId/delete-impact', requireScopedRole('Client'), a
   }
 
   try {
+    const targetUser = await getUserById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Site user not found.' });
+    }
+    if (isDeletedSiteUserRecord(targetUser)) {
+      return res.status(400).json({ error: 'Deleted placeholder users cannot be deleted.' });
+    }
+
     const impact = await getTeamMemberRemovalImpact(
       req.accessContext.activeClientAccountId,
       userId
@@ -8635,6 +11643,8 @@ app.get('/api/me', requireAuth, async (req, res) => {
       firstName: user.first_name || '',
       familyName: user.family_name || '',
       email: user.email || req.session.email,
+      telephone: user.telephone || '',
+      postalAddress: user.postal_address || '',
       isValidated: user.is_validated !== false,
       consolidated_ics_token: buildConsolidatedIcsToken(req.session.userId),
       stripeConnect: formatStripeConnectStatus(user),
@@ -8650,15 +11660,457 @@ app.get('/api/me', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/guest/dashboard/reservations — guest-facing accommodation and facility reservations
+app.get('/api/guest/dashboard/reservations', requireAuth, async (req, res) => {
+  try {
+    const user = await getUserById(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(user.email) || '';
+
+    const accommodationResult = await pool.query(
+      `
+        SELECT ra.id,
+               ra.reservation_identifier,
+               ra.listing_id,
+               l.name AS listing_name,
+               ra.reservation_checkin_date::text AS reservation_checkin_date,
+               ra.reservation_checkout_date::text AS reservation_checkout_date,
+               ra.first_name,
+               ra.family_name,
+               ra.email_address,
+               ra.reservation_amount,
+               ra.payment_method,
+               ra.status,
+               ra.created_at,
+               (ra.reservation_checkout_date - ra.reservation_checkin_date) AS stay_nights
+        FROM reservation_activity ra
+        LEFT JOIN listings l ON l.id = ra.listing_id
+        WHERE (
+          ra.user_id = $1
+          OR ($2 <> '' AND LOWER(TRIM(COALESCE(ra.email_address, ''))) = $2)
+        )
+          AND ra.status <> ALL($3::text[])
+        ORDER BY ra.reservation_checkin_date DESC, ra.id DESC
+      `,
+      [Number(req.session.userId), normalizedEmail, ['cancelled', 'expired']]
+    );
+
+    const facilityResult = await pool.query(
+      `
+        SELECT srr.id,
+               srr.shared_resource_id,
+               sr.short_description AS resource_short_description,
+               srr.requested_start_at,
+               srr.requested_end_at,
+               srr.reservation_amount,
+               srr.payment_status,
+               srr.status,
+               srr.created_at,
+               srr.client_account_id
+        FROM shared_resource_reservations srr
+        LEFT JOIN shared_resources sr ON sr.id = srr.shared_resource_id
+        WHERE (
+          srr.user_id = $1
+          OR ($2 <> '' AND LOWER(TRIM(COALESCE(srr.email_address, ''))) = $2)
+        )
+          AND LOWER(TRIM(COALESCE(srr.status, ''))) <> 'cancelled'
+        ORDER BY srr.requested_start_at DESC NULLS LAST, srr.id DESC
+      `,
+      [Number(req.session.userId), normalizedEmail]
+    );
+
+    return res.json({
+      accommodation: accommodationResult.rows.map((row) => ({
+        id: Number(row.id || 0),
+        reservationIdentifier: String(row.reservation_identifier || '').trim(),
+        listingId: Number(row.listing_id || 0),
+        listingName: String(row.listing_name || '').trim() || '',
+        arrivalDate: String(row.reservation_checkin_date || '').trim(),
+        departureDate: String(row.reservation_checkout_date || '').trim(),
+        stayNights: Number(row.stay_nights || 0) || 0,
+        amount: row.reservation_amount !== null && row.reservation_amount !== undefined
+          ? Number(row.reservation_amount)
+          : null,
+        paymentMethod: String(row.payment_method || '').trim(),
+        status: String(row.status || '').trim(),
+        paymentStatus: getPrivateReservationPaymentStatusLabel(row),
+        createdAt: row.created_at ? String(row.created_at) : ''
+      })),
+      facilities: facilityResult.rows.map((row) => ({
+        id: Number(row.id || 0),
+        sharedResourceId: Number(row.shared_resource_id || 0),
+        resourceName: String(row.resource_short_description || '').trim() || ('Resource #' + String(row.shared_resource_id || '')),
+        requestedStartAt: row.requested_start_at ? String(row.requested_start_at) : '',
+        requestedEndAt: row.requested_end_at ? String(row.requested_end_at) : '',
+        amount: row.reservation_amount !== null && row.reservation_amount !== undefined
+          ? Number(row.reservation_amount)
+          : null,
+        paymentStatus: normaliseSharedResourceReservationPaymentStatus(row.payment_status),
+        status: String(row.status || '').trim(),
+        createdAt: row.created_at ? String(row.created_at) : ''
+      }))
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load guest reservations.' });
+  }
+});
+
+// POST /api/guest/dashboard/reservations/:reservationId/pay-now — start Stripe checkout for guest online-payment reservation
+app.post('/api/guest/dashboard/reservations/:reservationId/pay-now', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    if (String(reservation.payment_method || '').trim() !== 'Online Payment') {
+      return res.status(400).json({ error: 'This reservation is not configured for online payment.' });
+    }
+    if (String(reservation.status || '').trim().toLowerCase() !== 'awaiting_online_payment') {
+      return res.status(409).json({ error: 'This reservation is not awaiting online payment.' });
+    }
+
+    const amount = Number(reservation.reservation_amount || 0);
+    const amountMinor = toMinorUnits(amount);
+    if (!Number.isInteger(amountMinor) || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Reservation amount is invalid for online payment.' });
+    }
+
+    const hostUser = await getUserById(Number(reservation.user_id || 0));
+    if (!hostUser || !hostUser.stripe_account_id) {
+      return res.status(400).json({ error: 'Host Stripe account is not connected yet.' });
+    }
+    if (!isOnlinePaymentAvailableForHostUser(hostUser)) {
+      return res.status(400).json({ error: 'Host online payment is currently unavailable.' });
+    }
+
+    const stripeAccount = await stripeClient.accounts.retrieve(String(hostUser.stripe_account_id));
+    await setUserStripeConnectState(hostUser.id, {
+      stripe_account_id: stripeAccount.id,
+      stripe_onboarding_complete: stripeAccount.details_submitted === true,
+      stripe_charges_enabled: stripeAccount.charges_enabled === true,
+      stripe_payouts_enabled: stripeAccount.payouts_enabled === true
+    });
+    if (stripeAccount.charges_enabled !== true || stripeAccount.payouts_enabled !== true) {
+      return res.status(400).json({ error: 'Host Stripe account onboarding is incomplete.' });
+    }
+
+    const baseUrl = getPreferredAppBaseUrl(req);
+    if (!baseUrl) {
+      return res.status(400).json({ error: 'Unable to determine application URL for payment redirect.' });
+    }
+
+    const successUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=success&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const cancelUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=cancelled&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const listingName = String(reservation.listing_name || '').trim();
+    const propertyName = String(reservation.property_name || '').trim();
+
+    const checkoutSession = await stripeClient.checkout.sessions.create({
+      mode: 'payment',
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      customer_email: normaliseOptionalEmail(guestUser.email) || normaliseOptionalEmail(reservation.email_address) || undefined,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'gbp',
+            unit_amount: amountMinor,
+            product_data: {
+              name: 'Reservation ' + String(reservation.reservation_identifier || '').trim(),
+              description: (propertyName ? (propertyName + ' / ') : '') + (listingName || ('Listing #' + String(reservation.listing_id || '')))
+            }
+          }
+        }
+      ],
+      payment_intent_data: {
+        transfer_data: {
+          destination: String(stripeAccount.id)
+        },
+        metadata: {
+          reservation_type: 'guest_dashboard_private_reservation',
+          reservation_activity_id: String(reservation.id),
+          reservation_identifier: String(reservation.reservation_identifier || ''),
+          client_account_id: String(reservation.client_account_id || ''),
+          host_user_id: String(reservation.user_id || '')
+        }
+      },
+      metadata: {
+        reservation_type: 'guest_dashboard_private_reservation',
+        reservation_activity_id: String(reservation.id),
+        reservation_identifier: String(reservation.reservation_identifier || '')
+      }
+    });
+
+    const checkoutPaymentIntentId = checkoutSession && checkoutSession.payment_intent
+      ? String(checkoutSession.payment_intent)
+      : '';
+    if (checkoutPaymentIntentId) {
+      await updateReservationActivityPaymentById(reservation.id, {
+        paymentProvider: 'stripe',
+        paymentIntentId: checkoutPaymentIntentId,
+        paymentStatus: 'requires_payment_method',
+        paymentCurrency: 'gbp',
+        paymentAmountMinor: amountMinor,
+        paymentLastError: '',
+        status: 'awaiting_online_payment'
+      });
+    }
+
+    if (!checkoutSession || !checkoutSession.url) {
+      return res.status(500).json({ error: 'Failed to start Stripe checkout session.' });
+    }
+
+    return res.json({
+      checkoutUrl: String(checkoutSession.url),
+      reservationId: Number(reservation.id),
+      reservationIdentifier: String(reservation.reservation_identifier || ''),
+      checkoutSessionId: String(checkoutSession.id || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to start reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/reservations/:reservationId/sync-payment — reconcile a guest online payment after returning from Stripe
+app.post('/api/guest/dashboard/reservations/:reservationId/sync-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+    if (String(reservation.payment_method || '').trim() !== 'Online Payment') {
+      return res.status(400).json({ error: 'This reservation is not configured for online payment.' });
+    }
+
+    const providedSessionId = String(req.body && req.body.sessionId || req.query && req.query.sessionId || req.query && req.query.session_id || '').trim();
+    let paymentIntentId = String(reservation.payment_intent_id || '').trim();
+    if (!paymentIntentId && providedSessionId) {
+      const checkoutSession = await stripeClient.checkout.sessions.retrieve(providedSessionId);
+      if (checkoutSession && String(checkoutSession.payment_intent || '').trim()) {
+        paymentIntentId = String(checkoutSession.payment_intent).trim();
+        await updateReservationActivityPaymentById(reservation.id, {
+          paymentProvider: 'stripe',
+          paymentIntentId,
+          paymentStatus: String(checkoutSession.payment_status || '').toLowerCase() || 'requires_payment_method',
+          paymentCurrency: 'gbp',
+          paymentAmountMinor: toMinorUnits(reservation.reservation_amount),
+          paymentLastError: '',
+          status: 'awaiting_online_payment'
+        });
+      }
+    }
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: 'No payment intent is linked to this reservation yet. Please wait a moment and try again.' });
+    }
+
+    const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+    const finalized = await finalizeReservationActivityPaymentIntent(paymentIntent, { source: 'guest_return' });
+
+    const refreshedReservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    return res.json({
+      reconciled: Boolean(finalized && finalized.found),
+      paymentIntentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
+      reservation: refreshedReservation || reservation,
+      finalized: finalized || null
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to reconcile reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/reservations/:reservationId/notify-payment — guest notifies host a bank transfer was made
+app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    if (String(reservation.payment_method || '').trim() !== 'Bank Transfer') {
+      return res.status(400).json({ error: 'This reservation is not configured for bank transfer.' });
+    }
+    if (String(reservation.status || '').trim().toLowerCase() !== 'awaiting_bank_transfer') {
+      return res.status(409).json({ error: 'This reservation is not awaiting bank transfer.' });
+    }
+
+    const ownerUserId = await getClientOwnerUserId(Number(reservation.client_account_id || 0));
+    const ownerUser = ownerUserId ? await getUserById(ownerUserId) : null;
+    const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
+    if (!ownerEmail) {
+      return res.status(400).json({ error: 'Host contact email is not available for this reservation.' });
+    }
+
+    const notifyEmailResult = await sendAppEmail({
+      to: ownerEmail,
+      subject: 'Guest Bank Transfer Payment Notification',
+      textBody: [
+        'A guest has notified that bank transfer payment has been made.',
+        '',
+        'Reservation ID: ' + String(reservation.reservation_identifier || ''),
+        'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+        'Guest email: ' + String(reservation.email_address || ''),
+        'Property: ' + String(reservation.property_name || ''),
+        'Listing: ' + String(reservation.listing_name || ''),
+        'Arrival date: ' + String(reservation.reservation_checkin_date || ''),
+        'Departure date: ' + String(reservation.reservation_checkout_date || ''),
+        'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+        'Notified at: ' + new Date().toISOString(),
+        '',
+        'Please verify bank receipt and confirm payment in the dashboard.'
+      ].join('\n')
+    });
+
+    if (!notifyEmailResult.ok) {
+      return res.status(502).json({ error: notifyEmailResult.error || 'Failed to send payment notification email.' });
+    }
+
+    return res.json({
+      notified: true,
+      message: 'Payment notification sent to host.'
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to send payment notification.' });
+  }
+});
+
+// GET /api/guest/dashboard/profile — current user profile for guest dashboard account section
+app.get('/api/guest/dashboard/profile', requireAuth, async (req, res) => {
+  try {
+    const user = await getUserById(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    return res.json({
+      firstName: String(user.first_name || ''),
+      familyName: String(user.family_name || ''),
+      email: String(user.email || ''),
+      telephone: String(user.telephone || ''),
+      postalAddress: String(user.postal_address || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load guest profile.' });
+  }
+});
+
+// PUT /api/guest/dashboard/profile — update editable guest account fields
+app.put('/api/guest/dashboard/profile', requireAuth, async (req, res) => {
+  const telephone = sanitizeHtml(String(req.body.telephone || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 60);
+  const postalAddress = sanitizeHtml(String(req.body.postalAddress || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 500);
+
+  try {
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET telephone = $1,
+            postal_address = $2
+        WHERE id = $3
+        RETURNING first_name, family_name, email, telephone, postal_address
+      `,
+      [telephone, postalAddress, Number(req.session.userId)]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const updated = result.rows[0];
+    return res.json({
+      firstName: String(updated.first_name || ''),
+      familyName: String(updated.family_name || ''),
+      email: String(updated.email || ''),
+      telephone: String(updated.telephone || ''),
+      postalAddress: String(updated.postal_address || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to update guest profile.' });
+  }
+});
+
 // GET /api/account/bank-details — fetch bank details for active client account
 app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, res) => {
   try {
     const clientAccountId = req.accessContext.activeClientAccountId;
+    if (!clientAccountId) {
+      console.warn('[BankDetails] Fetch attempt with no activeClientAccountId set');
+      return res.status(400).json({ error: 'No active client account context.' });
+    }
+
     const result = await pool.query(
-      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business FROM client_accounts WHERE id = $1 LIMIT 1',
+      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
       [clientAccountId]
     );
     if (!result.rows[0]) {
+      console.warn('[BankDetails] Client account not found for clientAccountId:', clientAccountId);
       return res.status(404).json({ error: 'Client account not found.' });
     }
     const row = result.rows[0];
@@ -8666,10 +12118,12 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
       accountName: row.bank_account_name || '',
       sortCode: row.bank_sort_code || '',
       accountNumber: row.bank_account_number || '',
-      isBusiness: row.bank_is_business === true
+      isBusiness: row.bank_is_business === true,
+      iban: row.bank_iban || '',
+      bic: row.bank_bic || ''
     });
   } catch (err) {
-    console.error(err);
+    console.error('[BankDetails] Error loading bank details:', err);
     return res.status(500).json({ error: 'Failed to load bank details.' });
   }
 });
@@ -8679,19 +12133,49 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   const accountName = sanitizeHtml(String(req.body.accountName || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 200);
   const sortCode = sanitizeHtml(String(req.body.sortCode || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
   const accountNumber = sanitizeHtml(String(req.body.accountNumber || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
+  const iban = normaliseBankIban(sanitizeHtml(String(req.body.iban || '').trim(), { allowedTags: [], allowedAttributes: {} }));
+  const bic = normaliseBankBic(sanitizeHtml(String(req.body.bic || '').trim(), { allowedTags: [], allowedAttributes: {} }));
   const isBusiness = req.body.isBusiness === true || req.body.isBusiness === 'true';
+
+  if (!accountName || !sortCode || !accountNumber) {
+    return res.status(400).json({ error: 'Account name, sort code and account number are required.' });
+  }
+  if (!iban) {
+    return res.status(400).json({ error: 'IBAN is required.' });
+  }
+  if (!bic) {
+    return res.status(400).json({ error: 'BIC is required.' });
+  }
 
   try {
     const clientAccountId = req.accessContext.activeClientAccountId;
-    await pool.query(
+    if (!clientAccountId) {
+      console.warn('[BankDetails] Save attempt with no activeClientAccountId set');
+      return res.status(400).json({ error: 'No active client account context.' });
+    }
+
+    const result = await pool.query(
       `UPDATE client_accounts
-       SET bank_account_name = $1, bank_sort_code = $2, bank_account_number = $3, bank_is_business = $4, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5`,
-      [accountName, sortCode, accountNumber, isBusiness, clientAccountId]
+       SET bank_account_name = $1,
+           bank_sort_code = $2,
+           bank_account_number = $3,
+           bank_is_business = $4,
+           bank_iban = $5,
+           bank_bic = $6,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7`,
+      [accountName, sortCode, accountNumber, isBusiness, iban, bic, clientAccountId]
     );
-    return res.json({ accountName, sortCode, accountNumber, isBusiness });
+
+    if (result.rowCount === 0) {
+      console.warn('[BankDetails] Update affected 0 rows for clientAccountId:', clientAccountId);
+      return res.status(404).json({ error: 'Client account not found.' });
+    }
+
+    console.log('[BankDetails] Bank details updated successfully for clientAccountId:', clientAccountId);
+    return res.json({ accountName, sortCode, accountNumber, isBusiness, iban, bic });
   } catch (err) {
-    console.error(err);
+    console.error('[BankDetails] Error saving bank details:', err);
     return res.status(500).json({ error: 'Failed to save bank details.' });
   }
 });
@@ -8814,6 +12298,8 @@ app.post('/api/account/password-reset/confirm', async (req, res) => {
       [passwordHash, Number(user.id)]
     );
 
+    await markUserValidated(Number(user.id));
+
     return res.json({ message: 'Your password has been reset. You can now log in.' });
   } catch (err) {
     console.error(err);
@@ -8914,11 +12400,20 @@ app.post('/api/stripe/connect/start', requireAuth, async (req, res) => {
 // POST /api/stripe/webhook — Stripe event receiver for payment intent lifecycle
 app.post('/api/stripe/webhook', async (req, res) => {
   if (!stripeClient || !STRIPE_WEBHOOK_SECRET) {
+    console.warn('[Webhook] Stripe webhook is not configured', {
+      stripeClientConfigured: Boolean(stripeClient),
+      webhookSecretConfigured: Boolean(STRIPE_WEBHOOK_SECRET)
+    });
     return res.status(503).json({ error: 'Stripe webhook is not configured.' });
   }
 
   const signature = req.headers['stripe-signature'];
   if (!signature || !req.rawBody) {
+    console.warn('[Webhook] Missing Stripe signature or raw payload', {
+      hasSignature: Boolean(signature),
+      hasRawBody: Boolean(req.rawBody),
+      originalUrl: req.originalUrl
+    });
     return res.status(400).json({ error: 'Missing Stripe signature or raw payload.' });
   }
 
@@ -8931,9 +12426,26 @@ app.post('/api/stripe/webhook', async (req, res) => {
   }
 
   try {
+    console.log('[Webhook] Stripe event received', {
+      eventId: String(event && event.id || ''),
+      eventType: String(event && event.type || ''),
+      livemode: Boolean(event && event.livemode === true)
+    });
+
     if (event.type && event.type.startsWith('payment_intent.')) {
       const paymentIntent = event.data && event.data.object ? event.data.object : null;
       const paymentIntentId = paymentIntent && paymentIntent.id ? String(paymentIntent.id) : '';
+      console.log('[StripeDiagnostics][WebhookPaymentIntent]', {
+        eventType: String(event.type || ''),
+        eventId: String(event.id || ''),
+        paymentIntentId,
+        status: String(paymentIntent && paymentIntent.status || ''),
+        currency: String(paymentIntent && paymentIntent.currency || ''),
+        amount: Number.isInteger(paymentIntent && paymentIntent.amount) ? paymentIntent.amount : null,
+        amountReceived: Number.isInteger(paymentIntent && paymentIntent.amount_received) ? paymentIntent.amount_received : null,
+        receiptEmail: String(paymentIntent && paymentIntent.receipt_email || ''),
+        metadata: paymentIntent && paymentIntent.metadata ? paymentIntent.metadata : {}
+      });
       if (paymentIntentId) {
         const reservation = await getSharedResourceReservationByPaymentIntentId(paymentIntentId);
         if (reservation) {
@@ -8957,6 +12469,22 @@ app.post('/api/stripe/webhook', async (req, res) => {
               status: 'Confirmed'
             });
 
+            await writeUserEventLog({
+              actorUserId: Number(reservation.user_id || 0),
+              clientAccountId: Number(reservation.client_account_id || 0),
+              eventType: 'facility_payment_received',
+              description: 'Facility Payment Received - ' + String(reservation.reservation_identifier || ''),
+              detail: {
+                dtg: new Date().toISOString(),
+                paymentIntentId,
+                paymentStatus: String(paymentIntent && paymentIntent.status || ''),
+                amountMinor: Number(commonUpdate.paymentAmountMinor || 0),
+                currency: String(commonUpdate.paymentCurrency || ''),
+                reservationId: Number(reservation.id || 0),
+                reservationIdentifier: String(reservation.reservation_identifier || '')
+              }
+            });
+
             await ensureGuestSiteUserForClientAccount({
               clientAccountId: reservation.client_account_id,
               ownerUserId: reservation.user_id,
@@ -8966,18 +12494,89 @@ app.post('/api/stripe/webhook', async (req, res) => {
               sourceType: 'shared_resource_reservation',
               sourceId: String(reservation.id)
             });
+
+            if (reservation.email_address) {
+              const confirmEmailLines = [
+                'Reservation Payment Confirmed',
+                '',
+                'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+                'Reference: ' + String(reservation.reservation_identifier || ''),
+                'Starts: ' + String(reservation.requested_start_at || ''),
+                'Ends: ' + String(reservation.requested_end_at || ''),
+                'Amount paid: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+                '',
+                'Your reservation is now confirmed. Please keep your reference number for your records.'
+              ];
+              const confirmEmailResult = await sendAppEmail({
+                to: reservation.email_address,
+                subject: 'Reservation Payment Confirmed',
+                textBody: confirmEmailLines.join('\n')
+              });
+              if (!confirmEmailResult.ok) {
+                console.warn('[Webhook] Shared-resource confirmation email failed:', confirmEmailResult.error);
+              } else {
+                console.log('[Webhook] Shared-resource confirmation email sent:', confirmEmailResult.messageId);
+              }
+            }
           } else if (event.type === 'payment_intent.payment_failed') {
             await updateSharedResourceReservationPaymentById(reservation.id, {
               ...commonUpdate,
               status: 'Awaiting Online Confirmation'
+            });
+
+            await writeUserEventLog({
+              actorUserId: Number(reservation.user_id || 0),
+              clientAccountId: Number(reservation.client_account_id || 0),
+              eventType: 'facility_payment_failed',
+              description: 'Facility Payment Failed - ' + String(reservation.reservation_identifier || ''),
+              detail: {
+                dtg: new Date().toISOString(),
+                paymentIntentId,
+                paymentStatus: String(paymentIntent && paymentIntent.status || ''),
+                error: String(commonUpdate.paymentLastError || ''),
+                reservationId: Number(reservation.id || 0),
+                reservationIdentifier: String(reservation.reservation_identifier || '')
+              }
             });
           } else if (event.type === 'payment_intent.canceled') {
             await updateSharedResourceReservationPaymentById(reservation.id, {
               ...commonUpdate,
               status: 'Declined'
             });
+
+            await writeUserEventLog({
+              actorUserId: Number(reservation.user_id || 0),
+              clientAccountId: Number(reservation.client_account_id || 0),
+              eventType: 'facility_payment_failed',
+              description: 'Facility Payment Failed - ' + String(reservation.reservation_identifier || ''),
+              detail: {
+                dtg: new Date().toISOString(),
+                paymentIntentId,
+                paymentStatus: String(paymentIntent && paymentIntent.status || ''),
+                error: String(commonUpdate.paymentLastError || ''),
+                reservationId: Number(reservation.id || 0),
+                reservationIdentifier: String(reservation.reservation_identifier || '')
+              }
+            });
           } else {
             await updateSharedResourceReservationPaymentById(reservation.id, commonUpdate);
+          }
+        } else {
+          const finalized = await finalizeReservationActivityPaymentIntent(paymentIntent, { source: 'webhook' });
+          if (finalized && finalized.found) {
+            if (finalized.confirmed === true) {
+              console.log('[Webhook] Reservation-activity payment finalized', {
+                paymentIntentId,
+                alreadyConfirmed: finalized.alreadyConfirmed === true,
+                emailSent: finalized.emailSent === true,
+                emailError: finalized.emailError || ''
+              });
+            }
+          } else {
+            console.warn('[Webhook] No reservation found for payment intent', {
+              paymentIntentId,
+              eventType: String(event.type || '')
+            });
           }
         }
       }
@@ -9148,6 +12747,25 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
       text: textContent,
       attachments
     });
+
+    await writeUserEventLog({
+      actorUserId: Number(req.session && req.session.userId || 0),
+      clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+      eventType: 'email_sent',
+      description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(to || 'recipient'),
+      detail: {
+        dtg: new Date().toISOString(),
+        fromAddress: String(transportResult.from || ''),
+        toAddress: String(to || ''),
+        subject,
+        messageContent: textContent,
+        provider: 'smtp',
+        messageId: '',
+        hasAttachments: attachments.length > 0,
+        attachmentCount: attachments.length
+      }
+    });
+
     return res.json({ message: 'Schedule email sent.' });
   } catch (err) {
     console.error('Failed to send schedule email:', err);
@@ -9169,119 +12787,117 @@ app.get('/api/shared-resources', requireScopedRole('Staff'), async (req, res) =>
   }
 });
 
-// GET /api/shared-resources/all-reservations — consolidated reservations across all shared resources
-app.get('/api/shared-resources/all-reservations', requireScopedRole('Staff'), async (req, res) => {
-  try {
-    let resources = await getSharedResourcesForUser(req.accessContext.effectiveOwnerUserId);
-    if (hasManagerAssignmentScope(req)) {
-      resources = resources.filter((resource) => isSharedResourceAllowedByScope(req, resource));
-    }
-
-    const reservationsArrays = await Promise.all(
-      resources.map(async (resource) => {
-        const rows = await getSharedResourceReservationsByResourceId(resource.id);
-        return rows.map((row) => ({
-          ...row,
-          resource_short_description: resource.short_description || ''
-        }));
-      })
-    );
-
-    const reservations = reservationsArrays
-      .flat()
-      .sort((a, b) => new Date(a.requested_start_at).getTime() - new Date(b.requested_start_at).getTime());
-
-    return res.json({ reservations });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load all reservations.' });
-  }
+registerWorkflow4ReservationEnquiryRoutes(app, {
+  requireScopedRole,
+  getReservationEnquiryLandingPagesForUser,
+  hasManagerAssignmentScope,
+  isReservationEnquiryLandingPageAllowedByScope,
+  getReservationEnquiryLandingPageByIdForUser,
+  getListingsForUser,
+  isListingAllowedByScope,
+  normaliseLandingPageListingUrl,
+  createReservationEnquiryLandingPageForUser,
+  updateReservationEnquiryLandingPageForUser,
+  deleteReservationEnquiryLandingPageForUser,
+  getActiveReservationEnquiryLandingPageBySlug,
+  buildPublicReservationEnquiryCalendarData,
+  getPreferredAppBaseUrl,
+  normaliseDateKey,
+  normaliseOptionalPositiveInteger,
+  buildPublicReservationEnquiryAvailability,
+  normaliseSharedResourceReservationText,
+  normaliseSharedResourceReservationEmail,
+  pool,
+  generateGlobalReservationIdentifier,
+  getListingByIdForUser,
+  createReservationActivityForListing,
+  DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS,
+  DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE,
+  formatDateTimeForMessage,
+  sendAppEmail,
+  stripeClient,
+  STRIPE_PUBLISHABLE_KEY,
+  getUserById,
+  isOnlinePaymentAvailableForHostUser,
+  setUserStripeConnectState,
+  toMinorUnits,
+  updateReservationActivityPaymentById,
+  normaliseLandingPageSlug,
+  finalizeReservationActivityPaymentIntent,
+  rankSplitStayOptions,
+  ensureGuestSiteUserForClientAccount,
+  findUserByEmail,
+  sendPasswordResetEmail
 });
 
-// POST /api/shared-resources — create shared resource with short description
-app.post('/api/shared-resources', requireScopedRole('Manager'), async (req, res) => {
-  try {
-    if (hasManagerAssignmentScope(req)) {
-      const scopedPropertyId = Number(req.body.propertyId);
-      const scopedListingId = Number(req.body.listingId);
-
-      if (Number.isInteger(scopedListingId) && scopedListingId > 0) {
-        const listing = await getListingByIdForUser(scopedListingId, req.accessContext.effectiveOwnerUserId);
-        if (!listing || !isListingAllowedByScope(req, listing)) {
-          return res.status(403).json({ error: 'You are not allowed to create facilities for this listing.' });
-        }
-      }
-
-      if (Number.isInteger(scopedPropertyId) && scopedPropertyId > 0) {
-        if (!isPropertyAllowedByScope(req, scopedPropertyId)) {
-          return res.status(403).json({ error: 'You are not allowed to create facilities for this property.' });
-        }
-      }
-
-      if ((!Number.isInteger(scopedPropertyId) || scopedPropertyId <= 0)
-        && (!Number.isInteger(scopedListingId) || scopedListingId <= 0)) {
-        return res.status(403).json({ error: 'Please select an assigned property or listing when creating a facility.' });
-      }
-    }
-
-    const { resource, error } = await createSharedResourceForUser(
-      req.accessContext.effectiveOwnerUserId,
-      req.accessContext.activeClientAccountId,
-      {
-      shortDescription: req.body.shortDescription,
-      fullDescriptionHtml: req.body.fullDescriptionHtml,
-      maxUnits: req.body.maxUnits,
-      maxDaysAdvanceBooking: req.body.maxDaysAdvanceBooking,
-      propertyId: req.body.propertyId,
-      listingId: req.body.listingId,
-      resourceType: req.body.resourceType,
-      freeOfCharge: req.body.freeOfCharge,
-      cashOnSite: req.body.cashOnSite,
-      bankTransfer: req.body.bankTransfer,
-      onlinePayment: req.body.onlinePayment,
-      freeOfChargeMessageHtml: req.body.freeOfChargeMessageHtml,
-      cashOnSiteMessageHtml: req.body.cashOnSiteMessageHtml,
-      bankTransferMessageHtml: req.body.bankTransferMessageHtml,
-      onlinePaymentMessageHtml: req.body.onlinePaymentMessageHtml,
-      chargeBasis: req.body.chargeBasis,
-      dailyChargeMode: req.body.dailyChargeMode,
-      dailyRate: req.body.dailyRate,
-      hourlyChargeMode: req.body.hourlyChargeMode,
-      hourlyRate: req.body.hourlyRate,
-      hourlyRates: req.body.hourlyRates
-    });
-    if (error) {
-      const status = error === 'Client account context is required.' ? 400 : 400;
-      return res.status(status).json({ error });
-    }
-    return res.status(201).json({ resource });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to create shared resource.' });
-  }
+registerWorkflow5FacilityEnquiryRoutes(app, {
+  requireScopedRole,
+  getFacilityEnquiryLandingPagesForUser,
+  getFacilityEnquiryLandingPageByIdForUser,
+  isFacilityEnquiryLandingPageAllowedByScope,
+  createFacilityEnquiryLandingPageForUser,
+  updateFacilityEnquiryLandingPageForUser,
+  deleteFacilityEnquiryLandingPageForUser,
+  getActiveFacilityEnquiryLandingPageBySlug,
+  getPreferredAppBaseUrl,
+  getSharedResourceByIdPublic,
+  getUserById,
+  isOnlinePaymentAvailableForHostUser,
+  normaliseDateKey,
+  parseLocalDateTime,
+  normaliseSharedResourceMaxAdvanceBookingDays,
+  getSharedResourceReservationsByResourceId,
+  normaliseSharedResourceMaxUnits,
+  findCapacityConflictPeriod,
+  findAvailablePeriods,
+  formatDateTimeForMessage,
+  normaliseSharedResourceReservationText,
+  normaliseSharedResourceReservationEmail,
+  normaliseSharedResourceReservationAmount,
+  getDateKeyFromEventDateTime,
+  getSharedResourceReservationListingId,
+  generateGlobalReservationIdentifier,
+  createSharedResourceReservation,
+  htmlToPlainText,
+  pool,
+  sendAppEmail,
+  stripeClient,
+  STRIPE_PUBLISHABLE_KEY,
+  setUserStripeConnectState,
+  toMinorUnits,
+  updateSharedResourceReservationPaymentById
 });
 
-// GET /api/shared-resources/:resourceId — one shared resource for current user
-app.get('/api/shared-resources/:resourceId', requireScopedRole('Staff'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
-    return res.status(400).json({ error: 'Invalid shared resource id.' });
-  }
-
-  try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, resource)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    return res.json({ resource });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load shared resource.' });
-  }
+registerWorkflow3FacilityBookingRoutes(app, {
+  requireScopedRole,
+  getSharedResourcesForUser,
+  hasManagerAssignmentScope,
+  isSharedResourceAllowedByScope,
+  getSharedResourceReservationsByResourceId,
+  getListingByIdForUser,
+  isListingAllowedByScope,
+  isPropertyAllowedByScope,
+  createSharedResourceForUser,
+  getSharedResourceByIdForUser,
+  updateSharedResourceForUser,
+  updateSharedResourceReservationStatusForUser,
+  getSharedResourceReservationByIdForUser,
+  normaliseDateKey,
+  getDateKeyFromEventDateTime,
+  normaliseSharedResourceReservationText,
+  normaliseSharedResourceReservationEmail,
+  normaliseSharedResourceReservationAmount,
+  normaliseSharedResourceReservationStatus,
+  getSharedResourceReservationListingId,
+  normaliseSharedResourceMaxUnits,
+  findCapacityConflictPeriod,
+  updateSharedResourceReservationForUser,
+  deleteSharedResourceReservationForUser,
+  deleteSharedResourceForUser,
+  getReservationGuestOptionsForClientAccount,
+  writeUserEventLog
 });
+
 
 // GET /api/public/shared-resources/:resourceId — public view of one shared resource
 app.get('/api/public/shared-resources/:resourceId', async (req, res) => {
@@ -9299,8 +12915,18 @@ app.get('/api/public/shared-resources/:resourceId', async (req, res) => {
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
+    const hostUser = await getUserById(Number(resource.user_id || 0));
+    const onlinePaymentAvailable = resource.online_payment === true && isOnlinePaymentAvailableForHostUser(hostUser);
     const { user_id: _ignoreUserId, ...publicResource } = resource;
-    return res.json({ resource: publicResource });
+    return res.json({
+      resource: {
+        ...publicResource,
+        online_payment_available: onlinePaymentAvailable,
+        online_payment_unavailable_reason: onlinePaymentAvailable
+          ? ''
+          : (resource.online_payment === true ? 'Host online payment is currently unavailable.' : '')
+      }
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load shared resource.' });
@@ -9317,29 +12943,6 @@ app.get('/api/public/shared-resources/:resourceId/reservations', async (req, res
   try {
     const resource = await getSharedResourceByIdPublic(resourceId);
     if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    const reservations = await getSharedResourceReservationsByResourceId(resourceId);
-    return res.json({ reservations });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load shared resource reservations.' });
-  }
-});
-
-// GET /api/shared-resources/:resourceId/reservations — authenticated reservation list
-app.get('/api/shared-resources/:resourceId/reservations', requireScopedRole('Staff'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
-    return res.status(400).json({ error: 'Invalid shared resource id.' });
-  }
-
-  try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, resource)) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
     const reservations = await getSharedResourceReservationsByResourceId(resourceId);
@@ -9493,6 +13096,10 @@ app.post('/api/public/shared-resources/:resourceId/online-payment/prepare', asyn
     const hostUser = await getUserById(Number(resource.user_id));
     if (!hostUser || !hostUser.stripe_account_id) {
       return res.status(400).json({ error: 'Host Stripe account is not connected yet.' });
+    }
+
+    if (!isOnlinePaymentAvailableForHostUser(hostUser)) {
+      return res.status(400).json({ error: 'Host online payment is currently unavailable.' });
     }
 
     const stripeAccount = await stripeClient.accounts.retrieve(String(hostUser.stripe_account_id));
@@ -9663,6 +13270,8 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
     if (!resource) {
       return res.status(404).json({ error: 'Shared resource not found.' });
     }
+    const hostUser = await getUserById(Number(resource.user_id || 0));
+    const onlinePaymentAvailable = resource.online_payment === true && isOnlinePaymentAvailableForHostUser(hostUser);
 
     const optionConfig = {
       free_of_charge: {
@@ -9681,9 +13290,9 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         error: 'Bank transfer is not enabled for this resource.'
       },
       online_payment: {
-        enabled: resource.online_payment === true,
+        enabled: onlinePaymentAvailable,
         status: 'Awaiting Online Confirmation',
-        error: 'Online payment is not enabled for this resource.'
+        error: 'Online payment is not currently available for this resource.'
       }
     };
 
@@ -9768,6 +13377,33 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         lines.push('Registration Number: ' + vehicleRegistration);
       }
 
+      if (paymentOption === 'bank_transfer') {
+        const bankResult = await pool.query(
+          'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+          [Number(resource.client_account_id || 0)]
+        );
+        const bankRow = bankResult.rows[0] || {};
+        const bankAccountName = String(bankRow.bank_account_name || '').trim();
+        const bankSortCode = String(bankRow.bank_sort_code || '').trim();
+        const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
+        const bankIban = String(bankRow.bank_iban || '').trim();
+        const bankBic = String(bankRow.bank_bic || '').trim();
+        const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
+
+        if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban || !bankBic) {
+          return res.status(400).json({ error: 'Host bank transfer details are incomplete. Please contact the host.' });
+        }
+
+        lines.push('');
+        lines.push('Bank Transfer Details:');
+        lines.push('Account name: ' + bankAccountName);
+        lines.push('Sort code: ' + bankSortCode);
+        lines.push('Account number: ' + bankAccountNumber);
+        lines.push('IBAN: ' + bankIban);
+        lines.push('BIC: ' + bankBic);
+        lines.push('Account type: ' + bankType);
+      }
+
       const emailResult = await sendAppEmail({
         to: emailAddress,
         subject,
@@ -9777,6 +13413,12 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
       if (!emailResult.ok) {
         emailDeliveryWarning = true;
         emailDeliveryReason = String(emailResult.error || '').trim();
+      }
+    } else if (paymentOption === 'online_payment') {
+      const onlineEmailResult = await sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource);
+      if (!onlineEmailResult.ok) {
+        emailDeliveryWarning = true;
+        emailDeliveryReason = String(onlineEmailResult.error || '').trim();
       }
     }
 
@@ -9788,291 +13430,6 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to create reservation.' });
-  }
-});
-
-// PUT /api/shared-resources/:resourceId — update shared resource
-app.put('/api/shared-resources/:resourceId', requireScopedRole('Manager'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
-    return res.status(400).json({ error: 'Invalid shared resource id.' });
-  }
-
-  try {
-    const existing = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!existing) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, existing)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-
-    const { resource, error } = await updateSharedResourceForUser(
-      resourceId,
-      req.accessContext.effectiveOwnerUserId,
-      req.accessContext.activeClientAccountId,
-      {
-      shortDescription: req.body.shortDescription,
-      fullDescriptionHtml: req.body.fullDescriptionHtml,
-      maxUnits: req.body.maxUnits,
-      maxDaysAdvanceBooking: req.body.maxDaysAdvanceBooking,
-      propertyId: req.body.propertyId,
-      listingId: req.body.listingId,
-      resourceType: req.body.resourceType,
-      freeOfCharge: req.body.freeOfCharge,
-      cashOnSite: req.body.cashOnSite,
-      bankTransfer: req.body.bankTransfer,
-      onlinePayment: req.body.onlinePayment,
-      freeOfChargeMessageHtml: req.body.freeOfChargeMessageHtml,
-      cashOnSiteMessageHtml: req.body.cashOnSiteMessageHtml,
-      bankTransferMessageHtml: req.body.bankTransferMessageHtml,
-      onlinePaymentMessageHtml: req.body.onlinePaymentMessageHtml,
-      chargeBasis: req.body.chargeBasis,
-      dailyChargeMode: req.body.dailyChargeMode,
-      dailyRate: req.body.dailyRate,
-      hourlyChargeMode: req.body.hourlyChargeMode,
-      hourlyRate: req.body.hourlyRate,
-      hourlyRates: req.body.hourlyRates
-    });
-    if (error === 'Shared resource not found.') {
-      return res.status(404).json({ error });
-    }
-    if (error) {
-      return res.status(400).json({ error });
-    }
-    return res.json({ resource });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to update shared resource.' });
-  }
-});
-
-// PUT /api/shared-resources/:resourceId/reservations/:reservationId/status — update payment/confirmation status
-app.put('/api/shared-resources/:resourceId/reservations/:reservationId/status', requireScopedRole('Manager'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  const reservationId = Number(req.params.reservationId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
-    return res.status(400).json({ error: 'Invalid resource or reservation id.' });
-  }
-
-  try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, resource)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-
-    const result = await updateSharedResourceReservationStatusForUser(
-      reservationId,
-      resourceId,
-      req.accessContext.effectiveOwnerUserId,
-      req.body.status
-    );
-
-    if (result.error === 'Reservation not found.') {
-      return res.status(404).json({ error: result.error });
-    }
-    if (result.error) {
-      return res.status(400).json({ error: result.error });
-    }
-
-    return res.json({ reservation: result.reservation });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to update reservation status.' });
-  }
-});
-
-// GET /api/shared-resources/:resourceId/reservations/:reservationId — load one reservation for editing
-app.get('/api/shared-resources/:resourceId/reservations/:reservationId', requireScopedRole('Staff'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  const reservationId = Number(req.params.reservationId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
-    return res.status(400).json({ error: 'Invalid resource or reservation id.' });
-  }
-
-  try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, resource)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-
-    const reservation = await getSharedResourceReservationByIdForUser(reservationId, resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!reservation) {
-      return res.status(404).json({ error: 'Reservation not found.' });
-    }
-
-    return res.json({ reservation });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load reservation.' });
-  }
-});
-
-// PUT /api/shared-resources/:resourceId/reservations/:reservationId — edit reservation details
-app.put('/api/shared-resources/:resourceId/reservations/:reservationId', requireScopedRole('Manager'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  const reservationId = Number(req.params.reservationId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
-    return res.status(400).json({ error: 'Invalid resource or reservation id.' });
-  }
-
-  const requestedStartAtRaw = String(req.body.requestedStartAt || '').trim();
-  const requestedEndAtRaw = String(req.body.requestedEndAt || '').trim();
-  const requestedStartAt = new Date(requestedStartAtRaw);
-  const requestedEndAt = new Date(requestedEndAtRaw);
-  if (Number.isNaN(requestedStartAt.getTime()) || Number.isNaN(requestedEndAt.getTime()) || requestedEndAt.getTime() <= requestedStartAt.getTime()) {
-    return res.status(400).json({ error: 'Requested end must be after requested start.' });
-  }
-
-  const checkinDate = normaliseDateKey(req.body.checkinDate) || getDateKeyFromEventDateTime(requestedStartAtRaw);
-  const checkoutDate = normaliseDateKey(req.body.checkoutDate) || getDateKeyFromEventDateTime(requestedEndAtRaw);
-  if (!checkinDate || !checkoutDate) {
-    return res.status(400).json({ error: 'Checkin and checkout dates are required.' });
-  }
-
-  const firstName = normaliseSharedResourceReservationText(req.body.firstName, 100);
-  const familyName = normaliseSharedResourceReservationText(req.body.familyName, 100);
-  const emailAddress = normaliseSharedResourceReservationEmail(req.body.emailAddress);
-  const telephone = normaliseSharedResourceReservationText(req.body.telephone, 60);
-  const reservationAmount = normaliseSharedResourceReservationAmount(req.body.reservationAmount);
-  const status = normaliseSharedResourceReservationStatus(req.body.status);
-  if (!firstName || !familyName || !emailAddress || !telephone || !status) {
-    return res.status(400).json({ error: 'First name, family name, email address, telephone and status are required.' });
-  }
-
-  try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, resource)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-
-    const reservationListingId = getSharedResourceReservationListingId(resource);
-
-    const existingReservations = await getSharedResourceReservationsByResourceId(resourceId);
-    const maxUnits = normaliseSharedResourceMaxUnits(resource.max_units) || 1;
-    const requestedSpacesRaw = normaliseSharedResourceMaxUnits(req.body.spacesRequired) || 1;
-    const requestedSpaces = resource.resource_type === 'parking'
-      ? Math.min(maxUnits, Math.max(1, requestedSpacesRaw))
-      : 1;
-
-    const conflict = findCapacityConflictPeriod(
-      existingReservations.filter((row) => Number(row.id) !== reservationId),
-      requestedStartAt.toISOString(),
-      requestedEndAt.toISOString(),
-      requestedSpaces,
-      maxUnits
-    );
-    if (conflict) {
-      return res.status(409).json({ error: 'Not fully available for the updated requested dates.' });
-    }
-
-    const result = await updateSharedResourceReservationForUser(
-      reservationId,
-      resourceId,
-      req.accessContext.effectiveOwnerUserId,
-      {
-        reservationCheckinDate: checkinDate,
-        reservationCheckoutDate: checkoutDate,
-        requestedStartAt: requestedStartAt.toISOString(),
-        requestedEndAt: requestedEndAt.toISOString(),
-        listingId: reservationListingId,
-        spacesRequired: requestedSpaces,
-        firstName,
-        familyName,
-        emailAddress,
-        telephone,
-        reservationAmount,
-        status
-      }
-    );
-
-    if (result.error === 'Reservation not found.') {
-      return res.status(404).json({ error: result.error });
-    }
-    if (result.error) {
-      return res.status(400).json({ error: result.error });
-    }
-
-    return res.json({ reservation: result.reservation });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to update reservation.' });
-  }
-});
-
-// DELETE /api/shared-resources/:resourceId/reservations/:reservationId — delete reservation
-app.delete('/api/shared-resources/:resourceId/reservations/:reservationId', requireScopedRole('Manager'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  const reservationId = Number(req.params.reservationId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0 || !Number.isInteger(reservationId) || reservationId <= 0) {
-    return res.status(400).json({ error: 'Invalid resource or reservation id.' });
-  }
-
-  try {
-    const resource = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!resource) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, resource)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-
-    const result = await deleteSharedResourceReservationForUser(
-      reservationId,
-      resourceId,
-      req.accessContext.effectiveOwnerUserId
-    );
-
-    if (result.error === 'Reservation not found.') {
-      return res.status(404).json({ error: result.error });
-    }
-    if (result.error) {
-      return res.status(400).json({ error: result.error });
-    }
-
-    return res.json({ deleted: true, id: reservationId });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to delete reservation.' });
-  }
-});
-
-// DELETE /api/shared-resources/:resourceId — delete shared resource
-app.delete('/api/shared-resources/:resourceId', requireScopedRole('Manager'), async (req, res) => {
-  const resourceId = Number(req.params.resourceId);
-  if (!Number.isInteger(resourceId) || resourceId <= 0) {
-    return res.status(400).json({ error: 'Invalid shared resource id.' });
-  }
-
-  try {
-    const existing = await getSharedResourceByIdForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (!existing) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-    if (!isSharedResourceAllowedByScope(req, existing)) {
-      return res.status(404).json({ error: 'Shared resource not found.' });
-    }
-
-    const result = await deleteSharedResourceForUser(resourceId, req.accessContext.effectiveOwnerUserId);
-    if (result.error === 'Shared resource not found.') {
-      return res.status(404).json({ error: result.error });
-    }
-    if (result.error) {
-      return res.status(400).json({ error: result.error });
-    }
-    return res.json({ deletedResourceId: result.deletedResourceId });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to delete shared resource.' });
   }
 });
 
@@ -10216,6 +13573,11 @@ app.post('/api/listings', requireScopedRole('Manager'), async (req, res) => {
   const dateBasis = normaliseDateBasis(req.body.dateBasis);
   const usualCleanerId = req.body.usualCleanerId;
   const noChangeDays = req.body.noChangeDays;
+  const perNightPrice = req.body.perNightPrice;
+  const perStayPrice = req.body.perStayPrice;
+  const maxGuests = req.body.maxGuests;
+  const baseOccupancy = req.body.baseOccupancy;
+  const additionalGuestUpliftPct = req.body.additionalGuestUpliftPct;
   const noChangeValidation = normaliseNoChangeDaysForStore(noChangeDays);
   if (!name) {
     return res.status(400).json({ error: 'Listing name is required.' });
@@ -10238,7 +13600,12 @@ app.post('/api/listings', requireScopedRole('Manager'), async (req, res) => {
       Number.isInteger(propertyId) && propertyId > 0 ? propertyId : null,
       dateBasis,
       usualCleanerId,
-      noChangeValidation.days
+      noChangeValidation.days,
+      perNightPrice,
+      perStayPrice,
+      maxGuests,
+      baseOccupancy,
+      additionalGuestUpliftPct
     );
     if (error) {
       return res.status(error === 'Property not found.' ? 404 : 409).json({ error });
@@ -10290,6 +13657,11 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
     ? (Number.isInteger(Number(blockAdvanceDaysRaw)) && Number(blockAdvanceDaysRaw) > 0 ? Number(blockAdvanceDaysRaw) : null)
     : null;
   const noChangeDays = req.body.noChangeDays;
+  const perNightPrice = req.body.perNightPrice;
+  const perStayPrice = req.body.perStayPrice;
+  const maxGuests = req.body.maxGuests;
+  const baseOccupancy = req.body.baseOccupancy;
+  const additionalGuestUpliftPct = req.body.additionalGuestUpliftPct;
   const noChangeValidation = normaliseNoChangeDaysForStore(noChangeDays);
 
   if (!Number.isInteger(listingId) || listingId <= 0) {
@@ -10324,7 +13696,12 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
       usualCleanerId,
       emptyExport,
       blockAdvanceDays,
-      noChangeValidation.days
+      noChangeValidation.days,
+      perNightPrice,
+      perStayPrice,
+      maxGuests,
+      baseOccupancy,
+      additionalGuestUpliftPct
     );
     if (error === 'Listing not found.') {
       return res.status(404).json({ error });
@@ -10335,6 +13712,18 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
     if (error) {
       return res.status(409).json({ error });
     }
+
+    if (!normaliseCleanerId(usualCleanerId)) {
+      const changesToClear = await getBookedInChangesForUserByListings(req.accessContext.effectiveOwnerUserId, [listingId]);
+      if (changesToClear.length) {
+        await deleteBookedInChangesForUser(req.accessContext.effectiveOwnerUserId, changesToClear.map((row) => ({
+          listingId,
+          reservationCheckinDate: row.reservation_checkin_date,
+          reservationCheckoutDate: row.reservation_checkout_date
+        })));
+      }
+    }
+
     return res.json({ listing });
   } catch (err) {
     console.error(err);
@@ -10417,7 +13806,14 @@ app.get('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req,
     if (!guest) {
       return res.status(404).json({ error: 'Guest not found.' });
     }
-    return res.json({ guest });
+    const futureCounts = await getFutureReservationCountsForGuestEmail(req.accessContext.activeClientAccountId, guest.guest_email);
+    return res.json({
+      guest: {
+        ...guest,
+        future_reservation_count: Number(futureCounts.privateCount || 0) + Number(futureCounts.sharedCount || 0),
+        has_future_reservations: Number(futureCounts.privateCount || 0) + Number(futureCounts.sharedCount || 0) > 0
+      }
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load guest relationship.' });
@@ -10446,7 +13842,7 @@ app.put('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req,
   }
 });
 
-// DELETE /api/access/guests/:guestId — delete one guest record in active client account
+// DELETE /api/access/guests/:guestId — delete one guest from client account; guest references are reassigned to Deleted user; guest site user may be deleted if no other client relationships exist
 app.delete('/api/access/guests/:guestId', requireScopedRole('Manager'), async (req, res) => {
   const guestId = Number(req.params.guestId);
   if (!Number.isInteger(guestId) || guestId <= 0) {
@@ -10454,6 +13850,14 @@ app.delete('/api/access/guests/:guestId', requireScopedRole('Manager'), async (r
   }
 
   try {
+    const guestUser = await getUserById(guestId);
+    if (!guestUser) {
+      return res.status(404).json({ error: 'Guest not found.' });
+    }
+    if (isDeletedSiteUserRecord(guestUser)) {
+      return res.status(400).json({ error: 'Deleted placeholder users cannot be deleted.' });
+    }
+
     const result = await deleteGuestForClientAccount(req.accessContext.activeClientAccountId, guestId);
     if (result.error === 'Guest not found.') {
       return res.status(404).json({ error: result.error });
@@ -11265,6 +14669,24 @@ app.get('/api/listings/:listingId/calendar.ics', async (req, res) => {
     if (requestSource) {
       res.setHeader('X-Calendar-Excluded-Source', String(requestSource));
     }
+
+    await logCalendarSyncExportRequestEvent({
+      listing,
+      clientAccountId: Number(listing.client_account_id || 0),
+      requestSource,
+      eventCount: events.length,
+      consolidated: false,
+      requestPath: String(req.originalUrl || req.path || ''),
+      query: req.query || {},
+      exportedEventsPreview: events.slice(0, 25).map((event) => ({
+        start: String(event && event.start || ''),
+        end: String(event && event.end || ''),
+        title: String(event && event.title || ''),
+        source: String(event && event.source || ''),
+        eventType: String(event && event.eventType || '')
+      }))
+    });
+
     return res.send(icsContent);
   } catch (err) {
     console.error(err);
@@ -11329,6 +14751,30 @@ app.get('/api/calendar.ics', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="all-listings.ics"');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.setHeader('X-Calendar-Event-Count', String(combinedEvents.length));
+
+    await logCalendarSyncExportRequestEvent({
+      listing: {
+        id: 0,
+        user_id: Number(userId || 0),
+        client_account_id: Number(resolvedAccess && resolvedAccess.activeClientAccountId || 0) || null,
+        name: 'All Listings'
+      },
+      clientAccountId: Number(resolvedAccess && resolvedAccess.activeClientAccountId || 0) || null,
+      requestSource: detectCalendarRequestSource(req),
+      eventCount: combinedEvents.length,
+      consolidated: true,
+      requestPath: String(req.originalUrl || req.path || ''),
+      query: req.query || {},
+      exportedEventsPreview: combinedEvents.slice(0, 25).map((event) => ({
+        listingName: String(event && event.listingName || ''),
+        start: String(event && event.start || ''),
+        end: String(event && event.end || ''),
+        title: String(event && event.title || ''),
+        source: String(event && event.source || ''),
+        eventType: String(event && event.eventType || '')
+      }))
+    });
+
     return res.send(icsContent);
   } catch (err) {
     console.error(err);
@@ -11608,6 +15054,170 @@ app.get('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   }
 });
 
+// GET /api/user-event-log — user-scoped event log for hosting actions
+app.get('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
+  try {
+    const actorUserId = Number(req.session && req.session.userId || 0);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const activeClientAccountId = Number(req.accessContext && req.accessContext.activeClientAccountId || 0);
+    const searchText = String(req.query && req.query.q || '').trim();
+    const params = [
+      actorUserId,
+      Number.isInteger(activeClientAccountId) && activeClientAccountId > 0 ? activeClientAccountId : null
+    ];
+    let searchClause = '';
+    if (searchText) {
+      params.push('%' + searchText + '%');
+      searchClause = `
+          AND (
+            description ILIKE $3
+            OR COALESCE(detail_json::text, '') ILIKE $3
+          )
+      `;
+    }
+
+    const result = await pool.query(
+      `
+        SELECT id,
+               event_type,
+               description,
+               created_at
+        FROM user_event_log
+        WHERE actor_user_id = $1
+          AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+          ${searchClause}
+        ORDER BY created_at DESC
+        LIMIT 500
+      `,
+      params
+    );
+
+    return res.json({
+      entries: result.rows.map((row) => ({
+        id: Number(row.id || 0),
+        eventType: String(row.event_type || '').trim(),
+        description: String(row.description || '').trim(),
+        dtg: row.created_at ? String(row.created_at) : ''
+      }))
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load user event log.' });
+  }
+});
+
+// DELETE /api/user-event-log — clear user-scoped event log entries for active context
+app.delete('/api/user-event-log', requireScopedRole('Staff'), async (req, res) => {
+  try {
+    const actorUserId = Number(req.session && req.session.userId || 0);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const activeClientAccountId = Number(req.accessContext && req.accessContext.activeClientAccountId || 0);
+    const scopedClientAccountId = Number.isInteger(activeClientAccountId) && activeClientAccountId > 0
+      ? activeClientAccountId
+      : null;
+
+    const scope = String(req.body && req.body.scope || 'all').trim().toLowerCase();
+    if (!['all', 'older_7_days', 'older_31_days'].includes(scope)) {
+      return res.status(400).json({ error: 'Invalid delete scope.' });
+    }
+
+    let result;
+    if (scope === 'all') {
+      result = await pool.query(
+        `
+          DELETE FROM user_event_log
+          WHERE actor_user_id = $1
+            AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+        `,
+        [actorUserId, scopedClientAccountId]
+      );
+    } else {
+      const days = scope === 'older_31_days' ? 31 : 7;
+      result = await pool.query(
+        `
+          DELETE FROM user_event_log
+          WHERE actor_user_id = $1
+            AND ($2::bigint IS NULL OR client_account_id = $2::bigint)
+            AND created_at < (CURRENT_TIMESTAMP - ($3::text || ' days')::interval)
+        `,
+        [actorUserId, scopedClientAccountId, String(days)]
+      );
+    }
+
+    return res.json({ ok: true, deletedCount: Number(result.rowCount || 0), scope });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete user event log entries.' });
+  }
+});
+
+// GET /api/user-event-log/:entryId/details — user-scoped event log details
+app.get('/api/user-event-log/:entryId/details', requireScopedRole('Staff'), async (req, res) => {
+  const entryId = Number(req.params.entryId || 0);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).json({ error: 'Invalid event log entry id.' });
+  }
+
+  try {
+    const actorUserId = Number(req.session && req.session.userId || 0);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const result = await pool.query(
+      `
+        SELECT id,
+               actor_user_id,
+               client_account_id,
+               event_type,
+               description,
+               detail_json,
+               created_at
+        FROM user_event_log
+        WHERE id = $1
+          AND actor_user_id = $2
+        LIMIT 1
+      `,
+      [entryId, actorUserId]
+    );
+
+    const row = result.rows[0] || null;
+    if (!row) {
+      return res.status(404).json({ error: 'Event log entry not found.' });
+    }
+
+    let detail = {};
+    try {
+      detail = row.detail_json ? JSON.parse(String(row.detail_json)) : {};
+    } catch {
+      detail = {};
+    }
+
+    return res.json({
+      entry: {
+        id: Number(row.id || 0),
+        actorUserId: Number(row.actor_user_id || 0),
+        clientAccountId: row.client_account_id !== null && row.client_account_id !== undefined
+          ? Number(row.client_account_id)
+          : null,
+        eventType: String(row.event_type || '').trim(),
+        description: String(row.description || '').trim(),
+        dtg: row.created_at ? String(row.created_at) : '',
+        detail
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load user event log details.' });
+  }
+});
+
 // GET /api/event-log/:entryId/details — detailed data for one dashboard event-log entry
 app.get('/api/event-log/:entryId/details', requireScopedRole('Manager'), async (req, res) => {
   const entryId = Number(req.params.entryId);
@@ -11856,460 +15466,35 @@ app.post('/api/listings/:listingId/debug-reservations/delete-by-date', requireSc
   }
 });
 
-// POST /api/private-reservations — create a direct reservation activity entry
-app.get('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
-  try {
-    const reservations = await getPrivateReservationsForScope(req);
-    return res.json({ reservations });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load private reservations.' });
-  }
-});
-
-app.get('/api/private-reservations/guest-users', requireScopedRole('Manager'), async (req, res) => {
-  try {
-    const guestUsers = await getGuestSiteUsersForClientAccount(req.accessContext.activeClientAccountId);
-    return res.json({
-      guestUsers: guestUsers.map((row) => {
-        const firstName = String(row && row.first_name || '').trim();
-        const familyName = String(row && row.family_name || '').trim();
-        const fullName = [firstName, familyName].filter(Boolean).join(' ').trim();
-        return {
-          id: Number(row && row.id || 0),
-          email: String(row && row.email || '').trim(),
-          firstName,
-          familyName,
-          displayName: fullName || String(row && row.email || '').trim()
-        };
-      })
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load guest users.' });
-  }
-});
-
-app.get('/api/shared-reservations/guest-users', requireScopedRole('Staff'), async (req, res) => {
-  try {
-    const guestUsers = await getReservationGuestOptionsForClientAccount(req.accessContext.activeClientAccountId);
-    return res.json({
-      guestUsers: guestUsers.map((row) => {
-        const firstName = String(row && row.first_name || '').trim();
-        const familyName = String(row && row.family_name || '').trim();
-        const email = String(row && row.email || '').trim();
-        const telephone = String(row && row.telephone || '').trim();
-        const fullName = [firstName, familyName].filter(Boolean).join(' ').trim();
-        return {
-          id: Number(row && row.id || 0) || null,
-          email,
-          firstName,
-          familyName,
-          telephone,
-          displayName: fullName || email || 'Guest'
-        };
-      })
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load reservation guest users.' });
-  }
-});
-
-app.delete('/api/private-reservations/:id', requireScopedRole('Manager'), async (req, res) => {
-  const reservationId = Number(req.params.id || 0);
-  if (!Number.isInteger(reservationId) || reservationId <= 0) {
-    return res.status(400).json({ error: 'Valid reservation id is required.' });
-  }
-
-  try {
-    const existingResult = await pool.query(
-      `
-        SELECT id,
-           reservation_identifier,
-               first_name,
-               family_name,
-               email_address,
-               listing_id,
-               reservation_checkin_date::text AS reservation_checkin_date,
-               reservation_checkout_date::text AS reservation_checkout_date,
-               status,
-               client_account_id
-        FROM reservation_activity
-        WHERE id = $1
-          AND client_account_id = $2
-        LIMIT 1
-      `,
-      [reservationId, req.accessContext.activeClientAccountId]
-    );
-
-    const existing = existingResult.rows[0] || null;
-    if (!existing) {
-      return res.status(404).json({ error: 'Private reservation not found.' });
-    }
-
-    const listing = await getListingByIdForUser(existing.listing_id, req.accessContext.effectiveOwnerUserId);
-    if (!listing || !isListingAllowedByScope(req, listing)) {
-      return res.status(404).json({ error: 'Private reservation not found.' });
-    }
-
-    await pool.query(
-      `
-        DELETE FROM reservation_activity
-        WHERE id = $1
-          AND client_account_id = $2
-      `,
-      [reservationId, req.accessContext.activeClientAccountId]
-    );
-
-    await deleteBookedInChangesForUser(req.accessContext.effectiveOwnerUserId, [{
-      listingId: Number(existing.listing_id),
-      reservationCheckinDate: existing.reservation_checkin_date,
-      reservationCheckoutDate: existing.reservation_checkout_date
-    }]);
-
-    const guestEmail = normaliseOptionalEmail(existing.email_address);
-    if (guestEmail) {
-      const guestName = [
-        String(existing.first_name || '').trim(),
-        String(existing.family_name || '').trim()
-      ].filter(Boolean).join(' ').trim() || 'Guest';
-      const isProvisional = String(existing.status || '').trim().toLowerCase().startsWith('awaiting_');
-      const subject = isProvisional ? 'Provisional Reservation Cancelled' : 'Reservation Cancelled';
-      const reservationIdentifier = String(existing.reservation_identifier || '').trim();
-      const messageLines = [
-        subject,
-        '',
-        'Guest: ' + guestName,
-        'Property: ' + String(listing.property_name || '').trim(),
-        'Listing: ' + String(listing.name || '').trim(),
-        'Arrival date: ' + String(existing.reservation_checkin_date || '').trim(),
-        'Departure date: ' + String(existing.reservation_checkout_date || '').trim()
-      ];
-      if (isProvisional) {
-        if (reservationIdentifier) {
-          messageLines.unshift('Reservation ID: ' + reservationIdentifier, '');
-        }
-        messageLines.push('', 'This accommodation is no longer held for you');
-      }
-      const textBody = messageLines.join('\n');
-
-      const emailResult = await sendAppEmail({
-        to: guestEmail,
-        subject,
-        textBody
-      });
-      if (!emailResult.ok) {
-        console.warn('Failed to send private reservation cancellation email to guest.', emailResult.error || 'unknown email error');
-      }
-    }
-
-    return res.json({ deleted: true, id: reservationId });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to cancel private reservation.' });
-  }
-});
-
-app.post('/api/private-reservations/:id/confirm-payment', requireScopedRole('Manager'), async (req, res) => {
-  const reservationId = Number(req.params.id || 0);
-  if (!Number.isInteger(reservationId) || reservationId <= 0) {
-    return res.status(400).json({ error: 'Valid reservation id is required.' });
-  }
-
-  try {
-    const result = await pool.query(
-      `
-        SELECT ra.id,
-           ra.reservation_identifier,
-               ra.client_account_id,
-               ra.listing_id,
-               ra.reservation_checkin_date::text AS reservation_checkin_date,
-               ra.reservation_checkout_date::text AS reservation_checkout_date,
-               ra.first_name,
-               ra.family_name,
-               ra.email_address,
-               ra.reservation_amount,
-               ra.payment_method,
-               ra.status,
-               ra.created_at,
-               l.name AS listing_name,
-               (ra.reservation_checkout_date - ra.reservation_checkin_date) AS stay_nights
-        FROM reservation_activity ra
-        JOIN listings l ON l.id = ra.listing_id
-        WHERE ra.id = $1
-          AND ra.client_account_id = $2
-        LIMIT 1
-      `,
-      [reservationId, req.accessContext.activeClientAccountId]
-    );
-
-    const existing = result.rows[0] || null;
-    if (!existing) {
-      return res.status(404).json({ error: 'Private reservation not found.' });
-    }
-
-    const listing = await getListingByIdForUser(existing.listing_id, req.accessContext.effectiveOwnerUserId);
-    if (!listing || !isListingAllowedByScope(req, listing)) {
-      return res.status(404).json({ error: 'Private reservation not found.' });
-    }
-
-    if (String(existing.payment_method || '').trim() !== 'Bank Transfer') {
-      return res.status(400).json({ error: 'Only bank transfer reservations can be confirmed.' });
-    }
-
-    await ensureGuestSiteUserForClientAccount({
-      clientAccountId: req.accessContext.activeClientAccountId,
-      ownerUserId: req.accessContext.effectiveOwnerUserId,
-      firstName: existing.first_name,
-      familyName: existing.family_name,
-      email: existing.email_address,
-      sourceType: 'private_reservation',
-      sourceId: String(existing.id)
-    });
-
-    if (String(existing.status || '').trim().toLowerCase() !== 'awaiting_bank_transfer') {
-      return res.json({ reservation: mapPrivateReservationRow(existing) });
-    }
-
-    const updateResult = await pool.query(
-      `
-        UPDATE reservation_activity
-        SET status = 'confirmed',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1
-        RETURNING id,
-                  reservation_identifier,
-                  listing_id,
-                  reservation_checkin_date::text AS reservation_checkin_date,
-                  reservation_checkout_date::text AS reservation_checkout_date,
-                  first_name,
-                  family_name,
-                  email_address,
-                  reservation_amount,
-                  payment_method,
-                  status,
-                  created_at,
-                  (reservation_checkout_date - reservation_checkin_date) AS stay_nights
-      `,
-      [reservationId]
-    );
-
-    const updated = updateResult.rows[0] || null;
-    return res.json({
-      reservation: mapPrivateReservationRow({
-        ...updated,
-        listing_name: existing.listing_name
-      })
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to confirm private reservation payment.' });
-  }
-});
-
-app.post('/api/private-reservations', requireScopedRole('Manager'), async (req, res) => {
-  const arrivalDate = normaliseDateKey(req.body.arrivalDate);
-  const departureDate = normaliseDateKey(req.body.departureDate);
-  const listingId = Number(req.body.listingId || (Array.isArray(req.body.listingIds) ? req.body.listingIds[0] : 0));
-  const firstName = normaliseSharedResourceReservationText(req.body.firstName, 120);
-  const familyName = normaliseSharedResourceReservationText(req.body.familyName, 120);
-  const emailAddress = normaliseSharedResourceReservationEmail(req.body.email);
-  const guestCount = normaliseOptionalPositiveInteger(req.body.guestCount);
-  const reservationAmount = normaliseSharedResourceReservationAmount(req.body.cost);
-  const holdHours = normaliseOptionalPositiveInteger(req.body.holdHours);
-  const paymentMethod = normaliseDirectReservationPaymentMethod(req.body.paymentMethod);
-
-  if (!arrivalDate || !departureDate || departureDate <= arrivalDate) {
-    return res.status(400).json({ error: 'Arrival and departure dates are required and must be valid.' });
-  }
-  if (!Number.isInteger(listingId) || listingId <= 0) {
-    return res.status(400).json({ error: 'Exactly one listing must be selected.' });
-  }
-  if (!firstName || !familyName) {
-    return res.status(400).json({ error: 'First name and family name are required.' });
-  }
-  if (!emailAddress || !isValidEmailAddress(emailAddress)) {
-    return res.status(400).json({ error: 'A valid email address is required.' });
-  }
-  if (!Number.isInteger(guestCount) || guestCount <= 0 || guestCount > 50) {
-    return res.status(400).json({ error: 'Guest count is required.' });
-  }
-  if (!paymentMethod) {
-    return res.status(400).json({ error: 'Payment method is required.' });
-  }
-  if (paymentMethod === 'No Charge') {
-    // No charge reservations can explicitly carry a zero amount.
-    if (reservationAmount !== null && reservationAmount < 0) {
-      return res.status(400).json({ error: 'Cost cannot be negative.' });
-    }
-  } else if (reservationAmount === null) {
-    return res.status(400).json({ error: 'Cost is required.' });
-  }
-  if (!Number.isInteger(holdHours) || holdHours <= 0 || holdHours > 720) {
-    return res.status(400).json({ error: 'Hold period (hours) is required.' });
-  }
-
-  try {
-    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
-    if (!listing || !isListingAllowedByScope(req, listing)) {
-      return res.status(404).json({ error: 'Listing not found.' });
-    }
-
-    const existingEvents = appendAvailabilityPolicyBlockEvents(
-      listing,
-      await getReservationEventsForListing(listingId)
-    );
-    const hasConflict = existingEvents.some((event) => {
-      const eventStart = getDateKeyFromEventDateTime(event && event.start);
-      const eventEnd = getDateKeyFromEventDateTime(event && event.end);
-      if (!eventStart || !eventEnd) {
-        return false;
-      }
-      return eventStart < departureDate && eventEnd > arrivalDate;
-    });
-    if (hasConflict) {
-      return res.status(409).json({ error: 'The selected listing is not available for those dates.' });
-    }
-
-    const nowMs = Date.now();
-    const holdUntilAt = new Date(nowMs + holdHours * 60 * 60 * 1000).toISOString();
-    const reservationIdentifier = await generateGlobalReservationIdentifier('private_reservation');
-    const reservationAmountValue = paymentMethod === 'No Charge'
-      ? 0
-      : Number(reservationAmount);
-    const baseUrl = getPreferredAppBaseUrl(req) || '';
-    const termsUrl = (baseUrl ? (baseUrl + '/guest-terms-and-conditions.html') : '/guest-terms-and-conditions.html');
-    const termsStatement = 'By making payment you as The Guest are accepting the terms of The Host for The Reservation as stated in this email.';
-    const nextStatus = paymentMethod === 'No Charge'
-      ? 'confirmed'
-      : paymentMethod === 'Bank Transfer'
-        ? 'awaiting_bank_transfer'
-        : 'awaiting_online_payment';
-
-    let emailDeliveryWarning = false;
-    let emailDeliveryReason = '';
-
-    if (paymentMethod === 'Bank Transfer') {
-      const bankResult = await pool.query(
-        'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business FROM client_accounts WHERE id = $1 LIMIT 1',
-        [req.accessContext.activeClientAccountId]
-      );
-      const bankRow = bankResult.rows[0] || {};
-      const bankAccountName = String(bankRow.bank_account_name || '').trim();
-      const bankSortCode = String(bankRow.bank_sort_code || '').trim();
-      const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
-      const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
-      const dueText = formatDateTimeForMessage(holdUntilAt);
-
-      const textLines = [
-        'Payment Request For Accommodation',
-        '',
-        'Reservation ID: ' + reservationIdentifier,
-        'Guest: ' + firstName + ' ' + familyName,
-        'Number of guests: ' + String(guestCount),
-        'Arrival date: ' + arrivalDate,
-        'Departure date: ' + departureDate,
-        'Amount payable: ' + reservationAmountValue.toFixed(2),
-        'Payment due by: ' + dueText,
-        '',
-        'Bank details:',
-        'Account name: ' + (bankAccountName || 'Not configured'),
-        'Sort code: ' + (bankSortCode || 'Not configured'),
-        'Account number: ' + (bankAccountNumber || 'Not configured'),
-        'Account type: ' + bankType,
-        '',
-        termsStatement,
-        'Terms and Conditions: ' + termsUrl
-      ];
-
-      const emailResult = await sendAppEmail({
-        to: emailAddress,
-        subject: 'Payment Request For Accommodation',
-        textBody: textLines.join('\n')
-      });
-
-      if (!emailResult.ok && !String(emailResult.error || '').includes('not configured')) {
-        return res.status(502).json({ error: emailResult.error || 'Failed to send payment request email.' });
-      }
-
-      if (!emailResult.ok) {
-        emailDeliveryReason = String(emailResult.error || '').trim();
-        console.warn('Bank transfer email was not sent because email delivery is not configured. Reservation will still be recorded.', emailDeliveryReason);
-        emailDeliveryWarning = true;
-      }
-    }
-
-    const reservation = await createReservationActivityForListing({
-      userId: req.accessContext.effectiveOwnerUserId,
-      clientAccountId: req.accessContext.activeClientAccountId,
-      listingId,
-      reservationIdentifier,
-      checkinDate: arrivalDate,
-      checkoutDate: departureDate,
-      firstName,
-      familyName,
-      emailAddress,
-      guestCount,
-      reservationAmount: reservationAmountValue,
-      holdUntilAt,
-      paymentMethod,
-      paymentDueAt: holdUntilAt,
-      status: nextStatus,
-      notes: ''
-    });
-
-    if (paymentMethod === 'No Charge') {
-      const noChargeEmail = await sendAppEmail({
-        to: emailAddress,
-        subject: 'Reservation Confirmation',
-        textBody: [
-          'Reservation Confirmation',
-          '',
-          'Reservation ID: ' + reservationIdentifier,
-          'Guest: ' + firstName + ' ' + familyName,
-          'Arrival date: ' + arrivalDate,
-          'Departure date: ' + departureDate,
-          'Number of guests: ' + String(guestCount),
-          'Property: ' + String(listing.property_name || '').trim(),
-          'Listing: ' + String(listing.name || '').trim(),
-          '',
-          termsStatement,
-          'Terms and Conditions: ' + termsUrl
-        ].join('\n')
-      });
-
-      if (!noChargeEmail.ok) {
-        emailDeliveryReason = String(noChargeEmail.error || '').trim();
-        emailDeliveryWarning = true;
-      }
-
-      await ensureGuestSiteUserForClientAccount({
-        clientAccountId: req.accessContext.activeClientAccountId,
-        ownerUserId: req.accessContext.effectiveOwnerUserId,
-        firstName,
-        familyName,
-        email: emailAddress,
-        sourceType: 'private_reservation',
-        sourceId: String(reservation.id)
-      });
-    }
-
-    return res.json({
-      reservation,
-      nextUrl: '/dashboard.html?tab=panel-dashboard',
-      emailDeliveryWarning,
-      emailDeliveryReason,
-      message: paymentMethod === 'No Charge'
-        ? 'Private reservation confirmed and added to the listing calendar.'
-        : paymentMethod === 'Bank Transfer'
-          ? 'Payment request sent and reservation activity logged.'
-          : 'Reservation activity logged. Continue to online payment.'
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to create private reservation.' });
-  }
+registerWorkflow2PrivateReservationRoutes(app, {
+  requireScopedRole,
+  getPrivateReservationsForScope,
+  getGuestSiteUsersForClientAccount,
+  pool,
+  getListingByIdForUser,
+  isListingAllowedByScope,
+  deleteBookedInChangesForUser,
+  normaliseOptionalEmail,
+  sendAppEmail,
+  ensureGuestSiteUserForClientAccount,
+  findUserByEmail,
+  mapPrivateReservationRow,
+  normaliseDateKey,
+  normaliseSharedResourceReservationText,
+  normaliseSharedResourceReservationEmail,
+  normaliseOptionalPositiveInteger,
+  normaliseSharedResourceReservationAmount,
+  normaliseDirectReservationPaymentMethod,
+  isValidEmailAddress,
+  appendAvailabilityPolicyBlockEvents,
+  getReservationEventsForListing,
+  getDateKeyFromEventDateTime,
+  generateGlobalReservationIdentifier,
+  getPreferredAppBaseUrl,
+  formatDateTimeForMessage,
+  createReservationActivityForListing,
+  sendPasswordResetEmail,
+  writeUserEventLog
 });
 
 // GET /api/calendar-entries?url=... — load and parse ICS events

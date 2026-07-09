@@ -31,6 +31,87 @@
       <p id="dashboardPageMessage" class="message"></p>
 
       <section class="listing-form-section">
+        <h3>Create New Private Reservation</h3>
+        <p id="reservationMessage" class="message"></p>
+
+        <form id="privateReservationForm" novalidate>
+
+          <div class="calendar-source-row">
+            <label for="guestUserSelect">Guest User</label>
+            <select id="guestUserSelect">
+              <option value="">Select existing guest (optional)</option>
+            </select>
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="arrivalDate">Arrival Date</label>
+            <input id="arrivalDate" type="date" required />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="departureDate">Departure Date</label>
+            <input id="departureDate" type="date" required />
+          </div>
+
+          <div class="calendar-source-row">
+            <label>Listings</label>
+            <div style="flex:1; min-width:0;">
+              <p id="listingRankHint" class="hint private-reservation-rank-hint">Availability check will rank listings by estimated total price.</p>
+              <div id="listingsCheckboxList" class="cleaning-listings" aria-label="Select listings for this reservation">
+                <p class="cleaning-empty">Loading listings&hellip;</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="guestFirstName">First Name</label>
+            <input id="guestFirstName" type="text" maxlength="120" required />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="guestFamilyName">Family Name</label>
+            <input id="guestFamilyName" type="text" maxlength="120" required />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="guestEmail">Email Address</label>
+            <input id="guestEmail" type="email" maxlength="160" required />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="guestCount">Number of Guests</label>
+            <input id="guestCount" type="number" min="1" max="50" required />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="reservationCost">Cost</label>
+            <input id="reservationCost" type="number" min="0" step="0.01" placeholder="0.00" />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="holdHours">Hold for (hours)</label>
+            <input id="holdHours" type="number" min="1" max="720" placeholder="24" />
+          </div>
+
+          <div class="calendar-source-row">
+            <label for="paymentMethod">Payment Method</label>
+            <select id="paymentMethod" required>
+              <option value="">Select method</option>
+              <option value="No Charge">No Charge</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="Online Payment">Online Payment</option>
+            </select>
+          </div>
+
+          <div class="feed-actions floating-action-bar">
+            <button type="submit" id="saveReservationBtn" class="btn primary action-icon action-save" aria-label="Save Reservation">Save Reservation</button>
+            <button type="button" id="cancelReservationBtn" class="btn secondary action-icon action-cancel" aria-label="Cancel">Cancel</button>
+          </div>
+
+        </form>
+      </section>
+
+      <section class="listing-form-section">
         <p id="privateReservationsMessage" class="message"></p>
         <div class="table-wrap">
           <table class="calendar-table" aria-label="Private reservations">
@@ -42,12 +123,13 @@
                 <th>Arrival</th>
                 <th>Nights</th>
                 <th>Amount</th>
+                <th>Payment Status</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="privateReservationsTableBody">
               <tr>
-                <td colspan="7">Loading private reservations...</td>
+                <td colspan="8">Loading private reservations...</td>
               </tr>
             </tbody>
           </table>
@@ -57,6 +139,7 @@
   </main>
 
   <script src="sticky-layout.js"></script>
+  <script src="private-reservation.js"></script>
   <script src="dashboard-private-reservations.js"></script>
 </body>
 </html>

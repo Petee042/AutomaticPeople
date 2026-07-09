@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>View Logging - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.v20260520.css" />
+</head>
+<body class="logged-page">
+  <div class="sticky-page-chrome">
+    <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
+      <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
+    </div>
+  </div>
+
+  <main class="dashboard">
+    <div class="card-container wide">
+      <div class="feed-actions back-row" style="margin-bottom: 0.7rem;">
+        <button id="backBtn" type="button" class="back-arrow-control" aria-label="Back"></button>
+      </div>
+
+      <p class="dashboard-breadcrumb" aria-label="Breadcrumb">Dashboard / View Logging</p>
+
+      <h2>View Logging</h2>
+      <p id="viewLoggingMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <div class="view-logging-toolbar" aria-label="View logging controls">
+          <div class="view-logging-filter-group">
+            <label for="viewLoggingFilterInput" class="view-logging-toolbar-label">Text filter</label>
+            <input
+              id="viewLoggingFilterInput"
+              type="text"
+              placeholder="Search description or detail"
+              autocomplete="off"
+            />
+            <button id="viewLoggingFilterBtn" type="button" class="btn secondary">Filter</button>
+            <button id="viewLoggingFilterClearBtn" type="button" class="btn secondary">Clear</button>
+          </div>
+
+          <div class="view-logging-delete-group">
+            <label for="viewLoggingDeleteScope" class="view-logging-toolbar-label">Delete entries</label>
+            <select id="viewLoggingDeleteScope">
+              <option value="all">All Entries</option>
+              <option value="older_7_days">Entries older than 7 days</option>
+              <option value="older_31_days">Entries older than 31 days</option>
+            </select>
+            <button id="viewLoggingDeleteBtn" type="button" class="btn secondary event-log-clear-btn" title="Delete selected log entries" aria-label="Delete selected log entries">x</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="listing-form-section">
+        <div class="table-wrap">
+          <table class="calendar-table" aria-label="User event log">
+            <thead>
+              <tr>
+                <th>DTG</th>
+                <th>Description</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="viewLoggingTableBody">
+              <tr>
+                <td colspan="3">Loading log entries...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="sticky-layout.js"></script>
+  <script src="dashboard-view-logging.js"></script>
+</body>
+</html>

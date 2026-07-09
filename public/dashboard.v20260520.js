@@ -31,6 +31,10 @@ let currentManagerAssignments = {
 let currentGuests = [];
 let currentEditingTeamUserId = null;
 let currentTeamMemberDeleteImpact = null;
+let currentMeProfile = null;
+let currentDashboardContextMode = 'hosting';
+let dashboardContextAvailability = { hosting: true, guest: false };
+let dashboardTabController = null;
 
 let opsCalCurrentMonth = new Date();
 let opsCalCurrentEvents = [];
@@ -40,6 +44,7 @@ let opsCalSelectedListingIds = new Set();
 let opsCalRequestId = 0;
 let dashboardActivityRequestId = 0;
 let savedDashboardState = null;
+let hasAppliedGuestReservationReturnMessage = false;
 
 const opsCalSourceColorMap = {};
 const opsCalSourcePalette = ['#ff5a5f', '#003580', '#2a9d8f', '#e76f51', '#264653', '#f4a261', '#8a5cf6'];
@@ -380,6 +385,222 @@ function createScopeBadge(text) {
   return badge;
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || '');
+  if (!value) {
+    throw new Error('Nothing to copy.');
+  }
+
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const temp = document.createElement('textarea');
+  temp.value = value;
+  temp.setAttribute('readonly', 'readonly');
+  temp.style.position = 'fixed';
+  temp.style.opacity = '0';
+  document.body.appendChild(temp);
+  temp.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(temp);
+  if (!ok) {
+    throw new Error('Clipboard unavailable.');
+  }
+}
+
+function buildReservationEnquiryLandingPublicUrl(row) {
+  const params = new URLSearchParams();
+  const slug = String(row && row.public_slug || '').trim();
+  const selectedListingIds = Array.isArray(row && row.selected_listing_ids) ? row.selected_listing_ids : [];
+  const fallbackListingId = selectedListingIds.length ? Number(selectedListingIds[0]) : 0;
+  const preferredListingId = Number(row && row.preferred_listing_id ? row.preferred_listing_id : fallbackListingId);
+
+  if (slug) {
+    params.set('landingPage', slug);
+  }
+  if (Number.isInteger(preferredListingId) && preferredListingId > 0) {
+    params.set('preferredListingId', String(preferredListingId));
+  }
+  if (!slug && (!Number.isInteger(preferredListingId) || preferredListingId <= 0)) {
+    params.set('landingPageId', String(row && row.id ? row.id : ''));
+  }
+
+  const query = params.toString();
+  return window.location.origin + '/reservation-enquiry.html' + (query ? ('?' + query) : '');
+}
+
+function buildFacilityEnquiryLandingPublicUrl(row) {
+  const slug = String(row && row.public_slug || '').trim();
+  if (!slug) {
+    return '';
+  }
+  return window.location.origin + '/resource-booking.html?facilityLandingPage=' + encodeURIComponent(slug);
+}
+
+function renderReservationEnquiryLandingPageRows(containerId, rows) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(rows) || !rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'config-item-empty';
+    empty.textContent = 'No reservation enquiry landing pages yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  rows.forEach((rowData) => {
+    const row = document.createElement('div');
+    row.className = 'config-item-row';
+
+    const name = document.createElement('span');
+    name.className = 'config-item-name';
+    name.textContent = (rowData.name || ('Landing Page #' + rowData.id)) + (rowData.is_active === false ? ' (Inactive)' : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'config-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'btn secondary config-mini-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.title = 'Open public URL in new tab';
+    previewBtn.setAttribute('aria-label', 'Preview public URL for ' + (rowData.name || 'landing page'));
+    previewBtn.addEventListener('click', () => {
+      const url = buildReservationEnquiryLandingPublicUrl(rowData);
+      const tab = window.open(url, '_blank', 'noopener');
+      if (!tab) {
+        window.location.href = url;
+      }
+    });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn secondary config-mini-btn';
+    copyBtn.textContent = 'Copy URL';
+    copyBtn.title = 'Copy public URL';
+    copyBtn.setAttribute('aria-label', 'Copy public URL for ' + (rowData.name || 'landing page'));
+    copyBtn.addEventListener('click', async () => {
+      const url = buildReservationEnquiryLandingPublicUrl(rowData);
+      try {
+        await copyTextToClipboard(url);
+        setMessage('Copied landing page URL.', false);
+      } catch {
+        setMessage('Could not copy landing page URL.', true);
+      }
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn secondary config-edit-btn';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Edit';
+    editBtn.setAttribute('aria-label', 'Edit ' + (rowData.name || 'landing page'));
+    editBtn.addEventListener('click', () => {
+      window.location.href = '/reservation-enquiry-landing-page.html?id=' + encodeURIComponent(rowData.id);
+    });
+
+    actions.appendChild(previewBtn);
+    actions.appendChild(copyBtn);
+    actions.appendChild(editBtn);
+
+    row.appendChild(name);
+    row.appendChild(actions);
+    container.appendChild(row);
+  });
+}
+
+function renderFacilityEnquiryLandingPageRows(containerId, rows) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+  if (!Array.isArray(rows) || !rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'config-item-empty';
+    empty.textContent = 'No facility enquiry landing pages yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  rows.forEach((rowData) => {
+    const row = document.createElement('div');
+    row.className = 'config-item-row';
+
+    const name = document.createElement('span');
+    name.className = 'config-item-name';
+    const facilityName = String(rowData.shared_resource_name || '').trim();
+    const label = (rowData.name || ('Landing Page #' + rowData.id)) + (facilityName ? (' - ' + facilityName) : '');
+    name.textContent = label + (rowData.is_active === false ? ' (Inactive)' : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'config-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'btn secondary config-mini-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.title = 'Open public URL in new tab';
+    previewBtn.setAttribute('aria-label', 'Preview public URL for ' + (rowData.name || 'landing page'));
+    previewBtn.addEventListener('click', () => {
+      const url = buildFacilityEnquiryLandingPublicUrl(rowData);
+      if (!url) {
+        setMessage('Public URL is not available yet.', true);
+        return;
+      }
+      const tab = window.open(url, '_blank', 'noopener');
+      if (!tab) {
+        window.location.href = url;
+      }
+    });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn secondary config-mini-btn';
+    copyBtn.textContent = 'Copy URL';
+    copyBtn.title = 'Copy public URL';
+    copyBtn.setAttribute('aria-label', 'Copy public URL for ' + (rowData.name || 'landing page'));
+    copyBtn.addEventListener('click', async () => {
+      const url = buildFacilityEnquiryLandingPublicUrl(rowData);
+      if (!url) {
+        setMessage('Public URL is not available yet.', true);
+        return;
+      }
+      try {
+        await copyTextToClipboard(url);
+        setMessage('Copied facility landing page URL.', false);
+      } catch {
+        setMessage('Could not copy facility landing page URL.', true);
+      }
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn secondary config-edit-btn';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Edit';
+    editBtn.setAttribute('aria-label', 'Edit ' + (rowData.name || 'landing page'));
+    editBtn.addEventListener('click', () => {
+      window.location.href = '/facility-enquiry-landing-page.html?id=' + encodeURIComponent(rowData.id);
+    });
+
+    actions.appendChild(previewBtn);
+    actions.appendChild(copyBtn);
+    actions.appendChild(editBtn);
+
+    row.appendChild(name);
+    row.appendChild(actions);
+    container.appendChild(row);
+  });
+}
+
 function renderConfigRows(containerId, items, emptyText) {
   const container = document.getElementById(containerId);
   if (!container) {
@@ -455,6 +676,7 @@ function renderAccessContext(context) {
     }
   }
 
+  updateDashboardContextAvailabilityFromMemberships();
   applyAccessRoleVisibility();
 }
 
@@ -890,6 +1112,174 @@ async function fetchAccessContext() {
   renderAccessContext(data);
 }
 
+function getDashboardContextStorageKey() {
+  return 'dashboardContextMode';
+}
+
+function getDashboardContextPersistentStorageKey() {
+  const identity = currentUserEmail || 'anonymous';
+  return 'dashboardContextMode:v1:' + identity;
+}
+
+function hasDashboardContextSwitchAvailable() {
+  return dashboardContextAvailability.hosting === true && dashboardContextAvailability.guest === true;
+}
+
+function updateDashboardContextAvailabilityFromMemberships() {
+  const memberships = currentAccessContext && Array.isArray(currentAccessContext.memberships)
+    ? currentAccessContext.memberships
+    : [];
+
+  const hasGuest = memberships.some((membership) => String(membership && membership.role || '').trim() === 'Guest');
+  const hasHosting = memberships.some((membership) => {
+    const role = String(membership && membership.role || '').trim();
+    return role === 'Client' || role === 'Manager' || role === 'Staff';
+  });
+
+  dashboardContextAvailability = {
+    hosting: hasHosting || !hasGuest,
+    guest: hasGuest
+  };
+
+  renderDashboardContextToggle();
+}
+
+function normalizeDashboardContextMode(mode) {
+  const next = String(mode || '').trim().toLowerCase();
+  if (next === 'guest' && dashboardContextAvailability.guest) {
+    return 'guest';
+  }
+  if (next === 'hosting' && dashboardContextAvailability.hosting) {
+    return 'hosting';
+  }
+  if (dashboardContextAvailability.hosting) {
+    return 'hosting';
+  }
+  if (dashboardContextAvailability.guest) {
+    return 'guest';
+  }
+  return 'hosting';
+}
+
+function getAllowedPanelsForContext(mode) {
+  return mode === 'guest'
+    ? ['panel-guest-reservations', 'panel-guest-account']
+    : ['panel-dashboard', 'panel-config', 'panel-ops', 'panel-account'];
+}
+
+function getDefaultPanelForContext(mode) {
+  return mode === 'guest' ? 'panel-guest-reservations' : 'panel-dashboard';
+}
+
+function setTabButtonState(button, label, panelId, isHidden) {
+  if (!button) {
+    return;
+  }
+  button.textContent = label;
+  button.dataset.panel = panelId;
+  button.setAttribute('aria-controls', panelId);
+  button.classList.toggle('hidden', Boolean(isHidden));
+}
+
+function applyTabDefinitionsForContext(mode) {
+  const primary = document.getElementById('tabBtnPrimary');
+  const secondary = document.getElementById('tabBtnSecondary');
+  const tertiary = document.getElementById('tabBtnTertiary');
+  const quaternary = document.getElementById('tabBtnQuaternary');
+
+  if (mode === 'guest') {
+    setTabButtonState(primary, 'Reservations', 'panel-guest-reservations', false);
+    setTabButtonState(secondary, 'Personal Account', 'panel-guest-account', false);
+    setTabButtonState(tertiary, 'Ops', 'panel-ops', true);
+    setTabButtonState(quaternary, 'Host Account', 'panel-account', true);
+    return;
+  }
+
+  setTabButtonState(primary, 'Dashboard', 'panel-dashboard', false);
+  setTabButtonState(secondary, 'Config', 'panel-config', false);
+  setTabButtonState(tertiary, 'Ops', 'panel-ops', false);
+  setTabButtonState(quaternary, 'Host Account', 'panel-account', false);
+}
+
+function getContextToggleIconSvg(mode) {
+  if (mode === 'guest') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 10.5 12 4l8 6.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 9.8V20h11V9.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 20v-5.5h4V20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.5 18.5c1.2-3.2 3.6-4.8 6.5-4.8s5.3 1.6 6.5 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+}
+
+function renderDashboardContextToggle() {
+  const toggleBtn = document.getElementById('dashboardContextToggle');
+  const iconEl = document.getElementById('dashboardContextToggleIcon');
+  const labelEl = document.getElementById('dashboardContextLabel');
+  if (!toggleBtn || !iconEl || !labelEl) {
+    return;
+  }
+
+  const canSwitchModes = hasDashboardContextSwitchAvailable();
+  toggleBtn.classList.toggle('hidden', !canSwitchModes);
+  toggleBtn.disabled = !canSwitchModes;
+  if (!canSwitchModes) {
+    return;
+  }
+
+  const modeLabel = currentDashboardContextMode === 'guest' ? 'Hosting' : 'Guest';
+  labelEl.textContent = modeLabel;
+  iconEl.innerHTML = getContextToggleIconSvg(currentDashboardContextMode);
+
+  if (currentDashboardContextMode === 'guest') {
+    toggleBtn.setAttribute('aria-label', 'Switch to hosting context');
+    toggleBtn.setAttribute('title', 'Switch to Hosting');
+  } else {
+    toggleBtn.setAttribute('aria-label', 'Switch to guest context');
+    toggleBtn.setAttribute('title', 'Switch to Guest');
+  }
+}
+
+async function applyDashboardContextMode(mode, options) {
+  const settings = Object.assign({ loadData: false }, options || {});
+  const normalizedMode = normalizeDashboardContextMode(mode);
+  currentDashboardContextMode = normalizedMode;
+
+  applyTabDefinitionsForContext(normalizedMode);
+  renderDashboardContextToggle();
+
+  try {
+    sessionStorage.setItem(getDashboardContextStorageKey(), normalizedMode);
+  } catch {
+    // ignore
+  }
+
+  try {
+    window.localStorage.setItem(getDashboardContextPersistentStorageKey(), normalizedMode);
+  } catch {
+    // ignore
+  }
+
+  saveDashboardState({ contextMode: normalizedMode });
+
+  const activePanelId = dashboardTabController ? dashboardTabController.getActivePanel() : '';
+  const allowedPanels = getAllowedPanelsForContext(normalizedMode);
+  const targetPanel = allowedPanels.includes(activePanelId)
+    ? activePanelId
+    : getDefaultPanelForContext(normalizedMode);
+
+  if (dashboardTabController) {
+    dashboardTabController.activateTab(targetPanel);
+  }
+
+  if (settings.loadData) {
+    if (normalizedMode === 'guest') {
+      await loadGuestDashboardData();
+    } else {
+      await loadDashboardData();
+      if (targetPanel === 'panel-dashboard') {
+        await loadEventLog();
+      }
+    }
+  }
+}
+
 async function fetchTeamMembers() {
   if (!canViewTeam()) {
     renderTeamMembers([]);
@@ -1112,6 +1502,60 @@ async function fetchGuests() {
     throw new Error(data.error || 'Failed to load guests.');
   }
   renderGuests(data.guests || []);
+}
+
+async function fetchReservationEnquiryLandingPages() {
+  const containerId = 'configReservationEnquiryLandingPagesList';
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/reservation-enquiry-landing-pages');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load reservation enquiry landing pages.');
+    }
+
+    const rows = Array.isArray(data.landingPages) ? data.landingPages : [];
+    renderReservationEnquiryLandingPageRows(containerId, rows);
+  } catch (err) {
+    renderReservationEnquiryLandingPageRows(containerId, []);
+    setMessage(err.message || 'Failed to load reservation enquiry landing pages.', true);
+  }
+}
+
+async function fetchFacilityEnquiryLandingPages() {
+  const containerId = 'configFacilityEnquiryLandingPagesList';
+  const container = document.getElementById(containerId);
+  if (!container) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/facility-enquiry-landing-pages');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load facility enquiry landing pages.');
+    }
+
+    const rows = Array.isArray(data.landingPages) ? data.landingPages : [];
+    renderFacilityEnquiryLandingPageRows(containerId, rows);
+  } catch (err) {
+    renderFacilityEnquiryLandingPageRows(containerId, []);
+    setMessage(err.message || 'Failed to load facility enquiry landing pages.', true);
+  }
 }
 
 function sortListingsByProperty(listings) {
@@ -1558,7 +2002,7 @@ function renderDashboardActivityRows(dayKeys, activityByDay) {
         entry.listingName || 'Unknown listing'
       ];
       if (entry.changeoverName) {
-        parts.push('Changeover: ' + entry.changeoverName);
+        parts.push('ch: ' + entry.changeoverName);
       }
       if (entry.guestName) {
         parts.push('Guest: ' + entry.guestName);
@@ -1656,7 +2100,10 @@ async function refreshDashboardActivity() {
       return;
     }
 
-    const cleanerName = resolveCleanerNameFromChange(change, currentCleaners);
+    let cleanerName = resolveCleanerNameFromChange(change, currentCleaners);
+    if (!cleanerName || cleanerName === 'Unallocated') {
+      cleanerName = String(change.default_cleaner_name || '').trim();
+    }
     if (!cleanerName || cleanerName === 'Unallocated') {
       return;
     }
@@ -2798,34 +3245,47 @@ function opsCalendarBuildDayIndex(events) {
   return index;
 }
 
-function opsCalendarBuildCleaningBadgesByDate(changes) {
-  const byDate = {};
+function opsCalendarBuildReservationCleanerBadgeMap(changes) {
+  const map = new Map();
+
   (changes || []).forEach((change) => {
-    const cleanKey = toDateKey(change.changeover_date);
-    if (!cleanKey) {
-      return;
-    }
-
+    const listingId = Number(change && (change.listingId || change.listing_id) || 0);
+    const checkinKey = toDateKey(change && change.reservation_checkin_date);
+    const checkoutKey = toDateKey(change && change.reservation_checkout_date);
+    const changeoverDateKey = toDateKey(change && change.changeover_date);
     const initials = opsCalendarGetCleanerInitials(change);
-    if (!initials) {
+    if (!Number.isInteger(listingId) || listingId <= 0 || !checkinKey || !checkoutKey || !changeoverDateKey || !initials) {
       return;
     }
-    const cleanerKey = opsCalendarGetCleanerKey(change);
-    const badgeColor = opsCalendarGetCleanerColor(change);
 
-    if (!byDate[cleanKey]) {
-      byDate[cleanKey] = new Map();
-    }
-    const key = cleanerKey || ('initials:' + initials);
-    if (!byDate[cleanKey].has(key)) {
-      byDate[cleanKey].set(key, {
+    const key = reservationChangeKey(listingId, checkinKey, checkoutKey);
+    if (!map.has(key)) {
+      map.set(key, {
         initials,
-        color: badgeColor
+        color: opsCalendarGetCleanerColor(change),
+        name: opsCalendarGetCleanerDisplayName(change),
+        changeoverDate: changeoverDateKey
       });
     }
   });
 
-  return byDate;
+  return map;
+}
+
+function opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleanerBadgeMap) {
+  if (!event || !reservationCleanerBadgeMap || !reservationCleanerBadgeMap.size) {
+    return null;
+  }
+
+  const listingId = Number(event && (event.listingId || event.listing_id) || 0);
+  const checkinKey = toDateKey(event && event.start);
+  const checkoutKey = toDateKey(event && event.end);
+  if (!Number.isInteger(listingId) || listingId <= 0 || !checkinKey || !checkoutKey) {
+    return null;
+  }
+
+  const key = reservationChangeKey(listingId, checkinKey, checkoutKey);
+  return reservationCleanerBadgeMap.get(key) || null;
 }
 
 function opsCalendarRenderCleanerLegend(changes) {
@@ -2880,7 +3340,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
 
   const monthStart = opsCalendarMonthStart(opsCalCurrentMonth);
   const dayIndex = opsCalendarBuildDayIndex(events);
-  const cleanerBadgesByDate = opsCalendarBuildCleaningBadgesByDate(changes);
+  const reservationCleanerBadgeMap = opsCalendarBuildReservationCleanerBadgeMap(changes);
   const listings = getOpsCalendarListings(events);
 
   monthLabel.textContent = formatMonthLabel(monthStart);
@@ -2967,22 +3427,6 @@ function opsCalendarRenderReservationCalendar(events, changes) {
       num.textContent = String(dayNum);
       cell.appendChild(num);
 
-      const dayCleanerBadgeMap = cleanerBadgesByDate[key] ? new Map(cleanerBadgesByDate[key]) : new Map();
-
-      const dayCleanerBadges = Array.from(dayCleanerBadgeMap.values());
-      if (dayCleanerBadges.length) {
-        const cleanersEl = document.createElement('div');
-        cleanersEl.className = 'calendar-day-cleaners';
-        dayCleanerBadges.forEach((badgeInfo) => {
-          const badge = document.createElement('span');
-          badge.className = 'calendar-day-cleaner-badge';
-          badge.textContent = badgeInfo.initials;
-          badge.style.backgroundColor = badgeInfo.color;
-          cleanersEl.appendChild(badge);
-        });
-        cell.appendChild(cleanersEl);
-      }
-
       const bars = document.createElement('div');
       bars.className = 'calendar-day-bars';
 
@@ -2992,6 +3436,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
 
         const bar = document.createElement('div');
         bar.className = 'day-bar';
+        let activeBarEvents = [];
 
         if (!dayEntry) {
           bar.classList.add('day-bar-empty');
@@ -3009,6 +3454,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
 
         if (hasCheckout && hasCheckin) {
           const transitionEvents = (listingEntry.checkoutEvents || []).concat(listingEntry.checkinEvents || []);
+          activeBarEvents = transitionEvents;
           bar.classList.add('day-transition-bar');
           bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 47%, ' + transparentStop + ' 47% 53%, ' + color + ' 53% 100%)';
           if (shouldDimBar(transitionEvents, listing.name)) {
@@ -3020,6 +3466,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
           }
         } else if (hasCheckout) {
           const checkoutEvents = listingEntry.checkoutEvents || [];
+          activeBarEvents = checkoutEvents;
           bar.classList.add('day-transition-bar');
           bar.style.background = 'linear-gradient(90deg, ' + color + ' 0 68%, ' + transparentStop + ' 68% 100%)';
           if (shouldDimBar(checkoutEvents, listing.name)) {
@@ -3031,6 +3478,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
           }
         } else if (hasCheckin) {
           const checkinEvents = listingEntry.checkinEvents || [];
+          activeBarEvents = checkinEvents;
           bar.classList.add('day-transition-bar');
           bar.style.background = 'linear-gradient(90deg, ' + transparentStop + ' 0 32%, ' + color + ' 32% 100%)';
           if (shouldDimBar(checkinEvents, listing.name)) {
@@ -3042,6 +3490,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
           }
         } else if (hasStay) {
           const stayEvents = listingEntry.stayEvents || [];
+          activeBarEvents = stayEvents;
           bar.style.backgroundColor = color;
           if (shouldDimBar(stayEvents, listing.name)) {
             bar.style.opacity = '0.5';
@@ -3056,6 +3505,18 @@ function opsCalendarRenderReservationCalendar(events, changes) {
 
         if (listingEntry && listingEntry.conflict && !bar.classList.contains('day-bar-empty')) {
           bar.classList.add('day-bar-conflict');
+        }
+
+        if (!bar.classList.contains('day-bar-empty') && hasReservationEligible(activeBarEvents)) {
+          const reservationEvent = (activeBarEvents || []).find((event) => event && event.isReservation !== false) || null;
+          const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(reservationEvent, reservationCleanerBadgeMap);
+          if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === key) {
+            const initialsEl = document.createElement('span');
+            initialsEl.className = 'day-bar-initials';
+            initialsEl.textContent = cleanerBadge.initials;
+            initialsEl.title = cleanerBadge.name || '';
+            bar.appendChild(initialsEl);
+          }
         }
 
         slot.appendChild(bar);
@@ -3445,6 +3906,8 @@ async function loadDashboardData() {
   await fetchTeamMembers();
   await fetchManagerAssignments();
   await fetchGuests();
+  await fetchReservationEnquiryLandingPages();
+  await fetchFacilityEnquiryLandingPages();
   await fetchStripeConnectStatus();
   await fetchBankDetails();
 
@@ -3626,15 +4089,38 @@ async function sendScheduleEmailToRecipient(toEmail) {
       return;
     }
     const meData = await meRes.json();
+    currentMeProfile = meData;
     setConsolidatedIcsUrl(meData.consolidated_ics_token || '');
     currentUserEmail = String(meData.email || '').toLowerCase();
     loadDashboardState();
     renderStripeConnectStatus(meData.stripeConnect || null);
 
     await fetchAccessContext();
-    await loadPrivateReservations();
-    await loadDashboardData();
-    await loadEventLog();
+
+    let persistedMode = String(savedDashboardState && savedDashboardState.contextMode || '').trim().toLowerCase();
+    if (!persistedMode) {
+      try {
+        persistedMode = String(window.localStorage.getItem(getDashboardContextPersistentStorageKey()) || '').trim().toLowerCase();
+      } catch {
+        persistedMode = '';
+      }
+    }
+    if (!persistedMode) {
+      try {
+        persistedMode = String(sessionStorage.getItem(getDashboardContextStorageKey()) || '').trim().toLowerCase();
+      } catch {
+        persistedMode = '';
+      }
+    }
+    const initialMode = normalizeDashboardContextMode(persistedMode || (dashboardContextAvailability.guest && !dashboardContextAvailability.hosting ? 'guest' : 'hosting'));
+    await applyDashboardContextMode(initialMode, { loadData: false });
+
+    if (currentDashboardContextMode === 'guest') {
+      await loadGuestDashboardData();
+    } else {
+      await loadDashboardData();
+      await loadEventLog();
+    }
 
     const now = new Date();
     const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -3649,7 +4135,7 @@ async function sendScheduleEmailToRecipient(toEmail) {
     const savedSelection = savedDashboardState && Array.isArray(savedDashboardState.scheduleListingIds)
       ? savedDashboardState.scheduleListingIds.length
       : 0;
-    if (savedSelection) {
+    if (savedSelection && currentDashboardContextMode === 'hosting') {
       await updateSchedulePreview();
     }
   } catch (err) {
@@ -3806,6 +4292,20 @@ if (createGuestConfigBtn) {
   });
 }
 
+const createReservationEnquiryLandingPageConfigBtn = document.getElementById('createReservationEnquiryLandingPageConfigBtn');
+if (createReservationEnquiryLandingPageConfigBtn) {
+  createReservationEnquiryLandingPageConfigBtn.addEventListener('click', () => {
+    window.location.href = '/reservation-enquiry-landing-page.html?new=1';
+  });
+}
+
+const createFacilityEnquiryLandingPageConfigBtn = document.getElementById('createFacilityEnquiryLandingPageConfigBtn');
+if (createFacilityEnquiryLandingPageConfigBtn) {
+  createFacilityEnquiryLandingPageConfigBtn.addEventListener('click', () => {
+    window.location.href = '/facility-enquiry-landing-page.html?new=1';
+  });
+}
+
 const _addTeamMemberForm = document.getElementById('addTeamMemberForm');
 if (_addTeamMemberForm) _addTeamMemberForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -3950,6 +4450,79 @@ const _logoutBtn = document.getElementById('logoutBtn');
 if (_logoutBtn) _logoutBtn.addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   window.location.href = '/';
+});
+
+const _guestLogoutBtn = document.getElementById('guestLogoutBtn');
+if (_guestLogoutBtn) _guestLogoutBtn.addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = '/';
+});
+
+const _guestAccountForm = document.getElementById('guestAccountForm');
+if (_guestAccountForm) _guestAccountForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  setGuestAccountMessage('', false);
+
+  const saveBtn = document.getElementById('saveGuestAccountBtn');
+  const telephone = String((document.getElementById('guestTelephone') || {}).value || '').trim();
+  const postalAddress = String((document.getElementById('guestPostalAddress') || {}).value || '').trim();
+
+  if (telephone.length > 60) {
+    setGuestAccountMessage('Telephone must be 60 characters or fewer.', true);
+    return;
+  }
+  if (postalAddress.length > 500) {
+    setGuestAccountMessage('Postal address must be 500 characters or fewer.', true);
+    return;
+  }
+
+  if (saveBtn) {
+    saveBtn.disabled = true;
+  }
+  try {
+    const response = await fetch('/api/guest/dashboard/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telephone, postalAddress })
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to save guest account details.');
+    }
+
+    applyGuestProfile(data);
+    setGuestAccountMessage('Personal account saved.', false);
+  } catch (err) {
+    setGuestAccountMessage(err.message || 'Failed to save guest account details.', true);
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+    }
+  }
+});
+
+const _dashboardContextToggle = document.getElementById('dashboardContextToggle');
+if (_dashboardContextToggle) _dashboardContextToggle.addEventListener('click', async () => {
+  if (!hasDashboardContextSwitchAvailable()) {
+    return;
+  }
+
+  const nextMode = currentDashboardContextMode === 'guest' ? 'hosting' : 'guest';
+  const menuBtn = document.getElementById('tabMenuBtn');
+  const menuEl = document.getElementById('tabContextMenu');
+  if (menuBtn && menuEl) {
+    menuEl.classList.add('hidden');
+    menuBtn.setAttribute('aria-expanded', 'false');
+    menuBtn.classList.remove('open');
+  }
+
+  await applyDashboardContextMode(nextMode, { loadData: true });
 });
 
 // ── Bank Details ──────────────────────────────────────────────
@@ -4190,7 +4763,7 @@ async function loadPrivateReservations() {
     return;
   }
 
-  tbody.innerHTML = '<tr><td colspan="7">Loading private reservations...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8">Loading private reservations...</td></tr>';
   setPrivateReservationsMessage('', false);
 
   try {
@@ -4200,7 +4773,7 @@ async function loadPrivateReservations() {
       return;
     }
     if (res.status === 403) {
-      tbody.innerHTML = '<tr><td colspan="7">Access restricted.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">Access restricted.</td></tr>';
       return;
     }
 
@@ -4211,7 +4784,7 @@ async function loadPrivateReservations() {
 
     const reservations = Array.isArray(data.reservations) ? data.reservations : [];
     if (!reservations.length) {
-      tbody.innerHTML = '<tr><td colspan="7">No private reservations found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8">No private reservations found.</td></tr>';
       return;
     }
 
@@ -4240,6 +4813,9 @@ async function loadPrivateReservations() {
       const amountCell = document.createElement('td');
       amountCell.textContent = formatPrivateReservationAmount(reservation.amount);
 
+      const paymentStatusCell = document.createElement('td');
+      paymentStatusCell.textContent = String(reservation.paymentStatus || '—');
+
       const actionCell = document.createElement('td');
       const actionsWrap = document.createElement('div');
       actionsWrap.className = 'feed-actions';
@@ -4263,26 +4839,440 @@ async function loadPrivateReservations() {
       tr.appendChild(arrivalCell);
       tr.appendChild(nightsCell);
       tr.appendChild(amountCell);
+      tr.appendChild(paymentStatusCell);
       tr.appendChild(actionCell);
       tbody.appendChild(tr);
     });
   } catch (err) {
-    tbody.innerHTML = '<tr><td colspan="7">Failed to load private reservations.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8">Failed to load private reservations.</td></tr>';
     setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
   }
+}
+
+function setGuestReservationsMessage(text, isError) {
+  const el = document.getElementById('guestReservationsMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setGuestAccountMessage(text, isError) {
+  const el = document.getElementById('guestAccountMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function formatGuestDateTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '—';
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatGuestAmount(amount) {
+  const numeric = Number(amount);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : '—';
+}
+
+function normalizeGuestReservationValue(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getGuestAccommodationReservationAction(reservation) {
+  const statusValue = normalizeGuestReservationValue(reservation && reservation.status);
+  const paymentMethodValue = normalizeGuestReservationValue(reservation && reservation.paymentMethod);
+
+  const isAwaitingOnline = statusValue === 'awaiting_online_payment' || statusValue === 'awaiting online payment';
+  const isAwaitingBankTransfer = statusValue === 'awaiting_bank_transfer' || statusValue === 'awaiting bank transfer';
+
+  if (isAwaitingOnline && paymentMethodValue === 'online payment') {
+    return {
+      key: 'pay-now',
+      label: 'Pay Now'
+    };
+  }
+
+  if (isAwaitingBankTransfer && paymentMethodValue === 'bank transfer') {
+    return {
+      key: 'notify-payment',
+      label: 'Notify Payment'
+    };
+  }
+
+  return null;
+}
+
+function consumeGuestReservationReturnMessageFromUrl() {
+  let paymentState = '';
+  let reservationId = '';
+  let sessionId = '';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    paymentState = String(params.get('payment') || '').trim().toLowerCase();
+    reservationId = String(params.get('reservationId') || '').trim();
+    sessionId = String(params.get('session_id') || params.get('sessionId') || '').trim();
+    if (!paymentState) {
+      return { paymentState: '', reservationId: '', sessionId: '' };
+    }
+
+    params.delete('payment');
+    params.delete('reservationId');
+    params.delete('session_id');
+    params.delete('sessionId');
+    const nextQuery = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (nextQuery ? ('?' + nextQuery) : ''));
+  } catch {
+    return { paymentState: '', reservationId: '', sessionId: '' };
+  }
+
+  if (paymentState === 'success') {
+    setGuestReservationsMessage(
+      'Payment completed for reservation' + (reservationId ? (' #' + reservationId) : '') + '. Status will refresh once payment is confirmed.',
+      false
+    );
+    return { paymentState, reservationId, sessionId };
+  }
+
+  if (paymentState === 'cancelled') {
+    setGuestReservationsMessage('Payment was cancelled. You can try again using Pay Now.', true);
+  }
+
+  return { paymentState, reservationId, sessionId };
+}
+
+async function reconcileGuestReservationPaymentIfNeeded(paymentState, reservationId, sessionId) {
+  if (paymentState !== 'success' || !reservationId) {
+    return null;
+  }
+
+  const syncUrl = '/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/sync-payment'
+    + (sessionId ? ('?sessionId=' + encodeURIComponent(String(sessionId))) : '');
+
+  const response = await fetch(syncUrl, {
+    method: 'POST'
+  });
+
+  if (response.status === 401) {
+    window.location.href = '/';
+    return null;
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to reconcile reservation payment.');
+  }
+
+  return data;
+}
+
+async function startGuestReservationOnlinePayment(reservationId, button) {
+  if (button) {
+    button.disabled = true;
+  }
+  setGuestReservationsMessage('Starting secure payment...', false);
+
+  try {
+    const response = await fetch('/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/pay-now', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to start reservation payment.');
+    }
+
+    if (!data || !data.checkoutUrl) {
+      throw new Error('Stripe checkout URL is missing.');
+    }
+
+    window.location.href = String(data.checkoutUrl);
+  } catch (err) {
+    setGuestReservationsMessage(err.message || 'Failed to start reservation payment.', true);
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
+async function notifyGuestReservationBankTransfer(reservationId, button) {
+  if (button) {
+    button.disabled = true;
+  }
+  setGuestReservationsMessage('Sending payment notification...', false);
+
+  try {
+    const response = await fetch('/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/notify-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to notify payment.');
+    }
+
+    setGuestReservationsMessage(data.message || 'Payment notification sent.', false);
+    await loadGuestReservations();
+  } catch (err) {
+    setGuestReservationsMessage(err.message || 'Failed to notify payment.', true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
+async function loadGuestReservations() {
+  const accommodationBody = document.getElementById('guestAccommodationTableBody');
+  const facilityBody = document.getElementById('guestFacilityTableBody');
+  if (!accommodationBody || !facilityBody) {
+    return;
+  }
+
+  let returnMessage = { paymentState: '', reservationId: '', sessionId: '' };
+  if (!hasAppliedGuestReservationReturnMessage) {
+    returnMessage = consumeGuestReservationReturnMessageFromUrl() || { paymentState: '', reservationId: '', sessionId: '' };
+    hasAppliedGuestReservationReturnMessage = true;
+  }
+
+  accommodationBody.innerHTML = '<tr><td colspan="9">Loading accommodation reservations...</td></tr>';
+  facilityBody.innerHTML = '<tr><td colspan="6">Loading facility reservations...</td></tr>';
+  if (!String(document.getElementById('guestReservationsMessage') && document.getElementById('guestReservationsMessage').textContent || '').trim()) {
+    setGuestReservationsMessage('', false);
+  }
+
+  try {
+    if (returnMessage.paymentState === 'success' && returnMessage.reservationId) {
+      setGuestReservationsMessage('Reconciling payment status...', false);
+      const syncResult = await reconcileGuestReservationPaymentIfNeeded(returnMessage.paymentState, returnMessage.reservationId, returnMessage.sessionId);
+      const reservationStatus = String(syncResult && syncResult.reservation && syncResult.reservation.status || '').trim().toLowerCase();
+      if (reservationStatus === 'confirmed') {
+        setGuestReservationsMessage(
+          'Payment confirmed for reservation #' + String(returnMessage.reservationId) + '.',
+          false
+        );
+      } else {
+        setGuestReservationsMessage(
+          'Payment submitted for reservation #' + String(returnMessage.reservationId) + '. Status will change once payment is confirmed.',
+          false
+        );
+      }
+    }
+
+    const response = await fetch('/api/guest/dashboard/reservations');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load guest reservations.');
+    }
+
+    const accommodation = Array.isArray(data.accommodation) ? data.accommodation : [];
+    const facilities = Array.isArray(data.facilities) ? data.facilities : [];
+
+    if (!accommodation.length) {
+      accommodationBody.innerHTML = '<tr><td colspan="9">No accommodation reservations found.</td></tr>';
+    } else {
+      accommodationBody.innerHTML = '';
+      accommodation.forEach((reservation) => {
+        const tr = document.createElement('tr');
+
+        const actionCell = document.createElement('td');
+        const action = getGuestAccommodationReservationAction(reservation);
+        if (action) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn secondary inline-btn guest-reservation-action-btn';
+          button.textContent = action.label;
+          if (action.key === 'pay-now') {
+            button.addEventListener('click', () => {
+              startGuestReservationOnlinePayment(reservation.id, button);
+            });
+          }
+          if (action.key === 'notify-payment') {
+            button.addEventListener('click', () => {
+              notifyGuestReservationBankTransfer(reservation.id, button);
+            });
+          }
+          actionCell.appendChild(button);
+        } else {
+          actionCell.textContent = '—';
+        }
+
+        const idCell = document.createElement('td');
+        idCell.textContent = reservation.reservationIdentifier || '—';
+
+        const listingCell = document.createElement('td');
+        listingCell.textContent = reservation.listingName || '—';
+
+        const arrivalCell = document.createElement('td');
+        arrivalCell.textContent = formatPrivateReservationArrival(reservation.arrivalDate);
+
+        const departureCell = document.createElement('td');
+        departureCell.textContent = formatPrivateReservationArrival(reservation.departureDate);
+
+        const nightsCell = document.createElement('td');
+        nightsCell.textContent = String(Number(reservation.stayNights || 0) || 0);
+
+        const amountCell = document.createElement('td');
+        amountCell.textContent = formatGuestAmount(reservation.amount);
+
+        const paymentCell = document.createElement('td');
+        paymentCell.textContent = reservation.paymentStatus || '—';
+
+        const statusCell = document.createElement('td');
+        statusCell.textContent = reservation.status || '—';
+
+        tr.appendChild(actionCell);
+        tr.appendChild(idCell);
+        tr.appendChild(listingCell);
+        tr.appendChild(arrivalCell);
+        tr.appendChild(departureCell);
+        tr.appendChild(nightsCell);
+        tr.appendChild(amountCell);
+        tr.appendChild(paymentCell);
+        tr.appendChild(statusCell);
+        accommodationBody.appendChild(tr);
+      });
+    }
+
+    if (!facilities.length) {
+      facilityBody.innerHTML = '<tr><td colspan="6">No facility reservations found.</td></tr>';
+    } else {
+      facilityBody.innerHTML = '';
+      facilities.forEach((reservation) => {
+        const tr = document.createElement('tr');
+
+        const resourceCell = document.createElement('td');
+        resourceCell.textContent = reservation.resourceName || '—';
+
+        const startCell = document.createElement('td');
+        startCell.textContent = formatGuestDateTime(reservation.requestedStartAt);
+
+        const endCell = document.createElement('td');
+        endCell.textContent = formatGuestDateTime(reservation.requestedEndAt);
+
+        const amountCell = document.createElement('td');
+        amountCell.textContent = formatGuestAmount(reservation.amount);
+
+        const paymentCell = document.createElement('td');
+        paymentCell.textContent = reservation.paymentStatus || '—';
+
+        const statusCell = document.createElement('td');
+        statusCell.textContent = reservation.status || '—';
+
+        tr.appendChild(resourceCell);
+        tr.appendChild(startCell);
+        tr.appendChild(endCell);
+        tr.appendChild(amountCell);
+        tr.appendChild(paymentCell);
+        tr.appendChild(statusCell);
+        facilityBody.appendChild(tr);
+      });
+    }
+  } catch (err) {
+    accommodationBody.innerHTML = '<tr><td colspan="9">Failed to load accommodation reservations.</td></tr>';
+    facilityBody.innerHTML = '<tr><td colspan="6">Failed to load facility reservations.</td></tr>';
+    setGuestReservationsMessage(err.message || 'Failed to load guest reservations.', true);
+  }
+}
+
+function applyGuestProfile(profile) {
+  const firstNameEl = document.getElementById('guestAccountFirstName');
+  const familyNameEl = document.getElementById('guestAccountFamilyName');
+  const emailEl = document.getElementById('guestAccountEmail');
+  const telephoneEl = document.getElementById('guestTelephone');
+  const postalAddressEl = document.getElementById('guestPostalAddress');
+
+  if (firstNameEl) firstNameEl.value = String(profile && profile.firstName || '');
+  if (familyNameEl) familyNameEl.value = String(profile && profile.familyName || '');
+  if (emailEl) emailEl.value = String(profile && profile.email || '');
+  if (telephoneEl) telephoneEl.value = String(profile && profile.telephone || '');
+  if (postalAddressEl) postalAddressEl.value = String(profile && profile.postalAddress || '');
+}
+
+async function loadGuestAccountProfile() {
+  setGuestAccountMessage('', false);
+  try {
+    const response = await fetch('/api/guest/dashboard/profile');
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load guest account details.');
+    }
+
+    applyGuestProfile(data);
+  } catch (err) {
+    setGuestAccountMessage(err.message || 'Failed to load guest account details.', true);
+  }
+}
+
+async function loadGuestDashboardData() {
+  await loadGuestReservations();
+  await loadGuestAccountProfile();
 }
 
 async function fetchBankDetails() {
   try {
     const res = await fetch('/api/account/bank-details');
-    if (!res.ok) return;
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.warn('[BankDetails] Failed to load bank details:', res.status, errorData.error || 'Unknown error');
+      // Only show message if it's an auth or account error, not just empty data
+      if (res.status === 401 || res.status === 403) {
+        setBankDetailsMessage('You do not have permission to view bank details.', true);
+      } else if (res.status === 404) {
+        console.warn('[BankDetails] Client account not found - this should not happen');
+      }
+      return;
+    }
     const data = await res.json();
-    document.getElementById('bankAccountName').value = data.accountName || '';
-    document.getElementById('bankSortCode').value = data.sortCode || '';
-    document.getElementById('bankAccountNumber').value = data.accountNumber || '';
-    document.getElementById('bankIsBusiness').checked = data.isBusiness === true;
-  } catch {
-    // non-fatal
+    const bankAccountNameEl = document.getElementById('bankAccountName');
+    const bankSortCodeEl = document.getElementById('bankSortCode');
+    const bankAccountNumberEl = document.getElementById('bankAccountNumber');
+    const bankIbanEl = document.getElementById('bankIban');
+    const bankBicEl = document.getElementById('bankBic');
+    const bankIsBusinessEl = document.getElementById('bankIsBusiness');
+
+    if (bankAccountNameEl) bankAccountNameEl.value = data.accountName || '';
+    if (bankSortCodeEl) bankSortCodeEl.value = data.sortCode || '';
+    if (bankAccountNumberEl) bankAccountNumberEl.value = data.accountNumber || '';
+    if (bankIbanEl) bankIbanEl.value = data.iban || '';
+    if (bankBicEl) bankBicEl.value = data.bic || '';
+    if (bankIsBusinessEl) bankIsBusinessEl.checked = data.isBusiness === true;
+
+    console.log('[BankDetails] Loaded bank details successfully');
+  } catch (err) {
+    console.error('[BankDetails] Error loading bank details:', err);
+    // Non-fatal error - don't show message to user for network/parse errors
   }
 }
 
@@ -4291,22 +5281,49 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   setBankDetailsMessage('', false);
   const btn = document.getElementById('saveBankDetailsBtn');
+  const accountName = String((document.getElementById('bankAccountName') || {}).value || '').trim();
+  const sortCode = String((document.getElementById('bankSortCode') || {}).value || '').trim();
+  const accountNumber = String((document.getElementById('bankAccountNumber') || {}).value || '').trim();
+  const iban = String((document.getElementById('bankIban') || {}).value || '').trim();
+  const bic = String((document.getElementById('bankBic') || {}).value || '').trim();
+
+  if (!accountName || !sortCode || !accountNumber) {
+    setBankDetailsMessage('Account name, sort code, and account number are required.', true);
+    return;
+  }
+  if (!iban) {
+    setBankDetailsMessage('IBAN is required.', true);
+    return;
+  }
+  if (!bic) {
+    setBankDetailsMessage('BIC is required.', true);
+    return;
+  }
+
   if (btn) btn.disabled = true;
   try {
+    console.log('[BankDetails] Saving bank details:', { accountName, sortCode, iban, bic });
     const res = await fetch('/api/account/bank-details', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        accountName: (document.getElementById('bankAccountName') || {}).value || '',
-        sortCode: (document.getElementById('bankSortCode') || {}).value || '',
-        accountNumber: (document.getElementById('bankAccountNumber') || {}).value || '',
+        accountName,
+        sortCode,
+        accountNumber,
+        iban,
+        bic,
         isBusiness: !!(document.getElementById('bankIsBusiness') || {}).checked
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to save bank details.');
+    if (!res.ok) {
+      console.error('[BankDetails] Save failed with status', res.status, data);
+      throw new Error(data.error || 'Failed to save bank details.');
+    }
+    console.log('[BankDetails] Bank details saved successfully');
     setBankDetailsMessage('Bank details saved.', false);
   } catch (err) {
+    console.error('[BankDetails] Error saving bank details:', err);
     setBankDetailsMessage(err.message || 'Failed to save bank details.', true);
   } finally {
     if (btn) btn.disabled = false;
@@ -4579,24 +5596,44 @@ if (_copyConsolidatedIcsUrlBtn) _copyConsolidatedIcsUrlBtn.addEventListener('cli
   const tabBtns = Array.from(document.querySelectorAll('.dashboard-tab-btn'));
   const panels = Array.from(document.querySelectorAll('.dashboard-tab-panel'));
 
+  function getVisibleTabButtons() {
+    return tabBtns.filter((btn) => !btn.classList.contains('hidden'));
+  }
+
   function activateTab(panelId) {
+    const visibleButtons = getVisibleTabButtons();
+    const visiblePanelIds = new Set(visibleButtons.map((btn) => btn.dataset.panel));
+
+    let targetPanelId = panelId;
+    if (!targetPanelId || !visiblePanelIds.has(targetPanelId) || !document.getElementById(targetPanelId)) {
+      targetPanelId = visibleButtons.length ? visibleButtons[0].dataset.panel : getDefaultPanelForContext(currentDashboardContextMode);
+    }
+
     tabBtns.forEach((btn) => {
-      const isTarget = btn.dataset.panel === panelId;
+      const isTarget = !btn.classList.contains('hidden') && btn.dataset.panel === targetPanelId;
       btn.classList.toggle('active', isTarget);
       btn.setAttribute('aria-selected', String(isTarget));
     });
     panels.forEach((panel) => {
-      panel.classList.toggle('hidden', panel.id !== panelId);
+      panel.classList.toggle('hidden', panel.id !== targetPanelId);
     });
     try {
-      sessionStorage.setItem(STORAGE_KEY, panelId);
+      sessionStorage.setItem(STORAGE_KEY, targetPanelId);
     } catch {
       // ignore
     }
-    if (panelId === 'panel-dashboard') {
+    if (targetPanelId === 'panel-dashboard' && currentDashboardContextMode === 'hosting') {
       refreshDashboardActivity();
       loadEventLog();
     }
+    if (targetPanelId === 'panel-guest-reservations') {
+      loadGuestReservations();
+    }
+    if (targetPanelId === 'panel-guest-account') {
+      loadGuestAccountProfile();
+    }
+
+    return targetPanelId;
   }
 
   tabBtns.forEach((btn) => {
@@ -4624,6 +5661,14 @@ if (_copyConsolidatedIcsUrlBtn) _copyConsolidatedIcsUrlBtn.addEventListener('cli
     // ignore
   }
   activateTab(initial);
+
+  dashboardTabController = {
+    activateTab,
+    getActivePanel() {
+      const active = document.querySelector('.dashboard-tab-btn.active');
+      return active ? String(active.dataset.panel || '') : '';
+    }
+  };
 })();
 
 // ── Consolidated reservations (Ops tab) ──────────────────────
@@ -4726,30 +5771,45 @@ async function loadAllReservations() {
 // -- Tab context menu ------------------------------------------
 
 (function initTabContextMenu() {
-  const TAB_SUBMENUS = {
-    'panel-dashboard': [
-      { label: 'View Private Reservations', href: '/dashboard-private-reservations.html' },
-      { label: 'View Facility Reservations', href: '/dashboard-facility-reservations.html' }
-    ],
-    'panel-config': [],
-    'panel-ops': [
-      { label: 'New Private Reservation', href: '/private-reservation.html' },
-      { label: 'New Facility Booking', href: '/resource-booking.html' }
-    ],
-    'panel-account': []
+  const HOST_SUBMENU_ITEMS = [
+    { label: 'Private Reservations', href: '/dashboard-private-reservations.html' },
+    { label: 'Facility Reservations', href: '/dashboard-facility-reservations.html' },
+    { label: 'View Logging', href: '/dashboard-view-logging.html' }
+  ];
+
+  const GUEST_SUBMENUS = {
+    'panel-guest-reservations': [],
+    'panel-guest-account': []
   };
 
   const menuBtn = document.getElementById('tabMenuBtn');
   const menuEl = document.getElementById('tabContextMenu');
   if (!menuBtn || !menuEl) return;
 
+  function hasVisibleTopLevelTabs() {
+    return Array.from(document.querySelectorAll('.dashboard-tab-btn'))
+      .some((btn) => !btn.classList.contains('hidden'));
+  }
+
+  function refreshMenuButtonVisibility() {
+    const shouldShow = hasVisibleTopLevelTabs();
+    menuBtn.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) {
+      menuEl.classList.add('hidden');
+      menuBtn.setAttribute('aria-expanded', 'false');
+      menuBtn.classList.remove('open');
+    }
+  }
+
   function getActivePanel() {
     const active = document.querySelector('.dashboard-tab-btn.active');
-    return active ? active.dataset.panel : 'panel-dashboard';
+    return active ? active.dataset.panel : getDefaultPanelForContext(currentDashboardContextMode);
   }
 
   function buildMenu(panelId) {
-    const items = TAB_SUBMENUS[panelId] || [];
+    const items = currentDashboardContextMode === 'guest'
+      ? (GUEST_SUBMENUS[panelId] || [])
+      : HOST_SUBMENU_ITEMS;
     if (!items.length) {
       menuEl.innerHTML = '<span class="tab-context-menu-empty">No actions for this section.</span>';
     } else {
@@ -4760,6 +5820,10 @@ async function loadAllReservations() {
   }
 
   function openMenu() {
+    refreshMenuButtonVisibility();
+    if (menuBtn.classList.contains('hidden')) {
+      return;
+    }
     buildMenu(getActivePanel());
     menuEl.classList.remove('hidden');
     menuBtn.setAttribute('aria-expanded', 'true');
@@ -4791,11 +5855,25 @@ async function loadAllReservations() {
   // Rebuild submenu if user changes tab while menu is open
   document.querySelectorAll('.dashboard-tab-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
+      refreshMenuButtonVisibility();
       if (!menuEl.classList.contains('hidden')) {
         buildMenu(btn.dataset.panel);
       }
     });
   });
+
+  // Keep menu icon visibility in sync when tab buttons are shown/hidden during context switches.
+  const tabButtons = Array.from(document.querySelectorAll('.dashboard-tab-btn'));
+  if (tabButtons.length && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(() => {
+      refreshMenuButtonVisibility();
+    });
+    tabButtons.forEach((btn) => {
+      observer.observe(btn, { attributes: true, attributeFilter: ['class'] });
+    });
+  }
+
+  refreshMenuButtonVisibility();
 })();
 
 // ── Calendar Event Log ────────────────────────────────────────

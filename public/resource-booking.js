@@ -1,8 +1,12 @@
 'use strict';
 
+const resourceBookingParams = new URLSearchParams(window.location.search);
+const facilityLandingSlug = String(resourceBookingParams.get('facilityLandingPage') || '').trim();
+
 let currentResource = null;
 let availabilityConfirmed = false;
 let currentCalculatedRate = null;
+let facilityLandingPage = null;
 
 function setBookingMessage(text, isError) {
   const el = document.getElementById('resourceBookingMessage');
@@ -14,6 +18,13 @@ function setBookingMessage(text, isError) {
 }
 
 function getSelectedResourceId() {
+  if (facilityLandingPage && facilityLandingPage.facility && Number.isInteger(Number(facilityLandingPage.facility.id))) {
+    const fixedId = Number(facilityLandingPage.facility.id);
+    if (fixedId > 0) {
+      return fixedId;
+    }
+  }
+
   const select = document.getElementById('resourceBookingResourceSelect');
   if (!select) {
     return null;
@@ -67,6 +78,17 @@ function isEnabledValue(value) {
 }
 
 function getEnabledPaymentOptions(resource) {
+  if (facilityLandingPage) {
+    const method = String(facilityLandingPage.payment_method || '').trim();
+    if (method === 'bank_transfer') {
+      return [{ key: 'bank_transfer', label: 'Bank Transfer', enabled: true }];
+    }
+    if (method === 'online') {
+      return [{ key: 'online_payment', label: 'Online Payment', enabled: true }];
+    }
+    return [];
+  }
+
   if (!resource) {
     return [];
   }
@@ -437,6 +459,7 @@ function getReservationPageUrl(paymentKey) {
   return pageName
     + '?resourceId=' + encodeURIComponent(resourceId)
     + '&paymentOption=' + encodeURIComponent(paymentKey)
+    + (facilityLandingSlug ? '&facilityLandingPage=' + encodeURIComponent(facilityLandingSlug) : '')
     + (startDateTime ? '&startDateTime=' + encodeURIComponent(startDateTime) : '')
     + (endDateTime ? '&endDateTime=' + encodeURIComponent(endDateTime) : '')
     + (checkinDate ? '&checkinDate=' + encodeURIComponent(checkinDate) : '')
@@ -517,7 +540,11 @@ function initialiseBookingRequestForm() {
       reserveBtn.disabled = true;
       const selectedPaymentKey = String(select.value || '').trim();
       try {
-        const res = await fetch('/api/public/shared-resources/' + resourceId + '/check-availability', {
+        const endpoint = facilityLandingSlug
+          ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug) + '/check-availability')
+          : ('/api/public/shared-resources/' + resourceId + '/check-availability');
+
+        const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(prepared.payload)
@@ -529,7 +556,8 @@ function initialiseBookingRequestForm() {
           const popupText = (data && data.error ? data.error : 'The selected facility is no longer available for the requested dates.')
             + '\n\nPress OK to return to the booking page and choose an alternative.';
           window.alert(popupText);
-          window.location.href = '/resource-booking.html?resourceId=' + encodeURIComponent(String(resourceId));
+          window.location.href = '/resource-booking.html?resourceId=' + encodeURIComponent(String(resourceId))
+            + (facilityLandingSlug ? ('&facilityLandingPage=' + encodeURIComponent(facilityLandingSlug)) : '');
           return;
         }
 
@@ -565,11 +593,36 @@ function populateResourceSelect(resources) {
     select.appendChild(option);
   });
 
-  const fromQuery = Number(new URLSearchParams(window.location.search).get('resourceId') || 0);
+  const fromQuery = Number(resourceBookingParams.get('resourceId') || 0);
   if (Number.isInteger(fromQuery) && fromQuery > 0) {
     select.value = String(fromQuery);
   } else if (sorted.length === 1) {
     select.value = String(sorted[0].id);
+  }
+
+  if (facilityLandingPage && facilityLandingPage.facility) {
+    const fixedId = Number(facilityLandingPage.facility.id || 0);
+    if (Number.isInteger(fixedId) && fixedId > 0) {
+      select.value = String(fixedId);
+      select.disabled = true;
+    }
+  }
+}
+
+async function loadFacilityLandingPageBySlug() {
+  if (!facilityLandingSlug) {
+    return;
+  }
+
+  const response = await fetch('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug));
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load facility enquiry landing page.');
+  }
+
+  facilityLandingPage = data.landingPage || null;
+  if (!facilityLandingPage || !facilityLandingPage.facility || !Number(facilityLandingPage.facility.id)) {
+    throw new Error('Facility landing page configuration is incomplete.');
   }
 }
 
@@ -598,8 +651,13 @@ async function loadSelectedResource(options) {
   currentResource = resource;
   availabilityConfirmed = false;
 
-  document.getElementById('publicBookingResourceName').textContent = resource.short_description || 'Shared Resource';
-  document.getElementById('publicBookingDescription').innerHTML = resource.full_description_html || '<p>No description provided.</p>';
+  if (facilityLandingPage) {
+    document.getElementById('publicBookingResourceName').textContent = String(facilityLandingPage.title || resource.short_description || 'Shared Resource');
+    document.getElementById('publicBookingDescription').innerHTML = String(facilityLandingPage.description_html || resource.full_description_html || '<p>No description provided.</p>');
+  } else {
+    document.getElementById('publicBookingResourceName').textContent = resource.short_description || 'Shared Resource';
+    document.getElementById('publicBookingDescription').innerHTML = resource.full_description_html || '<p>No description provided.</p>';
+  }
 
   populatePaymentSelectionDropdown(resource, currentPaymentValue);
   updateReservationRateDisplay();
@@ -655,7 +713,11 @@ function setupCheckAvailability() {
     try {
       await loadSelectedResource({ preservePaymentSelection: true });
 
-      const res = await fetch('/api/public/shared-resources/' + resourceId + '/check-availability', {
+      const endpoint = facilityLandingSlug
+        ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug) + '/check-availability')
+        : ('/api/public/shared-resources/' + resourceId + '/check-availability');
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(prepared.payload)
@@ -679,24 +741,32 @@ function setupCheckAvailability() {
 
 (async () => {
   try {
-    const meRes = await fetch('/api/me');
-    if (!meRes.ok) {
-      window.location.href = '/';
-      return;
+    if (!facilityLandingSlug) {
+      const meRes = await fetch('/api/me');
+      if (!meRes.ok) {
+        window.location.href = '/';
+        return;
+      }
     }
 
     initialiseBookingRequestForm();
     setupCheckAvailability();
     resetBookingContext();
 
-    const resourcesRes = await fetch('/api/shared-resources');
-    const resourcesData = await resourcesRes.json();
-    if (!resourcesRes.ok) {
-      throw new Error(resourcesData.error || 'Failed to load facilities.');
-    }
+    await loadFacilityLandingPageBySlug();
 
-    const resources = Array.isArray(resourcesData.resources) ? resourcesData.resources : [];
-    populateResourceSelect(resources);
+    if (facilityLandingPage && facilityLandingPage.facility) {
+      populateResourceSelect([facilityLandingPage.facility]);
+    } else {
+      const resourcesRes = await fetch('/api/shared-resources');
+      const resourcesData = await resourcesRes.json();
+      if (!resourcesRes.ok) {
+        throw new Error(resourcesData.error || 'Failed to load facilities.');
+      }
+
+      const resources = Array.isArray(resourcesData.resources) ? resourcesData.resources : [];
+      populateResourceSelect(resources);
+    }
 
     const resourceSelect = document.getElementById('resourceBookingResourceSelect');
     resourceSelect.addEventListener('change', async () => {
@@ -717,5 +787,13 @@ function setupCheckAvailability() {
 })();
 
 document.getElementById('backBtn').addEventListener('click', () => {
+  if (facilityLandingSlug) {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    window.location.href = '/';
+    return;
+  }
   window.location.href = '/dashboard.html?tab=panel-dashboard';
 });

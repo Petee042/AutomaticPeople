@@ -377,11 +377,59 @@ textarea:focus {
   position: relative;
   display: flex;
   align-items: stretch;
+  gap: 0.4rem;
 }
 
 .tab-bar-row .dashboard-tab-bar {
   flex: 1;
   min-width: 0;
+}
+
+.context-toggle-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 5.2rem;
+  padding: 0 0.5rem;
+  border: 1px solid #d7deef;
+  border-bottom: 2px solid #e0e4f0;
+  border-radius: 0;
+  background: #ffffff;
+  color: #304067;
+  cursor: pointer;
+}
+
+.context-toggle-btn:hover {
+  color: #133070;
+  background: #f4f7ff;
+}
+
+.context-toggle-btn:focus-visible {
+  outline: 2px solid #133070;
+  outline-offset: -2px;
+}
+
+.context-toggle-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-toggle-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.context-toggle-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .tab-menu-btn {
@@ -1076,6 +1124,419 @@ textarea:focus {
   font-size: 0.93rem;
 }
 
+.config-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.config-mini-btn {
+  height: 1.9rem;
+  padding: 0 0.58rem;
+  font-size: 0.78rem;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.landing-listing-selection {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.landing-page-form .landing-listing-selection label {
+  width: auto;
+  flex-shrink: 1;
+}
+
+.landing-listing-row {
+  border: 1px solid #e4e9f6;
+  border-radius: 10px;
+  padding: 0.55rem;
+  background: #fff;
+}
+
+.landing-listing-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  color: #1f2d4f;
+  width: 100%;
+}
+
+.landing-listing-toggle input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: auto;
+  -webkit-appearance: checkbox;
+  background: transparent;
+}
+
+.landing-listing-toggle span {
+  white-space: nowrap;
+}
+
+.landing-listing-url-row {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.landing-page-form .landing-listing-url-row label {
+  width: auto;
+  white-space: nowrap;
+}
+
+.landing-listing-url-row input:disabled {
+  opacity: 0.65;
+}
+
+.landing-page-form .calendar-source-row.checkbox-row {
+  align-items: center;
+}
+
+.landing-page-form .calendar-source-row.checkbox-row input[type="checkbox"] {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  cursor: pointer;
+  appearance: auto;
+  -webkit-appearance: checkbox;
+}
+
+.reservation-enquiry-page {
+  background: linear-gradient(180deg, #f5f8ff 0%, #eef3fb 100%);
+  min-height: 100vh;
+}
+
+.reservation-enquiry-card {
+  margin-top: 1.6rem;
+}
+
+.reservation-enquiry-description,
+.reservation-enquiry-notes {
+  color: #243557;
+  line-height: 1.55;
+}
+
+.reservation-enquiry-month-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.reservation-enquiry-month-icon-btn {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 1;
+  font-size: 1.15rem;
+}
+
+.reservation-enquiry-month-label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #17346f;
+}
+
+.reservation-enquiry-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.55rem;
+}
+
+.reservation-enquiry-terms-link {
+  color: #133070;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-decoration: none;
+  line-height: 1.3;
+}
+
+.reservation-enquiry-terms-link:hover,
+.reservation-enquiry-terms-link:focus-visible {
+  text-decoration: underline;
+}
+
+.reservation-enquiry-check-btn {
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  flex: 0 0 auto;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 5px 12px rgba(19, 48, 112, 0.16);
+}
+
+.reservation-enquiry-check-btn:hover {
+  box-shadow: 0 7px 15px rgba(19, 48, 112, 0.2);
+}
+
+.reservation-enquiry-confirm-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-weight: 600;
+  color: #30415f;
+  line-height: 1.45;
+}
+
+.reservation-enquiry-confirm-label input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.18rem;
+  flex: 0 0 auto;
+}
+
+.reservation-enquiry-confirm-label a {
+  color: #133070;
+}
+
+.reservation-enquiry-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 0.9rem;
+}
+
+.reservation-enquiry-calendar-card {
+  border: 1px solid #dce5f7;
+  border-radius: 14px;
+  background: #fff;
+  padding: 0.8rem;
+  box-shadow: 0 6px 18px rgba(18, 33, 70, 0.05);
+}
+
+.reservation-enquiry-calendar-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #17346f;
+}
+
+.reservation-enquiry-calendar-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.reservation-enquiry-calendar-subtitle {
+  margin: 0.15rem 0 0.65rem;
+  font-size: 0.82rem;
+  color: #5d6c8f;
+}
+
+.reservation-enquiry-weekdays,
+.reservation-enquiry-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.28rem;
+}
+
+.reservation-enquiry-weekdays span {
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #62749b;
+}
+
+.reservation-enquiry-day {
+  min-height: 2.2rem;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.reservation-enquiry-day.is-blank {
+  background: transparent;
+}
+
+.reservation-enquiry-day.is-available {
+  background: #d9f6df;
+  color: #166534;
+  border-color: #b8e7c3;
+}
+
+.reservation-enquiry-day.is-unavailable {
+  background: #f4f6fb;
+  color: #98a2bb;
+  border-color: #e4e8f1;
+}
+
+.reservation-enquiry-day.is-past {
+  opacity: 0.65;
+}
+
+.reservation-enquiry-request-grid,
+.reservation-enquiry-guest-grid {
+  display: grid;
+  grid-template-columns: minmax(130px, 170px) minmax(0, 1fr);
+  gap: 0.7rem 0.85rem;
+  align-items: center;
+}
+
+.reservation-enquiry-request-grid label,
+.reservation-enquiry-guest-grid label {
+  width: auto;
+}
+
+.reservation-enquiry-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-top: 0.95rem;
+}
+
+.reservation-enquiry-results-table th,
+.reservation-enquiry-results-table td {
+  vertical-align: top;
+}
+
+.reservation-enquiry-option-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  white-space: normal;
+}
+
+.reservation-enquiry-option-line {
+  font-size: 0.84rem;
+  color: #30415f;
+}
+
+.reservation-enquiry-view-btn {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reservation-enquiry-view-btn::before {
+  content: '👁';
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.reservation-enquiry-option-select {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.reservation-enquiry-footer-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.reservation-enquiry-footer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.reservation-enquiry-footer-buttons .btn {
+  margin-top: 0;
+}
+
+.reservation-enquiry-clear-btn {
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+}
+
+.reservation-enquiry-clear-btn::before {
+  font-size: 0.95rem;
+}
+
+.reservation-enquiry-selection-summary {
+  font-size: 0.82rem;
+  color: #60708f;
+}
+
+.reservation-enquiry-detail-list {
+  display: grid;
+  grid-template-columns: minmax(150px, 200px) minmax(0, 1fr);
+  gap: 0.55rem 0.85rem;
+}
+
+.reservation-enquiry-detail-list dt {
+  font-weight: 700;
+  color: #17346f;
+}
+
+.reservation-enquiry-detail-list dd {
+  margin: 0;
+  color: #30415f;
+}
+
+@media (max-width: 720px) {
+  .reservation-enquiry-request-grid,
+  .reservation-enquiry-guest-grid,
+  .reservation-enquiry-detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .reservation-enquiry-month-header {
+    flex-wrap: wrap;
+  }
+
+  .reservation-enquiry-section-header,
+  .reservation-enquiry-footer-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .reservation-enquiry-footer-buttons {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .reservation-enquiry-terms-link {
+    flex: 1 1 auto;
+  }
+
+  .reservation-enquiry-confirm-label {
+    width: 100%;
+  }
+}
+
 .config-item-empty {
   padding: 0.52rem 0.56rem;
   color: #5e6a86;
@@ -1091,6 +1552,17 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   font-size: 0.95rem;
+}
+
+.completion-note {
+  padding: 0.8rem 1rem;
+  border: 1px solid #dce5f7;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #2b3d5a;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 0;
 }
 
 .admin-card {
@@ -1131,6 +1603,13 @@ textarea:focus {
 .cleaning-listing-name {
   font-size: 0.92rem;
   color: #24304b;
+}
+
+.cleaning-listing-price {
+  margin-left: auto;
+  font-size: 0.84rem;
+  color: #4f5a73;
+  font-variant-numeric: tabular-nums;
 }
 
 .cleaning-listing-row:has(.cleaning-listing-checkbox:disabled) {
@@ -1199,6 +1678,11 @@ textarea:focus {
 }
 .calendar-source-row:has(.cleaning-listings) > label {
   padding-top: 0.5rem;
+}
+
+.private-reservation-rank-hint {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
 }
 
 .cleaning-actions-row {
@@ -1541,6 +2025,101 @@ textarea:focus {
   color: #31415f;
 }
 
+.event-log-description-box {
+  width: 100%;
+  min-height: 3rem;
+  resize: vertical;
+  border: 1px solid #dbe1ef;
+  border-radius: 6px;
+  padding: 0.45rem;
+  font-size: 0.86rem;
+  color: #1f2937;
+  background: #f8fbff;
+}
+
+.event-log-info-btn {
+  width: 2rem !important;
+  height: 2rem !important;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.event-log-toggle-btn {
+  font-family: inherit;
+  line-height: 1;
+}
+
+.event-log-detail-row.hidden {
+  display: none;
+}
+
+.event-log-detail-row td {
+  background: #f8fbff;
+  border-top: 0;
+}
+
+.event-log-inline-detail {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.2rem 0;
+  font-size: 0.88rem;
+  color: #1f2937;
+}
+
+.event-log-inline-detail-loading {
+  font-size: 0.86rem;
+  color: #31415f;
+}
+
+.event-log-inline-detail-error {
+  font-size: 0.86rem;
+  color: #721c24;
+}
+
+.event-log-detail-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  background: #ffffff;
+  border: 1px solid #dbe1ef;
+  border-radius: 6px;
+  padding: 0.55rem;
+  font-size: 0.82rem;
+  color: #23314f;
+}
+
+.view-logging-toolbar {
+  display: grid;
+  gap: 0.7rem;
+  margin-bottom: 0.2rem;
+}
+
+.view-logging-filter-group,
+.view-logging-delete-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.view-logging-toolbar-label {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #4b5e84;
+  min-width: 5.8rem;
+}
+
+#viewLoggingFilterInput {
+  flex: 1;
+  min-width: 220px;
+}
+
+#viewLoggingDeleteScope {
+  min-width: 220px;
+}
+
 .feed-actions {
   display: flex;
   gap: 0.45rem;
@@ -1875,15 +2454,31 @@ textarea:focus {
 }
 
 .day-bar-slot {
-  min-height: 8px;
+  min-height: 12px;
 }
 
 .day-bar {
-  height: 8px;
+  height: 12px;
   border-radius: 4px;
   background: #cfd5e3;
   position: relative;
   overflow: hidden;
+}
+
+.day-bar-initials {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.44rem;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #ffffff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+  pointer-events: none;
 }
 
 .day-bar-empty {
@@ -2024,6 +2619,15 @@ textarea:focus {
     font-size: 0.82rem;
     padding: 0.75rem 0.4rem;
     min-width: 72px;
+  }
+
+  .context-toggle-btn {
+    min-width: auto;
+    padding: 0 0.4rem;
+  }
+
+  .context-toggle-label {
+    display: none;
   }
 }
 
