@@ -3261,6 +3261,7 @@ function opsCalendarBuildReservationCleanerBadgeMap(changes) {
     const key = reservationChangeKey(listingId, checkinKey, checkoutKey);
     if (!map.has(key)) {
       map.set(key, {
+        listingId,
         initials,
         color: opsCalendarGetCleanerColor(change),
         name: opsCalendarGetCleanerDisplayName(change),
@@ -3368,6 +3369,23 @@ function opsCalendarGetReservationCleanerBadgeForDay(events, dayKey, reservation
     const fallbackBadge = opsCalendarBuildDefaultCleanerBadgeForEvent(event, dayKey);
     if (fallbackBadge) {
       return fallbackBadge;
+    }
+  }
+
+  // If reservation keys drift due source date formatting/timezone differences,
+  // fall back to listing + changeover day so allocated initials still render.
+  const firstReservationEvent = events.find((event) => event && event.isReservation !== false) || null;
+  const listingId = Number(firstReservationEvent && (firstReservationEvent.listingId || firstReservationEvent.listing_id) || 0);
+  if (Number.isInteger(listingId) && listingId > 0) {
+    for (const badge of reservationCleanerBadgeMap.values()) {
+      if (
+        badge
+        && Number(badge.listingId) === listingId
+        && badge.changeoverDate === dayKey
+        && badge.initials
+      ) {
+        return badge;
+      }
     }
   }
 
