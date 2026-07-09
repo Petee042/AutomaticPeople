@@ -14314,7 +14314,8 @@ function buildShortNoticeBlockEventsForListing(listing, events) {
   }
 
   const now = new Date();
-  const todayKey = keyFromUtcDate(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())));
+  const todayDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayKey = todayDate.toISOString().slice(0, 10);
   const blocks = [];
 
   for (let offset = 0; offset < shortNoticeBlockDays; offset += 1) {
