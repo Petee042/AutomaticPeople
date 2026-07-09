@@ -93,8 +93,6 @@ const KAYAK_HOTEL_ENDPOINTS = {
   multipleHotels: {
     id: 'multipleHotels',
     title: 'Multiple hotel search',
-    method: 'GET',
-    path: '/hotels',
     queryFields: [
       { key: 'destination', type: 'string', required: true, description: 'Destination key, e.g. kplace:58075.' },
       ...KAYAK_COMMON_QUERY_FIELDS,
@@ -1282,6 +1280,11 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE listings
     ADD COLUMN IF NOT EXISTS block_advance_days INTEGER
+  `);
+
+  await pool.query(`
+    ALTER TABLE listings
+    ADD COLUMN IF NOT EXISTS short_notice_block_days INTEGER
   `);
 
   await pool.query(`
@@ -7976,7 +7979,7 @@ async function getListingsForUser(userId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.block_advance_days, l.short_notice_block_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.user_id = $1
@@ -7994,7 +7997,7 @@ async function getListingByIdForUser(listingId, userId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.client_account_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.client_account_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.short_notice_block_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.id = $1 AND l.user_id = $2
@@ -8026,7 +8029,7 @@ async function getListingById(listingId) {
 
   const result = await pool.query(
     `
-      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
+      SELECT l.id, l.user_id, l.name, l.property_id, l.date_basis, l.usual_cleaner_id, l.empty_export, l.block_advance_days, l.short_notice_block_days, l.no_change_days, l.per_night_price, l.per_stay_price, l.max_guests, l.base_occupancy, l.additional_guest_uplift_pct, l.created_at, p.name AS property_name
       FROM listings l
       LEFT JOIN properties p ON p.id = l.property_id
       WHERE l.id = $1
@@ -8110,7 +8113,7 @@ function isValidIcsAccessToken(listing, token) {
   return timingSafeEqual(expectedBuffer, providedBuffer);
 }
 
-async function createListingForUser(userId, name, propertyId, dateBasis, usualCleanerId, noChangeDays, perNightPrice, perStayPrice, maxGuests, baseOccupancy, additionalGuestUpliftPct) {
+async function createListingForUser(userId, name, propertyId, dateBasis, usualCleanerId, blockAdvanceDays, shortNoticeBlockDays, noChangeDays, perNightPrice, perStayPrice, maxGuests, baseOccupancy, additionalGuestUpliftPct) {
   
 
   try {
@@ -8155,7 +8158,7 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
 
     const result = await pool.query(
       `
-        INSERT INTO listings (user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct)
+        INSERT INTO listings (user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, block_advance_days, short_notice_block_days, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct)
         VALUES (
           $1,
           (SELECT client_account_id FROM properties WHERE id = $3),
@@ -8168,9 +8171,11 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
           $8,
           $9,
           $10,
-          $11
+          $11,
+          $12,
+          $13
         )
-        RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct, created_at
+        RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, block_advance_days, short_notice_block_days, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct, created_at
       `,
       [
         userId,
@@ -8178,6 +8183,8 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
         property.id,
         normaliseDateBasis(dateBasis),
         normaliseCleanerId(usualCleanerId),
+        (blockAdvanceDays !== null && blockAdvanceDays !== undefined && Number.isInteger(Number(blockAdvanceDays)) && Number(blockAdvanceDays) > 0) ? Number(blockAdvanceDays) : null,
+        (shortNoticeBlockDays !== null && shortNoticeBlockDays !== undefined && Number.isInteger(Number(shortNoticeBlockDays)) && Number(shortNoticeBlockDays) >= 0) ? Number(shortNoticeBlockDays) : null,
         noChangeDaysNormalised.text,
         perNightPriceNormalised.value,
         perStayPriceNormalised.value,
@@ -8196,7 +8203,7 @@ async function createListingForUser(userId, name, propertyId, dateBasis, usualCl
   }
 }
 
-async function updateListingForUser(listingId, userId, name, propertyId, dateBasis, usualCleanerId, emptyExport, blockAdvanceDays, noChangeDays, perNightPrice, perStayPrice, maxGuests, baseOccupancy, additionalGuestUpliftPct) {
+async function updateListingForUser(listingId, userId, name, propertyId, dateBasis, usualCleanerId, emptyExport, blockAdvanceDays, shortNoticeBlockDays, noChangeDays, perNightPrice, perStayPrice, maxGuests, baseOccupancy, additionalGuestUpliftPct) {
   
 
   try {
@@ -8249,14 +8256,15 @@ async function updateListingForUser(listingId, userId, name, propertyId, dateBas
             usual_cleaner_id = $4,
             empty_export = $7,
             block_advance_days = $8,
-            no_change_days = $9,
-            per_night_price = $10,
-            per_stay_price = $11,
-            max_guests = $12,
-            base_occupancy = $13,
-            additional_guest_uplift_pct = $14
+            short_notice_block_days = $9,
+            no_change_days = $10,
+            per_night_price = $11,
+            per_stay_price = $12,
+            max_guests = $13,
+            base_occupancy = $14,
+            additional_guest_uplift_pct = $15
         WHERE id = $5 AND user_id = $6
-          RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, empty_export, block_advance_days, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct, created_at
+          RETURNING id, user_id, client_account_id, name, property_id, date_basis, usual_cleaner_id, empty_export, block_advance_days, short_notice_block_days, no_change_days, per_night_price, per_stay_price, max_guests, base_occupancy, additional_guest_uplift_pct, created_at
       `,
       [
         name,
@@ -8267,6 +8275,7 @@ async function updateListingForUser(listingId, userId, name, propertyId, dateBas
         userId,
         emptyExport === true,
         (blockAdvanceDays !== null && blockAdvanceDays !== undefined && Number.isInteger(Number(blockAdvanceDays)) && Number(blockAdvanceDays) > 0) ? Number(blockAdvanceDays) : null,
+        (shortNoticeBlockDays !== null && shortNoticeBlockDays !== undefined && Number.isInteger(Number(shortNoticeBlockDays)) && Number(shortNoticeBlockDays) >= 0) ? Number(shortNoticeBlockDays) : null,
         noChangeDaysNormalised.text,
         perNightPriceNormalised.value,
         perStayPriceNormalised.value,
@@ -13572,6 +13581,14 @@ app.post('/api/listings', requireScopedRole('Manager'), async (req, res) => {
   const propertyId = Number(req.body.propertyId);
   const dateBasis = normaliseDateBasis(req.body.dateBasis);
   const usualCleanerId = req.body.usualCleanerId;
+  const blockAdvanceDaysRaw = req.body.blockAdvanceDays;
+  const blockAdvanceDays = (blockAdvanceDaysRaw !== null && blockAdvanceDaysRaw !== undefined && blockAdvanceDaysRaw !== '')
+    ? (Number.isInteger(Number(blockAdvanceDaysRaw)) && Number(blockAdvanceDaysRaw) > 0 ? Number(blockAdvanceDaysRaw) : null)
+    : null;
+  const shortNoticeBlockDaysRaw = req.body.shortNoticeBlockDays;
+  const shortNoticeBlockDays = (shortNoticeBlockDaysRaw !== null && shortNoticeBlockDaysRaw !== undefined && shortNoticeBlockDaysRaw !== '')
+    ? (Number.isInteger(Number(shortNoticeBlockDaysRaw)) && Number(shortNoticeBlockDaysRaw) >= 0 ? Number(shortNoticeBlockDaysRaw) : null)
+    : null;
   const noChangeDays = req.body.noChangeDays;
   const perNightPrice = req.body.perNightPrice;
   const perStayPrice = req.body.perStayPrice;
@@ -13600,6 +13617,8 @@ app.post('/api/listings', requireScopedRole('Manager'), async (req, res) => {
       Number.isInteger(propertyId) && propertyId > 0 ? propertyId : null,
       dateBasis,
       usualCleanerId,
+      blockAdvanceDays,
+      shortNoticeBlockDays,
       noChangeValidation.days,
       perNightPrice,
       perStayPrice,
@@ -13656,6 +13675,10 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
   const blockAdvanceDays = (blockAdvanceDaysRaw !== null && blockAdvanceDaysRaw !== undefined && blockAdvanceDaysRaw !== '')
     ? (Number.isInteger(Number(blockAdvanceDaysRaw)) && Number(blockAdvanceDaysRaw) > 0 ? Number(blockAdvanceDaysRaw) : null)
     : null;
+  const shortNoticeBlockDaysRaw = req.body.shortNoticeBlockDays;
+  const shortNoticeBlockDays = (shortNoticeBlockDaysRaw !== null && shortNoticeBlockDaysRaw !== undefined && shortNoticeBlockDaysRaw !== '')
+    ? (Number.isInteger(Number(shortNoticeBlockDaysRaw)) && Number(shortNoticeBlockDaysRaw) >= 0 ? Number(shortNoticeBlockDaysRaw) : null)
+    : null;
   const noChangeDays = req.body.noChangeDays;
   const perNightPrice = req.body.perNightPrice;
   const perStayPrice = req.body.perStayPrice;
@@ -13696,6 +13719,7 @@ app.put('/api/listings/:listingId', requireScopedRole('Manager'), async (req, re
       usualCleanerId,
       emptyExport,
       blockAdvanceDays,
+      shortNoticeBlockDays,
       noChangeValidation.days,
       perNightPrice,
       perStayPrice,
@@ -14261,6 +14285,67 @@ function buildAdvanceBlockEventForListing(listing) {
   };
 }
 
+function isDateKeyCoveredByAnyEvent(events, dayKey) {
+  if (!dayKey) {
+    return false;
+  }
+
+  const nextDayKey = addDaysToDateKey(dayKey, 1);
+  if (!nextDayKey) {
+    return false;
+  }
+
+  return (Array.isArray(events) ? events : []).some((event) => {
+    const startKey = getDateKeyFromEventDateTime(event && event.start);
+    const endKey = getDateKeyFromEventDateTime(event && event.end);
+    if (!startKey || !endKey || endKey <= startKey) {
+      return false;
+    }
+    return startKey < nextDayKey && endKey > dayKey;
+  });
+}
+
+function buildShortNoticeBlockEventsForListing(listing, events) {
+  const shortNoticeBlockDays = listing && listing.short_notice_block_days !== null && listing.short_notice_block_days !== undefined
+    ? Number(listing.short_notice_block_days)
+    : null;
+  if (!Number.isInteger(shortNoticeBlockDays) || shortNoticeBlockDays <= 0) {
+    return [];
+  }
+
+  const now = new Date();
+  const todayDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayKey = todayDate.toISOString().slice(0, 10);
+  const blocks = [];
+
+  for (let offset = 0; offset < shortNoticeBlockDays; offset += 1) {
+    const dayKey = addDaysToDateKey(todayKey, offset);
+    const nextDayKey = addDaysToDateKey(dayKey, 1);
+    if (!dayKey || !nextDayKey) {
+      continue;
+    }
+    if (isDateKeyCoveredByAnyEvent(events, dayKey)) {
+      continue;
+    }
+
+    blocks.push({
+      isReservation: false,
+      isUnavailableBlock: true,
+      eventType: 'Block',
+      eventOrigin: 'Local',
+      source: 'AutomaticPeople',
+      start: dayKey,
+      end: nextDayKey,
+      title: 'Not available',
+      description: 'Blocked: short notice reservations less than ' + String(shortNoticeBlockDays) + ' days in advance',
+      location: null,
+      raw: null
+    });
+  }
+
+  return blocks;
+}
+
 function addDaysToDateKey(dateKey, days) {
   const parsed = new Date(String(dateKey || '') + 'T00:00:00Z');
   if (Number.isNaN(parsed.getTime())) {
@@ -14493,7 +14578,15 @@ function appendAvailabilityPolicyBlockEvents(listing, events) {
     return dedupeBlockEvents([...(Array.isArray(events) ? events : []), ...blocks]);
   })();
 
-  return dedupeBlockEvents(appendAdvanceBlockEvent(listing, withNoChangeBlocks));
+  const withShortNoticeBlocks = (() => {
+    const blocks = buildShortNoticeBlockEventsForListing(listing, withNoChangeBlocks);
+    if (!blocks.length) {
+      return dedupeBlockEvents(withNoChangeBlocks);
+    }
+    return dedupeBlockEvents([...withNoChangeBlocks, ...blocks]);
+  })();
+
+  return dedupeBlockEvents(appendAdvanceBlockEvent(listing, withShortNoticeBlocks));
 }
 
 function normaliseCalendarSourceName(value) {

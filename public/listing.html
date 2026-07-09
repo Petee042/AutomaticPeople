@@ -131,6 +131,17 @@
             aria-label="Block Reservations help"
           >i</button>
         </div>
+        <div class="calendar-source-row availability-block-advance-row">
+          <label for="listingShortNoticeBlockDays" style="width:auto;white-space:nowrap;">Block short notice reservations less than</label>
+          <input id="listingShortNoticeBlockDays" type="number" min="0" max="3650" placeholder="e.g. 3" style="width:5.5rem;flex:none;" />
+          <span style="white-space:nowrap;font-size:0.9rem;color:#444;">days in advance</span>
+          <button
+            type="button"
+            class="btn circular-icon-btn availability-info-btn"
+            title="AutomaticPeople checks each day from today up to the configured number of days ahead. If a day is still available, that day is dynamically blocked to prevent short-notice reservations. Set 0 to allow same-day reservations."
+            aria-label="Block short notice reservations help"
+          >i</button>
+        </div>
         <div class="calendar-source-row availability-no-change-label-row">
           <div class="availability-inline-label">
             <label style="width:auto;white-space:nowrap;">No Changes On</label>

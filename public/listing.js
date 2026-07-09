@@ -49,6 +49,7 @@ function getListingFormState() {
     additionalGuestUpliftPct: String(document.getElementById('listingAdditionalGuestUpliftPct').value || ''),
     emptyExport: String(document.getElementById('listingEmptyExport').checked),
     blockAdvanceDays: String(document.getElementById('listingBlockAdvanceDays').value || ''),
+    shortNoticeBlockDays: String(document.getElementById('listingShortNoticeBlockDays').value || ''),
     noChangeDays: getSelectedNoChangeDays().join(',')
   });
 }
@@ -1254,6 +1255,7 @@ async function loadListing() {
   document.getElementById('listingAdditionalGuestUpliftPct').value = (listing.additional_guest_uplift_pct != null && listing.additional_guest_uplift_pct !== '') ? String(listing.additional_guest_uplift_pct) : '';
   document.getElementById('listingEmptyExport').checked = listing.empty_export === true || listing.empty_export === 'true';
   document.getElementById('listingBlockAdvanceDays').value = (listing.block_advance_days != null && listing.block_advance_days !== '') ? String(listing.block_advance_days) : '';
+  document.getElementById('listingShortNoticeBlockDays').value = (listing.short_notice_block_days != null && listing.short_notice_block_days !== '') ? String(listing.short_notice_block_days) : '';
   setSelectedNoChangeDays(Array.isArray(listing.no_change_days) ? listing.no_change_days : []);
 
   if (currentAccessRole === 'Manager') {
@@ -1602,6 +1604,8 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
   const emptyExport = document.getElementById('listingEmptyExport').checked;
   const blockAdvanceDaysRaw = document.getElementById('listingBlockAdvanceDays').value.trim();
   const blockAdvanceDays = blockAdvanceDaysRaw !== '' && Number.isInteger(Number(blockAdvanceDaysRaw)) && Number(blockAdvanceDaysRaw) > 0 ? Number(blockAdvanceDaysRaw) : null;
+  const shortNoticeBlockDaysRaw = document.getElementById('listingShortNoticeBlockDays').value.trim();
+  const shortNoticeBlockDays = shortNoticeBlockDaysRaw !== '' && Number.isInteger(Number(shortNoticeBlockDaysRaw)) && Number(shortNoticeBlockDaysRaw) >= 0 ? Number(shortNoticeBlockDaysRaw) : null;
   const noChangeDays = getSelectedNoChangeDays();
   const hasValidListingId = Number.isInteger(listingId) && listingId > 0;
   const shouldCreate = isCreateMode || !hasValidListingId;
@@ -1651,6 +1655,11 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
     return;
   }
 
+  if (shortNoticeBlockDaysRaw !== '' && shortNoticeBlockDays === null) {
+    setListingMessage('Block short notice reservations must be a whole number zero or greater.', true);
+    return;
+  }
+
   button.disabled = true;
   try {
     const res = await fetch(shouldCreate ? '/api/listings' : ('/api/listings/' + listingId), {
@@ -1668,6 +1677,7 @@ document.getElementById('renameListingForm').addEventListener('submit', async (e
         additionalGuestUpliftPct,
         emptyExport,
         blockAdvanceDays,
+        shortNoticeBlockDays,
         noChangeDays
       })
     });

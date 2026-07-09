@@ -4,7 +4,7 @@
     {
       "label": "Publish: Alpha → Beta (develop → staging)",
       "type": "shell",
-      "command": "git checkout staging && git merge --no-ff develop -m \"Publish tested changes\" && git push origin staging && git checkout develop && echo Done: develop merged into staging and pushed.",
+      "command": "git checkout staging && git -c core.editor=true merge --no-ff --no-edit develop -m \"Publish tested changes\" && git push origin staging && git checkout develop && echo Done: develop merged into staging and pushed.",
       "options": {
         "shell": {
           "executable": "cmd.exe",
@@ -23,7 +23,7 @@
     {
       "label": "Publish: Beta → Production (staging → main)",
       "type": "shell",
-      "command": "git checkout main && git merge --no-ff staging -m \"Beta testing completed, now deploying to live\" && git push origin main && git checkout develop && echo Done: staging merged into main and pushed.",
+      "command": "git checkout main && git -c core.editor=true merge --no-ff --no-edit staging -m \"Beta testing completed, now deploying to live\" && git push origin main && git checkout develop && echo Done: staging merged into main and pushed.",
       "options": {
         "shell": {
           "executable": "cmd.exe",
