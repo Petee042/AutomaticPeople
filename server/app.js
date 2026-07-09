@@ -13062,12 +13062,8 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
     return res.status(400).json({ error: 'CSV schedule content is required for CSV export.' });
   }
 
-  const transportResult = getScheduleEmailTransporter();
-  if (transportResult.error) {
-    return res.status(503).json({ error: transportResult.error });
-  }
-
   try {
+    const transportResult = getScheduleEmailTransporter();
     const attachments = [];
     if (format === 'csv') {
       attachments.push({
@@ -13077,33 +13073,59 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
       });
     }
 
-    await transportResult.transporter.sendMail({
-      from: transportResult.from,
+    if (!transportResult.error) {
+      await transportResult.transporter.sendMail({
+        from: transportResult.from,
+        to,
+        subject,
+        text: textContent,
+        attachments
+      });
+
+      await writeUserEventLog({
+        actorUserId: Number(req.session && req.session.userId || 0),
+        clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+        eventType: 'email_sent',
+        description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(to || 'recipient'),
+        detail: {
+          dtg: new Date().toISOString(),
+          fromAddress: String(transportResult.from || ''),
+          toAddress: String(to || ''),
+          subject,
+          messageContent: textContent,
+          provider: 'smtp',
+          messageId: '',
+          hasAttachments: attachments.length > 0,
+          attachmentCount: attachments.length
+        }
+      });
+
+      return res.json({ message: 'Schedule email sent.' });
+    }
+
+    const fallbackTextBody = format === 'csv'
+      ? [
+        textContent,
+        '',
+        'CSV export content:',
+        csvContent
+      ].join('\n')
+      : textContent;
+
+    const fallbackEmailResult = await sendAppEmail({
       to,
       subject,
-      text: textContent,
-      attachments
+      textBody: fallbackTextBody
     });
+    if (!fallbackEmailResult.ok) {
+      return res.status(503).json({ error: fallbackEmailResult.error || transportResult.error || 'Failed to send schedule email.' });
+    }
 
-    await writeUserEventLog({
-      actorUserId: Number(req.session && req.session.userId || 0),
-      clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
-      eventType: 'email_sent',
-      description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(to || 'recipient'),
-      detail: {
-        dtg: new Date().toISOString(),
-        fromAddress: String(transportResult.from || ''),
-        toAddress: String(to || ''),
-        subject,
-        messageContent: textContent,
-        provider: 'smtp',
-        messageId: '',
-        hasAttachments: attachments.length > 0,
-        attachmentCount: attachments.length
-      }
+    return res.json({
+      message: format === 'csv'
+        ? 'Schedule email sent. CSV content was included in the email body.'
+        : 'Schedule email sent.'
     });
-
-    return res.json({ message: 'Schedule email sent.' });
   } catch (err) {
     console.error('Failed to send schedule email:', err);
     return res.status(500).json({ error: 'Failed to send schedule email.' });
