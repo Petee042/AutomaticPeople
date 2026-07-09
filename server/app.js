@@ -39,9 +39,6 @@ const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(S
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
-const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
-const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
-const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY);
 const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT_COUNTRY || 'GB').trim().toUpperCase();
 const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
   || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
@@ -4331,9 +4328,15 @@ async function createUnvalidatedSiteUserForInvite(input) {
   const firstName = String(input.firstName || '').trim();
   const familyName = String(input.familyName || '').trim();
   const country = normaliseCountryOfResidence(input.country);
+  const password = String(input.password || '');
 
-  if (!email || !firstName || !familyName || !country) {
-    return { error: 'First name, family name, country, and email are required.' };
+  if (!email || !firstName || !familyName || !country || !password) {
+    return { error: 'First name, family name, country, email, and password are required.' };
+  }
+
+  const passwordCheck = validateStrongPassword(password);
+  if (!passwordCheck.ok) {
+    return { error: passwordCheck.error };
   }
 
   let username;
@@ -4343,13 +4346,14 @@ async function createUnvalidatedSiteUserForInvite(input) {
     return { error: 'Could not generate unique username for invited user.' };
   }
 
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const result = await pool.query(
     `
       INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
       RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, created_at
     `,
-    [username, email, '', firstName, familyName, country]
+    [username, email, passwordHash, firstName, familyName, country]
   );
 
   const createdUser = result.rows[0] || null;
@@ -7382,242 +7386,6 @@ async function getSiteUserForAdmin(userId) {
   const users = await getAllSiteUsersWithMemberships();
   const user = users.find((item) => Number(item.id) === id);
   return user || null;
-}
-
-async function getAdminUserDataDump(userId) {
-  const id = Number(userId);
-  if (!Number.isInteger(id) || id <= 0) {
-    return null;
-  }
-
-  const user = await getUserById(id);
-  if (!user) {
-    return null;
-  }
-
-  const warnings = [];
-  async function runDumpQuery(label, queryText, queryParams, fallbackRows) {
-    try {
-      const result = await pool.query(queryText, queryParams);
-      return result.rows;
-    } catch (err) {
-      warnings.push(label + ': ' + String(err && err.message ? err.message : 'Query failed'));
-      return Array.isArray(fallbackRows) ? fallbackRows : [];
-    }
-  }
-
-  const clientAccountRows = await runDumpQuery(
-    'client_accounts',
-    `
-      SELECT DISTINCT ca.*
-      FROM client_accounts ca
-      WHERE ca.created_by_user_id = $1
-         OR EXISTS (
-           SELECT 1
-           FROM client_memberships cm
-           WHERE cm.client_account_id = ca.id
-             AND cm.user_id = $1
-         )
-      ORDER BY ca.id ASC
-    `,
-    [id]
-  );
-
-    const clientAccountIds = clientAccountRows
-    .map((row) => Number(row.id))
-    .filter((value) => Number.isInteger(value) && value > 0);
-
-  const accountIds = clientAccountIds;
-    const membershipsRows = await runDumpQuery(
-      'client_memberships',
-      `
-        SELECT cm.*,
-               ca.display_name AS client_account_display_name
-        FROM client_memberships cm
-        LEFT JOIN client_accounts ca ON ca.id = cm.client_account_id
-        WHERE cm.user_id = $1
-        ORDER BY cm.client_account_id ASC, cm.role ASC, cm.status ASC, cm.id ASC
-      `,
-      [id]
-    );
-
-    const propertiesRows = await runDumpQuery(
-      'properties',
-      `
-        SELECT *
-        FROM properties
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const listingsRows = await runDumpQuery(
-      'listings',
-      `
-        SELECT *
-        FROM listings
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const cleanersRows = await runDumpQuery(
-      'cleaners',
-      `
-        SELECT *
-        FROM cleaners
-        WHERE user_id = $1
-           OR cleaner_user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const feedSourceColorsRows = await runDumpQuery(
-      'feed_source_colors',
-      `
-        SELECT *
-        FROM feed_source_colors
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const sharedResourcesRows = await runDumpQuery(
-      'shared_resources',
-      `
-        SELECT *
-        FROM shared_resources
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const sharedResourceReservationsRows = await runDumpQuery(
-      'shared_resource_reservations',
-      `
-        SELECT *
-        FROM shared_resource_reservations
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const reservationActivityRows = await runDumpQuery(
-      'reservation_activity',
-      `
-        SELECT *
-        FROM reservation_activity
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY created_at DESC, id DESC
-      `,
-      [id, accountIds]
-    );
-
-    const reservationEnquiryLandingPagesRows = await runDumpQuery(
-      'reservation_enquiry_landing_pages',
-      `
-        SELECT *
-        FROM reservation_enquiry_landing_pages
-        WHERE user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const guestRelationshipsRows = await runDumpQuery(
-      'guest_relationships',
-      `
-        SELECT *
-        FROM guest_relationships
-        WHERE guest_user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const bookedInChangesRows = await runDumpQuery(
-      'booked_in_changes',
-      `
-        SELECT *
-        FROM booked_in_changes
-        WHERE user_id = $1
-           OR cleaner_user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY id ASC
-      `,
-      [id, accountIds]
-    );
-
-    const listingCalendarEventsRows = await runDumpQuery(
-      'listing_calendar_events',
-      `
-        SELECT *
-        FROM listing_calendar_events
-        WHERE guest_user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY created_at DESC, id DESC
-      `,
-      [id, accountIds]
-    );
-
-    const listingEventLogRows = await runDumpQuery(
-      'listing_event_log',
-      `
-        SELECT *
-        FROM listing_event_log
-        WHERE client_account_id = ANY($1::bigint[])
-        ORDER BY created_at DESC, id DESC
-      `,
-      [accountIds]
-    );
-
-    const userEventLogRows = await runDumpQuery(
-      'user_event_log',
-      `
-        SELECT *
-        FROM user_event_log
-        WHERE actor_user_id = $1
-           OR client_account_id = ANY($2::bigint[])
-        ORDER BY created_at DESC, id DESC
-      `,
-      [id, accountIds]
-    );
-
-  return {
-    user,
-      clientAccounts: clientAccountRows,
-    clientAccountIds,
-      memberships: membershipsRows,
-      properties: propertiesRows,
-      listings: listingsRows,
-      cleaners: cleanersRows,
-      feedSourceColors: feedSourceColorsRows,
-      sharedResources: sharedResourcesRows,
-      sharedResourceReservations: sharedResourceReservationsRows,
-      reservationActivity: reservationActivityRows,
-      reservationEnquiryLandingPages: reservationEnquiryLandingPagesRows,
-      guestRelationships: guestRelationshipsRows,
-      bookedInChanges: bookedInChangesRows,
-      listingCalendarEvents: listingCalendarEventsRows,
-      listingEventLog: listingEventLogRows,
-      userEventLog: userEventLogRows,
-      warnings
-  };
 }
 
 async function updateSiteUserForAdmin(userId, input) {
@@ -10734,58 +10502,7 @@ const passwordResetRequestRateLimiter = rateLimit({
   message: { error: 'Too many password reset requests. Please try again later.' }
 });
 
-async function verifyTurnstileToken(token, remoteIp) {
-  if (!TURNSTILE_ENABLED) {
-    return { ok: true, bypassed: true };
-  }
-
-  const value = String(token || '').trim();
-  if (!value) {
-    return { ok: false, error: 'Missing verification token.' };
-  }
-
-  try {
-    const payload = new URLSearchParams();
-    payload.set('secret', TURNSTILE_SECRET_KEY);
-    payload.set('response', value);
-    if (remoteIp) {
-      payload.set('remoteip', String(remoteIp));
-    }
-
-    const verifyRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: payload.toString()
-    });
-
-    const verifyData = await verifyRes.json().catch(() => ({}));
-    if (!verifyRes.ok || verifyData.success !== true) {
-      return {
-        ok: false,
-        error: 'Bot verification failed.',
-        details: Array.isArray(verifyData['error-codes']) ? verifyData['error-codes'] : []
-      };
-    }
-
-    return { ok: true };
-  } catch (err) {
-    return {
-      ok: false,
-      error: 'Bot verification is currently unavailable.',
-      details: [String(err && err.message ? err.message : 'verify-request-failed')]
-    };
-  }
-}
-
 // ── Routes ───────────────────────────────────────────────────────────────────
-
-// GET /api/signup/turnstile-config
-app.get('/api/signup/turnstile-config', (req, res) => {
-  return res.json({
-    enabled: TURNSTILE_ENABLED,
-    siteKey: TURNSTILE_ENABLED ? TURNSTILE_SITE_KEY : ''
-  });
-});
 
 // POST /api/signup
 app.post('/api/signup', async (req, res) => {
@@ -10794,7 +10511,6 @@ app.post('/api/signup', async (req, res) => {
   const country = normaliseCountryOfResidence(req.body.country);
   const email = String(req.body.email || '').trim();
   const password = String(req.body.password || '');
-  const turnstileToken = String(req.body.turnstileToken || '').trim();
 
   if (!firstName || !familyName || !country || !email || !password) {
     return res.status(400).json({ error: 'First name, family name, country, email, and password are required.' });
@@ -10809,16 +10525,6 @@ app.post('/api/signup', async (req, res) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ error: 'Invalid email address.' });
-  }
-
-  if (TURNSTILE_ENABLED) {
-    const turnstileResult = await verifyTurnstileToken(turnstileToken, req.ip);
-    if (!turnstileResult.ok) {
-      return res.status(400).json({
-        code: 'TURNSTILE_FAILED',
-        error: turnstileResult.error || 'Bot verification failed. Please try again.'
-      });
-    }
   }
 
   try {
@@ -11249,29 +10955,6 @@ app.get('/api/admin/site-users/:userId', requireAdminAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load site user.' });
-  }
-});
-
-// GET /api/admin/users/:userId/dump
-app.get('/api/admin/users/:userId/dump', requireAdminAuth, async (req, res) => {
-  const userId = Number(req.params.userId);
-  if (!Number.isInteger(userId) || userId <= 0) {
-    return res.status(400).json({ error: 'Invalid user id.' });
-  }
-
-  try {
-    const dump = await getAdminUserDataDump(userId);
-    if (!dump) {
-      return res.status(404).json({ error: 'User not found.' });
-    }
-
-    return res.json({
-      generatedAt: new Date().toISOString(),
-      dump
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Failed to load user data dump.' });
   }
 });
 
@@ -11740,13 +11423,20 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
   const familyName = String(req.body.familyName || '').trim();
   const country = normaliseCountryOfResidence(req.body.country);
   const email = String(req.body.email || '').trim();
+  const password = String(req.body.password || '');
   const roles = normaliseClientTeamRoles(req.body.roles);
+  const confirmExisting = req.body.confirmExisting === true;
 
-  if (!firstName || !familyName || !country || !email) {
-    return res.status(400).json({ error: 'First name, family name, country, and email are required.' });
+  if (!firstName || !familyName || !country || !email || !password) {
+    return res.status(400).json({ error: 'First name, family name, country, email, and password are required.' });
   }
   if (!roles.length) {
     return res.status(400).json({ error: 'Select at least one role (Manager and/or Staff).' });
+  }
+
+  const passwordCheck = validateStrongPassword(password);
+  if (!passwordCheck.ok) {
+    return res.status(400).json({ error: passwordCheck.error });
   }
 
   try {
@@ -11756,9 +11446,13 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
     }
 
     let siteUser = await getUserByEmailStrict(normalizedEmail);
-    let createdNewUser = false;
-    let passwordEmailSent = false;
-    let passwordEmailError = '';
+
+    if (siteUser && !confirmExisting) {
+      return res.status(409).json({
+        code: 'EXISTING_USER_CONFIRMATION_REQUIRED',
+        error: 'Site user already exists, send invitation?'
+      });
+    }
 
     if (!siteUser) {
       const created = await createUnvalidatedSiteUserForInvite({
@@ -11766,20 +11460,18 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
         familyName,
         country,
         email: normalizedEmail,
-        invitedByUserId: req.session.userId,
-        clientAccountId: req.accessContext.activeClientAccountId
+        password
       });
       if (created.error) {
         return res.status(400).json({ error: created.error });
       }
       siteUser = created.user;
-      createdNewUser = true;
-
-      const passwordEmailResult = await sendPasswordResetEmail(req, siteUser);
-      passwordEmailSent = passwordEmailResult.ok === true;
-      if (!passwordEmailSent) {
-        passwordEmailError = String(passwordEmailResult.error || 'Failed to send password setup email.');
-      }
+    } else {
+      await updateUserInviteProfileIfMissing(siteUser.id, {
+        firstName,
+        familyName,
+        country
+      });
     }
 
     const result = await setClientTeamRolesForUser(
@@ -11793,10 +11485,7 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
     }
     return res.status(201).json({
       invited: true,
-      existingUser: !createdNewUser,
-      createdNewUser,
-      passwordSetupEmailSent: passwordEmailSent,
-      passwordSetupEmailError: passwordEmailError,
+      existingUser: Boolean(confirmExisting),
       user: result.user,
       memberships: result.memberships
     });

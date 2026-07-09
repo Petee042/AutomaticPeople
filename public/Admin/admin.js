@@ -23,75 +23,33 @@ function setAdminAuthenticated(isAuthenticated) {
 
 function renderUsers(users) {
   adminUsers = users || [];
-  const deleteSelect = document.getElementById('adminUserSelect');
-  const viewSelect = document.getElementById('adminViewUserSelect');
-
-  deleteSelect.innerHTML = '';
-  viewSelect.innerHTML = '';
+  const select = document.getElementById('adminUserSelect');
+  select.innerHTML = '';
 
   if (!adminUsers.length) {
-    const deleteOption = document.createElement('option');
-    deleteOption.value = '';
-    deleteOption.textContent = 'No users found';
-    deleteSelect.appendChild(deleteOption);
-    deleteSelect.disabled = true;
-
-    const viewOption = document.createElement('option');
-    viewOption.value = '';
-    viewOption.textContent = 'No users found';
-    viewSelect.appendChild(viewOption);
-    viewSelect.disabled = true;
-
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No users found';
+    select.appendChild(option);
+    select.disabled = true;
     document.getElementById('deleteUserBtn').disabled = true;
-    document.getElementById('viewUserDataBtn').setAttribute('aria-disabled', 'true');
-    document.getElementById('viewUserDataBtn').href = '/Admin/user-data.html';
     return;
   }
 
-  const deletePromptOption = document.createElement('option');
-  deletePromptOption.value = '';
-  deletePromptOption.textContent = 'Select a user';
-  deleteSelect.appendChild(deletePromptOption);
-
-  const viewOption = document.createElement('option');
-  viewOption.value = '';
-  viewOption.textContent = 'Select a user';
-  viewSelect.appendChild(viewOption);
+  const allOption = document.createElement('option');
+  allOption.value = '__all__';
+  allOption.textContent = 'All Users';
+  select.appendChild(allOption);
 
   adminUsers.forEach((user) => {
-    const deleteUserOption = document.createElement('option');
-    deleteUserOption.value = String(user.id);
-    deleteUserOption.textContent = (user.email || ('User #' + user.id));
-    deleteSelect.appendChild(deleteUserOption);
-
-    const viewUserOption = document.createElement('option');
-    viewUserOption.value = String(user.id);
-    viewUserOption.textContent = (user.email || ('User #' + user.id));
-    viewSelect.appendChild(viewUserOption);
+    const option = document.createElement('option');
+    option.value = String(user.id);
+    option.textContent = (user.email || ('User #' + user.id));
+    select.appendChild(option);
   });
 
-  deleteSelect.disabled = false;
-  viewSelect.disabled = false;
+  select.disabled = false;
   document.getElementById('deleteUserBtn').disabled = false;
-  updateViewUserDataLink();
-}
-
-function updateViewUserDataLink() {
-  const select = document.getElementById('adminViewUserSelect');
-  const link = document.getElementById('viewUserDataBtn');
-  if (!select || !link) {
-    return;
-  }
-
-  const userId = Number(select.value);
-  if (!Number.isInteger(userId) || userId <= 0) {
-    link.href = '/Admin/user-data.html';
-    link.setAttribute('aria-disabled', 'true');
-    return;
-  }
-
-  link.href = '/Admin/user-data.html?userId=' + encodeURIComponent(String(userId));
-  link.removeAttribute('aria-disabled');
 }
 
 async function checkAdminSession() {
@@ -169,23 +127,45 @@ document.getElementById('adminLoginForm').addEventListener('submit', async (e) =
   }
 });
 
-document.getElementById('adminViewUserSelect').addEventListener('change', updateViewUserDataLink);
-
-document.getElementById('viewUserDataBtn').addEventListener('click', (e) => {
-  const select = document.getElementById('adminViewUserSelect');
-  const userId = Number(select.value);
-  if (!Number.isInteger(userId) || userId <= 0) {
-    e.preventDefault();
-    setAdminMessage('Select a valid user first.', true);
-  }
-});
-
 document.getElementById('deleteUserBtn').addEventListener('click', async () => {
   const select = document.getElementById('adminUserSelect');
   const selection = String(select.value || '');
 
   if (!selection) {
     setAdminMessage('Select a valid user first.', true);
+    return;
+  }
+
+  if (selection === '__all__') {
+    if (!adminUsers.length) {
+      setAdminMessage('No users to delete.', true);
+      return;
+    }
+
+    const confirmedAll = window.confirm(
+      'Confirm delete ALL users? This permanently removes every user and all associated data.'
+    );
+    if (!confirmedAll) {
+      return;
+    }
+
+    const button = document.getElementById('deleteUserBtn');
+    button.disabled = true;
+    try {
+      for (const user of adminUsers) {
+        const res = await fetch('/api/admin/users/' + encodeURIComponent(user.id), { method: 'DELETE' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed deleting user ' + (user.email || ('#' + user.id)) + '.');
+        }
+      }
+      setAdminMessage('All users deleted successfully.', false);
+      await loadUsers();
+    } catch (err) {
+      setAdminMessage(err.message || 'Network error deleting all users.', true);
+    } finally {
+      button.disabled = false;
+    }
     return;
   }
 

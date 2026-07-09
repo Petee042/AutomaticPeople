@@ -1,8 +1,6 @@
 'use strict';
 
 const LAST_LOGIN_EMAIL_KEY = 'lastLoginEmail';
-let signupTurnstileEnabled = false;
-let signupTurnstileWidgetId = null;
 
 // ── Tab switching ────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
@@ -66,66 +64,7 @@ async function postJSON(url, data) {
   return { ok: res.ok, data: json };
 }
 
-function getSignupTurnstileToken() {
-  const responseInput = document.querySelector('#signupForm input[name="cf-turnstile-response"]');
-  return String(responseInput && responseInput.value || '').trim();
-}
-
-function ensureTurnstileScriptLoaded() {
-  if (window.turnstile && typeof window.turnstile.render === 'function') {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-turnstile="signup"]');
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('Failed to load verification widget.')), { once: true });
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-    script.async = true;
-    script.defer = true;
-    script.setAttribute('data-turnstile', 'signup');
-    script.addEventListener('load', () => resolve(), { once: true });
-    script.addEventListener('error', () => reject(new Error('Failed to load verification widget.')), { once: true });
-    document.head.appendChild(script);
-  });
-}
-
-async function initSignupTurnstile() {
-  try {
-    const response = await fetch('/api/signup/turnstile-config', { cache: 'no-store' });
-    const config = await response.json().catch(() => ({}));
-    if (!response.ok || !config.enabled || !config.siteKey) {
-      signupTurnstileEnabled = false;
-      return;
-    }
-
-    await ensureTurnstileScriptLoaded();
-
-    const field = document.getElementById('signup-turnstile-field');
-    const container = document.getElementById('signup-turnstile');
-    if (!field || !container || !window.turnstile || typeof window.turnstile.render !== 'function') {
-      signupTurnstileEnabled = false;
-      return;
-    }
-
-    field.hidden = false;
-    signupTurnstileWidgetId = window.turnstile.render('#signup-turnstile', {
-      sitekey: String(config.siteKey),
-      theme: 'light'
-    });
-    signupTurnstileEnabled = true;
-  } catch {
-    signupTurnstileEnabled = false;
-  }
-}
-
 prefillRememberedLoginEmail();
-initSignupTurnstile();
 
 // ── Signup ───────────────────────────────────────────────────
 document.getElementById('signupForm').addEventListener('submit', async (e) => {
@@ -138,7 +77,6 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
   const country = document.getElementById('su-country').value.trim();
   const email = document.getElementById('su-email').value.trim();
   const password = document.getElementById('su-password').value;
-  const turnstileToken = getSignupTurnstileToken();
 
   if (!isStrongPassword(password)) {
     setMessage('signup-message', 'Password must be at least 8 characters and include one uppercase, one number, and one special character.', true);
@@ -146,20 +84,11 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
     return;
   }
 
-  if (signupTurnstileEnabled && !turnstileToken) {
-    setMessage('signup-message', 'Please complete the bot verification check.', true);
-    btn.disabled = false;
-    return;
-  }
-
   try {
-    const { ok, data } = await postJSON('/api/signup', { firstName, familyName, country, email, password, turnstileToken });
+    const { ok, data } = await postJSON('/api/signup', { firstName, familyName, country, email, password });
     if (ok) {
       setMessage('signup-message', data.message, false);
       e.target.reset();
-      if (signupTurnstileEnabled && window.turnstile && signupTurnstileWidgetId !== null) {
-        window.turnstile.reset(signupTurnstileWidgetId);
-      }
       // Switch to login tab
       setTimeout(() => {
         document.querySelector('[data-tab="login"]').click();
@@ -168,15 +97,9 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
       }, 1200);
     } else {
       setMessage('signup-message', data.error, true);
-      if (signupTurnstileEnabled && window.turnstile && signupTurnstileWidgetId !== null) {
-        window.turnstile.reset(signupTurnstileWidgetId);
-      }
     }
   } catch {
     setMessage('signup-message', 'Network error. Please try again.', true);
-    if (signupTurnstileEnabled && window.turnstile && signupTurnstileWidgetId !== null) {
-      window.turnstile.reset(signupTurnstileWidgetId);
-    }
   } finally {
     btn.disabled = false;
   }

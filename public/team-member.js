@@ -58,6 +58,7 @@ function setManageModeEnabled(enabled) {
     document.getElementById('teamMemberFamilyName').disabled = true;
     document.getElementById('teamMemberCountry').disabled = true;
     document.getElementById('teamMemberEmail').disabled = true;
+    document.getElementById('teamMemberPassword').disabled = true;
   }
 }
 
@@ -144,6 +145,24 @@ async function createTeamMember(payload) {
 
   const data = await response.json();
   if (!response.ok) {
+    if (response.status === 409 && data.code === 'EXISTING_USER_CONFIRMATION_REQUIRED') {
+      const accepted = window.confirm('Site user already exists, send invitation?');
+      if (!accepted) {
+        return { cancelled: true };
+      }
+
+      const retry = await fetch('/api/access/team', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, confirmExisting: true })
+      });
+      const retryData = await retry.json();
+      if (!retry.ok) {
+        throw new Error(retryData.error || 'Failed to add team member.');
+      }
+      return retryData;
+    }
+
     throw new Error(data.error || 'Failed to add team member.');
   }
 
@@ -165,12 +184,14 @@ async function createTeamMember(payload) {
     if (isCreateMode) {
       document.getElementById('teamMemberTitle').textContent = 'Create Team Member';
       document.getElementById('deleteTeamMemberBtn').classList.add('hidden');
+      document.getElementById('teamMemberPassword').required = true;
       setManageModeEnabled(canManageTeam);
       initialFormState = getFormState();
       return;
     }
 
     await loadTeamMember();
+    document.getElementById('teamMemberPassword').placeholder = 'Password changes are not available on this page';
     setManageModeEnabled(canManageTeam);
     initialFormState = getFormState();
   } catch (err) {
@@ -191,6 +212,7 @@ document.getElementById('teamMemberForm').addEventListener('submit', async (even
   const familyName = document.getElementById('teamMemberFamilyName').value.trim();
   const country = document.getElementById('teamMemberCountry').value.trim();
   const email = document.getElementById('teamMemberEmail').value.trim().toLowerCase();
+  const password = document.getElementById('teamMemberPassword').value;
   const roles = getSelectedRoles();
 
   if (!roles.length) {
@@ -201,12 +223,20 @@ document.getElementById('teamMemberForm').addEventListener('submit', async (even
   button.disabled = true;
   try {
     if (isCreateMode) {
-      if (!firstName || !familyName || !country || !email) {
-        setMessage('First name, family name, country, and email are required.', true);
+      if (!firstName || !familyName || !country || !email || !password) {
+        setMessage('First name, family name, country, email and password are required.', true);
+        return;
+      }
+      if (!isStrongPassword(password)) {
+        setMessage('Password must be at least 8 characters and include one uppercase, one number, and one special character.', true);
         return;
       }
 
-      await createTeamMember({ firstName, familyName, country, email, roles });
+      const result = await createTeamMember({ firstName, familyName, country, email, password, roles });
+      if (result && result.cancelled) {
+        setMessage('Invitation cancelled.', false);
+        return;
+      }
       goBackToConfig();
       return;
     }
