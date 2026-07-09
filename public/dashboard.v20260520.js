@@ -3288,6 +3288,26 @@ function opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleaner
   return reservationCleanerBadgeMap.get(key) || null;
 }
 
+function opsCalendarGetReservationCleanerBadgeForDay(events, dayKey, reservationCleanerBadgeMap) {
+  if (!Array.isArray(events) || !events.length || !dayKey || !reservationCleanerBadgeMap || !reservationCleanerBadgeMap.size) {
+    return null;
+  }
+
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i];
+    if (!event || event.isReservation === false) {
+      continue;
+    }
+
+    const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleanerBadgeMap);
+    if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === dayKey) {
+      return cleanerBadge;
+    }
+  }
+
+  return null;
+}
+
 function opsCalendarRenderCleanerLegend(changes) {
   const legend = document.getElementById('opsCalendarCleanerLegend');
   if (!legend) {
@@ -3508,8 +3528,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
         }
 
         if (!bar.classList.contains('day-bar-empty') && hasReservationEligible(activeBarEvents)) {
-          const reservationEvent = (activeBarEvents || []).find((event) => event && event.isReservation !== false) || null;
-          const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(reservationEvent, reservationCleanerBadgeMap);
+          const cleanerBadge = opsCalendarGetReservationCleanerBadgeForDay(activeBarEvents, key, reservationCleanerBadgeMap);
           if (cleanerBadge && cleanerBadge.initials) {
             const initialsEl = document.createElement('span');
             initialsEl.className = 'day-bar-initials';
