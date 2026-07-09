@@ -4331,15 +4331,9 @@ async function createUnvalidatedSiteUserForInvite(input) {
   const firstName = String(input.firstName || '').trim();
   const familyName = String(input.familyName || '').trim();
   const country = normaliseCountryOfResidence(input.country);
-  const password = String(input.password || '');
 
-  if (!email || !firstName || !familyName || !country || !password) {
-    return { error: 'First name, family name, country, email, and password are required.' };
-  }
-
-  const passwordCheck = validateStrongPassword(password);
-  if (!passwordCheck.ok) {
-    return { error: passwordCheck.error };
+  if (!email || !firstName || !familyName || !country) {
+    return { error: 'First name, family name, country, and email are required.' };
   }
 
   let username;
@@ -4349,14 +4343,13 @@ async function createUnvalidatedSiteUserForInvite(input) {
     return { error: 'Could not generate unique username for invited user.' };
   }
 
-  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const result = await pool.query(
     `
       INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
       RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, created_at
     `,
-    [username, email, passwordHash, firstName, familyName, country]
+    [username, email, '', firstName, familyName, country]
   );
 
   const createdUser = result.rows[0] || null;
@@ -11747,20 +11740,13 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
   const familyName = String(req.body.familyName || '').trim();
   const country = normaliseCountryOfResidence(req.body.country);
   const email = String(req.body.email || '').trim();
-  const password = String(req.body.password || '');
   const roles = normaliseClientTeamRoles(req.body.roles);
-  const confirmExisting = req.body.confirmExisting === true;
 
-  if (!firstName || !familyName || !country || !email || !password) {
-    return res.status(400).json({ error: 'First name, family name, country, email, and password are required.' });
+  if (!firstName || !familyName || !country || !email) {
+    return res.status(400).json({ error: 'First name, family name, country, and email are required.' });
   }
   if (!roles.length) {
     return res.status(400).json({ error: 'Select at least one role (Manager and/or Staff).' });
-  }
-
-  const passwordCheck = validateStrongPassword(password);
-  if (!passwordCheck.ok) {
-    return res.status(400).json({ error: passwordCheck.error });
   }
 
   try {
@@ -11770,13 +11756,9 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
     }
 
     let siteUser = await getUserByEmailStrict(normalizedEmail);
-
-    if (siteUser && !confirmExisting) {
-      return res.status(409).json({
-        code: 'EXISTING_USER_CONFIRMATION_REQUIRED',
-        error: 'Site user already exists, send invitation?'
-      });
-    }
+    let createdNewUser = false;
+    let passwordEmailSent = false;
+    let passwordEmailError = '';
 
     if (!siteUser) {
       const created = await createUnvalidatedSiteUserForInvite({
@@ -11784,18 +11766,20 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
         familyName,
         country,
         email: normalizedEmail,
-        password
+        invitedByUserId: req.session.userId,
+        clientAccountId: req.accessContext.activeClientAccountId
       });
       if (created.error) {
         return res.status(400).json({ error: created.error });
       }
       siteUser = created.user;
-    } else {
-      await updateUserInviteProfileIfMissing(siteUser.id, {
-        firstName,
-        familyName,
-        country
-      });
+      createdNewUser = true;
+
+      const passwordEmailResult = await sendPasswordResetEmail(req, siteUser);
+      passwordEmailSent = passwordEmailResult.ok === true;
+      if (!passwordEmailSent) {
+        passwordEmailError = String(passwordEmailResult.error || 'Failed to send password setup email.');
+      }
     }
 
     const result = await setClientTeamRolesForUser(
@@ -11809,7 +11793,10 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
     }
     return res.status(201).json({
       invited: true,
-      existingUser: Boolean(confirmExisting),
+      existingUser: !createdNewUser,
+      createdNewUser,
+      passwordSetupEmailSent: passwordEmailSent,
+      passwordSetupEmailError: passwordEmailError,
       user: result.user,
       memberships: result.memberships
     });
