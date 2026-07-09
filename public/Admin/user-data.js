@@ -63,6 +63,14 @@ function renderUserDataDump(payload) {
     summaryEl.textContent = 'Loaded user #' + String(user.id || '') + ' with ' + counts.clientAccounts + ' client account(s), ' + counts.listings + ' listing(s), and ' + counts.reservations + ' reservation record(s).';
   }
 
+  const warnings = Array.isArray(dump.warnings) ? dump.warnings : [];
+  if (warnings.length) {
+    setUserDataMessage('User data loaded with ' + warnings.length + ' warning(s).', true);
+    if (summaryEl) {
+      summaryEl.textContent += ' Some sections could not be loaded.';
+    }
+  }
+
   if (dumpEl) {
     dumpEl.textContent = JSON.stringify(payload, null, 2);
   }

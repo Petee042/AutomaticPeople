@@ -7399,7 +7399,19 @@ async function getAdminUserDataDump(userId) {
     return null;
   }
 
-  const clientAccountsResult = await pool.query(
+  const warnings = [];
+  async function runDumpQuery(label, queryText, queryParams, fallbackRows) {
+    try {
+      const result = await pool.query(queryText, queryParams);
+      return result.rows;
+    } catch (err) {
+      warnings.push(label + ': ' + String(err && err.message ? err.message : 'Query failed'));
+      return Array.isArray(fallbackRows) ? fallbackRows : [];
+    }
+  }
+
+  const clientAccountRows = await runDumpQuery(
+    'client_accounts',
     `
       SELECT DISTINCT ca.*
       FROM client_accounts ca
@@ -7415,29 +7427,13 @@ async function getAdminUserDataDump(userId) {
     [id]
   );
 
-  const clientAccountIds = clientAccountsResult.rows
+    const clientAccountIds = clientAccountRows
     .map((row) => Number(row.id))
     .filter((value) => Number.isInteger(value) && value > 0);
 
   const accountIds = clientAccountIds;
-
-  const [
-    membershipsResult,
-    propertiesResult,
-    listingsResult,
-    cleanersResult,
-    feedSourceColorsResult,
-    sharedResourcesResult,
-    sharedResourceReservationsResult,
-    reservationActivityResult,
-    reservationEnquiryLandingPagesResult,
-    guestRelationshipsResult,
-    bookedInChangesResult,
-    listingCalendarEventsResult,
-    listingEventLogResult,
-    userEventLogResult
-  ] = await Promise.all([
-    pool.query(
+    const membershipsRows = await runDumpQuery(
+      'client_memberships',
       `
         SELECT cm.*,
                ca.display_name AS client_account_display_name
@@ -7447,8 +7443,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY cm.client_account_id ASC, cm.role ASC, cm.status ASC, cm.id ASC
       `,
       [id]
-    ),
-    pool.query(
+    );
+
+    const propertiesRows = await runDumpQuery(
+      'properties',
       `
         SELECT *
         FROM properties
@@ -7457,8 +7455,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const listingsRows = await runDumpQuery(
+      'listings',
       `
         SELECT *
         FROM listings
@@ -7467,8 +7467,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const cleanersRows = await runDumpQuery(
+      'cleaners',
       `
         SELECT *
         FROM cleaners
@@ -7478,8 +7480,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const feedSourceColorsRows = await runDumpQuery(
+      'feed_source_colors',
       `
         SELECT *
         FROM feed_source_colors
@@ -7488,8 +7492,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const sharedResourcesRows = await runDumpQuery(
+      'shared_resources',
       `
         SELECT *
         FROM shared_resources
@@ -7498,8 +7504,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const sharedResourceReservationsRows = await runDumpQuery(
+      'shared_resource_reservations',
       `
         SELECT *
         FROM shared_resource_reservations
@@ -7508,8 +7516,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const reservationActivityRows = await runDumpQuery(
+      'reservation_activity',
       `
         SELECT *
         FROM reservation_activity
@@ -7518,8 +7528,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY created_at DESC, id DESC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const reservationEnquiryLandingPagesRows = await runDumpQuery(
+      'reservation_enquiry_landing_pages',
       `
         SELECT *
         FROM reservation_enquiry_landing_pages
@@ -7528,8 +7540,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const guestRelationshipsRows = await runDumpQuery(
+      'guest_relationships',
       `
         SELECT *
         FROM guest_relationships
@@ -7538,8 +7552,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const bookedInChangesRows = await runDumpQuery(
+      'booked_in_changes',
       `
         SELECT *
         FROM booked_in_changes
@@ -7549,8 +7565,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY id ASC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const listingCalendarEventsRows = await runDumpQuery(
+      'listing_calendar_events',
       `
         SELECT *
         FROM listing_calendar_events
@@ -7559,8 +7577,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY created_at DESC, id DESC
       `,
       [id, accountIds]
-    ),
-    pool.query(
+    );
+
+    const listingEventLogRows = await runDumpQuery(
+      'listing_event_log',
       `
         SELECT *
         FROM listing_event_log
@@ -7568,8 +7588,10 @@ async function getAdminUserDataDump(userId) {
         ORDER BY created_at DESC, id DESC
       `,
       [accountIds]
-    ),
-    pool.query(
+    );
+
+    const userEventLogRows = await runDumpQuery(
+      'user_event_log',
       `
         SELECT *
         FROM user_event_log
@@ -7578,27 +7600,27 @@ async function getAdminUserDataDump(userId) {
         ORDER BY created_at DESC, id DESC
       `,
       [id, accountIds]
-    )
-  ]);
+    );
 
   return {
     user,
-    clientAccounts: clientAccountsResult.rows,
+      clientAccounts: clientAccountRows,
     clientAccountIds,
-    memberships: membershipsResult.rows,
-    properties: propertiesResult.rows,
-    listings: listingsResult.rows,
-    cleaners: cleanersResult.rows,
-    feedSourceColors: feedSourceColorsResult.rows,
-    sharedResources: sharedResourcesResult.rows,
-    sharedResourceReservations: sharedResourceReservationsResult.rows,
-    reservationActivity: reservationActivityResult.rows,
-    reservationEnquiryLandingPages: reservationEnquiryLandingPagesResult.rows,
-    guestRelationships: guestRelationshipsResult.rows,
-    bookedInChanges: bookedInChangesResult.rows,
-    listingCalendarEvents: listingCalendarEventsResult.rows,
-    listingEventLog: listingEventLogResult.rows,
-    userEventLog: userEventLogResult.rows
+      memberships: membershipsRows,
+      properties: propertiesRows,
+      listings: listingsRows,
+      cleaners: cleanersRows,
+      feedSourceColors: feedSourceColorsRows,
+      sharedResources: sharedResourcesRows,
+      sharedResourceReservations: sharedResourceReservationsRows,
+      reservationActivity: reservationActivityRows,
+      reservationEnquiryLandingPages: reservationEnquiryLandingPagesRows,
+      guestRelationships: guestRelationshipsRows,
+      bookedInChanges: bookedInChangesRows,
+      listingCalendarEvents: listingCalendarEventsRows,
+      listingEventLog: listingEventLogRows,
+      userEventLog: userEventLogRows,
+      warnings
   };
 }
 
