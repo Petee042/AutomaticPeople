@@ -48,10 +48,10 @@ function renderUsers(users) {
     return;
   }
 
-  const allOption = document.createElement('option');
-  allOption.value = '__all__';
-  allOption.textContent = 'All Users';
-  deleteSelect.appendChild(allOption);
+  const deletePromptOption = document.createElement('option');
+  deletePromptOption.value = '';
+  deletePromptOption.textContent = 'Select a user';
+  deleteSelect.appendChild(deletePromptOption);
 
   const viewOption = document.createElement('option');
   viewOption.value = '';
@@ -186,39 +186,6 @@ document.getElementById('deleteUserBtn').addEventListener('click', async () => {
 
   if (!selection) {
     setAdminMessage('Select a valid user first.', true);
-    return;
-  }
-
-  if (selection === '__all__') {
-    if (!adminUsers.length) {
-      setAdminMessage('No users to delete.', true);
-      return;
-    }
-
-    const confirmedAll = window.confirm(
-      'Confirm delete ALL users? This permanently removes every user and all associated data.'
-    );
-    if (!confirmedAll) {
-      return;
-    }
-
-    const button = document.getElementById('deleteUserBtn');
-    button.disabled = true;
-    try {
-      for (const user of adminUsers) {
-        const res = await fetch('/api/admin/users/' + encodeURIComponent(user.id), { method: 'DELETE' });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed deleting user ' + (user.email || ('#' + user.id)) + '.');
-        }
-      }
-      setAdminMessage('All users deleted successfully.', false);
-      await loadUsers();
-    } catch (err) {
-      setAdminMessage(err.message || 'Network error deleting all users.', true);
-    } finally {
-      button.disabled = false;
-    }
     return;
   }
 
