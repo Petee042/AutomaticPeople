@@ -3510,7 +3510,7 @@ function opsCalendarRenderReservationCalendar(events, changes) {
         if (!bar.classList.contains('day-bar-empty') && hasReservationEligible(activeBarEvents)) {
           const reservationEvent = (activeBarEvents || []).find((event) => event && event.isReservation !== false) || null;
           const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(reservationEvent, reservationCleanerBadgeMap);
-          if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === key) {
+          if (cleanerBadge && cleanerBadge.initials) {
             const initialsEl = document.createElement('span');
             initialsEl.className = 'day-bar-initials';
             initialsEl.textContent = cleanerBadge.initials;
