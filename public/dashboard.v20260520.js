@@ -1962,6 +1962,21 @@ function getActivityGuestName(event) {
   return '';
 }
 
+function getActivityFeedSource(event, listingName) {
+  const sourceKey = opsCalendarSourceKey(event && event.source);
+  const reservationActivityId = Number(event && event.reservationActivityId || 0);
+  if (
+    (Number.isInteger(reservationActivityId) && reservationActivityId > 0)
+    || sourceKey === 'direct booking'
+    || sourceKey === 'automaticpeople'
+  ) {
+    return 'Private';
+  }
+
+  const metadata = parseApMetadataFromDescription(event && event.description);
+  return deriveOpsEventSource(event, metadata, listingName) || 'Unknown';
+}
+
 function renderDashboardActivityRows(dayKeys, activityByDay) {
   const container = document.getElementById('dashboardActivityRows');
   if (!container) {
@@ -2006,6 +2021,9 @@ function renderDashboardActivityRows(dayKeys, activityByDay) {
       }
       if (entry.guestName) {
         parts.push('Guest: ' + entry.guestName);
+      }
+      if (entry.type === 'Check-in' && entry.feedSource) {
+        parts.push('Source: ' + entry.feedSource);
       }
 
       parts.forEach((part) => {
@@ -2128,6 +2146,7 @@ async function refreshDashboardActivity() {
     const checkinKey = toDateKey(event && event.start);
     const checkoutKey = toDateKey(event && event.end);
     const guestName = getActivityGuestName(event);
+    const feedSource = getActivityFeedSource(event, listingName);
     const dateBasis = listingMeta.date_basis === 'checkin' ? 'checkin' : 'checkout';
     const reservationKeyValue = reservationChangeKey(listingId, checkinKey, checkoutKey);
     const changeoverName = cleanerByReservationKey.get(reservationKeyValue) || '';
@@ -2138,7 +2157,8 @@ async function refreshDashboardActivity() {
         propertyName,
         listingName,
         changeoverName: dateBasis === 'checkin' ? changeoverName : '',
-        guestName
+        guestName,
+        feedSource
       });
     }
 
