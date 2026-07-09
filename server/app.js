@@ -39,6 +39,9 @@ const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(S
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
+const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
+const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY);
 const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT_COUNTRY || 'GB').trim().toUpperCase();
 const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
   || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
@@ -10738,7 +10741,58 @@ const passwordResetRequestRateLimiter = rateLimit({
   message: { error: 'Too many password reset requests. Please try again later.' }
 });
 
+async function verifyTurnstileToken(token, remoteIp) {
+  if (!TURNSTILE_ENABLED) {
+    return { ok: true, bypassed: true };
+  }
+
+  const value = String(token || '').trim();
+  if (!value) {
+    return { ok: false, error: 'Missing verification token.' };
+  }
+
+  try {
+    const payload = new URLSearchParams();
+    payload.set('secret', TURNSTILE_SECRET_KEY);
+    payload.set('response', value);
+    if (remoteIp) {
+      payload.set('remoteip', String(remoteIp));
+    }
+
+    const verifyRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: payload.toString()
+    });
+
+    const verifyData = await verifyRes.json().catch(() => ({}));
+    if (!verifyRes.ok || verifyData.success !== true) {
+      return {
+        ok: false,
+        error: 'Bot verification failed.',
+        details: Array.isArray(verifyData['error-codes']) ? verifyData['error-codes'] : []
+      };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'Bot verification is currently unavailable.',
+      details: [String(err && err.message ? err.message : 'verify-request-failed')]
+    };
+  }
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
+
+// GET /api/signup/turnstile-config
+app.get('/api/signup/turnstile-config', (req, res) => {
+  return res.json({
+    enabled: TURNSTILE_ENABLED,
+    siteKey: TURNSTILE_ENABLED ? TURNSTILE_SITE_KEY : ''
+  });
+});
 
 // POST /api/signup
 app.post('/api/signup', async (req, res) => {
@@ -10747,6 +10801,7 @@ app.post('/api/signup', async (req, res) => {
   const country = normaliseCountryOfResidence(req.body.country);
   const email = String(req.body.email || '').trim();
   const password = String(req.body.password || '');
+  const turnstileToken = String(req.body.turnstileToken || '').trim();
 
   if (!firstName || !familyName || !country || !email || !password) {
     return res.status(400).json({ error: 'First name, family name, country, email, and password are required.' });
@@ -10761,6 +10816,16 @@ app.post('/api/signup', async (req, res) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ error: 'Invalid email address.' });
+  }
+
+  if (TURNSTILE_ENABLED) {
+    const turnstileResult = await verifyTurnstileToken(turnstileToken, req.ip);
+    if (!turnstileResult.ok) {
+      return res.status(400).json({
+        code: 'TURNSTILE_FAILED',
+        error: turnstileResult.error || 'Bot verification failed. Please try again.'
+      });
+    }
   }
 
   try {

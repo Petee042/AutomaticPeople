@@ -65,6 +65,9 @@
           <label for="su-password">Password <span class="hint">(min 8, 1 uppercase, 1 number, 1 special)</span></label>
           <input type="password" id="su-password" name="password" autocomplete="new-password" required minlength="8" />
         </div>
+        <div class="field" id="signup-turnstile-field" hidden>
+          <div id="signup-turnstile"></div>
+        </div>
         <p id="signup-message" class="message" aria-live="polite"></p>
         <button type="submit" class="btn primary">Create Account</button>
       </form>
