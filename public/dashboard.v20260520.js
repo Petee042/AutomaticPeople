@@ -3288,8 +3288,69 @@ function opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleaner
   return reservationCleanerBadgeMap.get(key) || null;
 }
 
+function opsCalendarBuildDefaultCleanerBadgeForEvent(event, dayKey) {
+  if (!event || event.isReservation === false || !dayKey) {
+    return null;
+  }
+
+  const listingId = Number(event && (event.listingId || event.listing_id) || 0);
+  if (!Number.isInteger(listingId) || listingId <= 0) {
+    return null;
+  }
+
+  const checkinKey = toDateKey(event && event.start);
+  const checkoutKey = toDateKey(event && event.end);
+  if (!checkinKey || !checkoutKey) {
+    return null;
+  }
+
+  const listingMeta = getListingMetaById(listingId);
+  if (!listingMeta) {
+    return null;
+  }
+
+  const basis = listingMeta.date_basis === 'checkin' ? 'checkin' : 'checkout';
+  const basisDay = basis === 'checkin' ? checkinKey : checkoutKey;
+  if (basisDay !== dayKey) {
+    return null;
+  }
+
+  const defaultCleaner = getDefaultCleanerForListing(listingMeta.usual_cleaner_id);
+  const defaultCleanerName = defaultCleaner ? String(defaultCleaner.name || '').trim() : '';
+  if (!defaultCleanerName || defaultCleanerName.toLowerCase() === 'unallocated') {
+    return null;
+  }
+
+  const badgeSource = {
+    default_cleaner_id: defaultCleaner.id,
+    default_cleaner_name: defaultCleanerName
+  };
+  const initials = opsCalendarGetCleanerInitials(badgeSource);
+  if (!initials) {
+    return null;
+  }
+
+  return {
+    initials,
+    color: opsCalendarGetCleanerColor(badgeSource),
+    name: defaultCleanerName,
+    changeoverDate: basisDay
+  };
+}
+
 function opsCalendarGetReservationCleanerBadgeForDay(events, dayKey, reservationCleanerBadgeMap) {
   if (!Array.isArray(events) || !events.length || !dayKey || !reservationCleanerBadgeMap || !reservationCleanerBadgeMap.size) {
+    if (!Array.isArray(events) || !events.length || !dayKey) {
+      return null;
+    }
+
+    for (let i = 0; i < events.length; i += 1) {
+      const fallbackBadge = opsCalendarBuildDefaultCleanerBadgeForEvent(events[i], dayKey);
+      if (fallbackBadge) {
+        return fallbackBadge;
+      }
+    }
+
     return null;
   }
 
@@ -3302,6 +3363,11 @@ function opsCalendarGetReservationCleanerBadgeForDay(events, dayKey, reservation
     const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleanerBadgeMap);
     if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === dayKey) {
       return cleanerBadge;
+    }
+
+    const fallbackBadge = opsCalendarBuildDefaultCleanerBadgeForEvent(event, dayKey);
+    if (fallbackBadge) {
+      return fallbackBadge;
     }
   }
 
