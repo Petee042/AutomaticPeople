@@ -7388,6 +7388,220 @@ async function getSiteUserForAdmin(userId) {
   return user || null;
 }
 
+async function getAdminUserDataDump(userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+
+  const user = await getUserById(id);
+  if (!user) {
+    return null;
+  }
+
+  const clientAccountsResult = await pool.query(
+    `
+      SELECT DISTINCT ca.*
+      FROM client_accounts ca
+      WHERE ca.created_by_user_id = $1
+         OR EXISTS (
+           SELECT 1
+           FROM client_memberships cm
+           WHERE cm.client_account_id = ca.id
+             AND cm.user_id = $1
+         )
+      ORDER BY ca.id ASC
+    `,
+    [id]
+  );
+
+  const clientAccountIds = clientAccountsResult.rows
+    .map((row) => Number(row.id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  const accountIds = clientAccountIds;
+
+  const [
+    membershipsResult,
+    propertiesResult,
+    listingsResult,
+    cleanersResult,
+    feedSourceColorsResult,
+    sharedResourcesResult,
+    sharedResourceReservationsResult,
+    reservationActivityResult,
+    reservationEnquiryLandingPagesResult,
+    guestRelationshipsResult,
+    bookedInChangesResult,
+    listingCalendarEventsResult,
+    listingEventLogResult,
+    userEventLogResult
+  ] = await Promise.all([
+    pool.query(
+      `
+        SELECT cm.*,
+               ca.display_name AS client_account_display_name
+        FROM client_memberships cm
+        LEFT JOIN client_accounts ca ON ca.id = cm.client_account_id
+        WHERE cm.user_id = $1
+        ORDER BY cm.client_account_id ASC, cm.role ASC, cm.status ASC, cm.id ASC
+      `,
+      [id]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM properties
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM listings
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM cleaners
+        WHERE user_id = $1
+           OR cleaner_user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM feed_source_colors
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM shared_resources
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM shared_resource_reservations
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM reservation_activity
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY created_at DESC, id DESC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM reservation_enquiry_landing_pages
+        WHERE user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM guest_relationships
+        WHERE guest_user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM booked_in_changes
+        WHERE user_id = $1
+           OR cleaner_user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY id ASC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM listing_calendar_events
+        WHERE guest_user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY created_at DESC, id DESC
+      `,
+      [id, accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM listing_event_log
+        WHERE client_account_id = ANY($1::bigint[])
+        ORDER BY created_at DESC, id DESC
+      `,
+      [accountIds]
+    ),
+    pool.query(
+      `
+        SELECT *
+        FROM user_event_log
+        WHERE actor_user_id = $1
+           OR client_account_id = ANY($2::bigint[])
+        ORDER BY created_at DESC, id DESC
+      `,
+      [id, accountIds]
+    )
+  ]);
+
+  return {
+    user,
+    clientAccounts: clientAccountsResult.rows,
+    clientAccountIds,
+    memberships: membershipsResult.rows,
+    properties: propertiesResult.rows,
+    listings: listingsResult.rows,
+    cleaners: cleanersResult.rows,
+    feedSourceColors: feedSourceColorsResult.rows,
+    sharedResources: sharedResourcesResult.rows,
+    sharedResourceReservations: sharedResourceReservationsResult.rows,
+    reservationActivity: reservationActivityResult.rows,
+    reservationEnquiryLandingPages: reservationEnquiryLandingPagesResult.rows,
+    guestRelationships: guestRelationshipsResult.rows,
+    bookedInChanges: bookedInChangesResult.rows,
+    listingCalendarEvents: listingCalendarEventsResult.rows,
+    listingEventLog: listingEventLogResult.rows,
+    userEventLog: userEventLogResult.rows
+  };
+}
+
 async function updateSiteUserForAdmin(userId, input) {
   const id = Number(userId);
   if (!Number.isInteger(id) || id <= 0) {
@@ -10955,6 +11169,29 @@ app.get('/api/admin/site-users/:userId', requireAdminAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to load site user.' });
+  }
+});
+
+// GET /api/admin/users/:userId/dump
+app.get('/api/admin/users/:userId/dump', requireAdminAuth, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id.' });
+  }
+
+  try {
+    const dump = await getAdminUserDataDump(userId);
+    if (!dump) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      dump
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load user data dump.' });
   }
 });
 

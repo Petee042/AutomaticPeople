@@ -23,33 +23,75 @@ function setAdminAuthenticated(isAuthenticated) {
 
 function renderUsers(users) {
   adminUsers = users || [];
-  const select = document.getElementById('adminUserSelect');
-  select.innerHTML = '';
+  const deleteSelect = document.getElementById('adminUserSelect');
+  const viewSelect = document.getElementById('adminViewUserSelect');
+
+  deleteSelect.innerHTML = '';
+  viewSelect.innerHTML = '';
 
   if (!adminUsers.length) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'No users found';
-    select.appendChild(option);
-    select.disabled = true;
+    const deleteOption = document.createElement('option');
+    deleteOption.value = '';
+    deleteOption.textContent = 'No users found';
+    deleteSelect.appendChild(deleteOption);
+    deleteSelect.disabled = true;
+
+    const viewOption = document.createElement('option');
+    viewOption.value = '';
+    viewOption.textContent = 'No users found';
+    viewSelect.appendChild(viewOption);
+    viewSelect.disabled = true;
+
     document.getElementById('deleteUserBtn').disabled = true;
+    document.getElementById('viewUserDataBtn').setAttribute('aria-disabled', 'true');
+    document.getElementById('viewUserDataBtn').href = '/Admin/user-data.html';
     return;
   }
 
   const allOption = document.createElement('option');
   allOption.value = '__all__';
   allOption.textContent = 'All Users';
-  select.appendChild(allOption);
+  deleteSelect.appendChild(allOption);
+
+  const viewOption = document.createElement('option');
+  viewOption.value = '';
+  viewOption.textContent = 'Select a user';
+  viewSelect.appendChild(viewOption);
 
   adminUsers.forEach((user) => {
-    const option = document.createElement('option');
-    option.value = String(user.id);
-    option.textContent = (user.email || ('User #' + user.id));
-    select.appendChild(option);
+    const deleteUserOption = document.createElement('option');
+    deleteUserOption.value = String(user.id);
+    deleteUserOption.textContent = (user.email || ('User #' + user.id));
+    deleteSelect.appendChild(deleteUserOption);
+
+    const viewUserOption = document.createElement('option');
+    viewUserOption.value = String(user.id);
+    viewUserOption.textContent = (user.email || ('User #' + user.id));
+    viewSelect.appendChild(viewUserOption);
   });
 
-  select.disabled = false;
+  deleteSelect.disabled = false;
+  viewSelect.disabled = false;
   document.getElementById('deleteUserBtn').disabled = false;
+  updateViewUserDataLink();
+}
+
+function updateViewUserDataLink() {
+  const select = document.getElementById('adminViewUserSelect');
+  const link = document.getElementById('viewUserDataBtn');
+  if (!select || !link) {
+    return;
+  }
+
+  const userId = Number(select.value);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    link.href = '/Admin/user-data.html';
+    link.setAttribute('aria-disabled', 'true');
+    return;
+  }
+
+  link.href = '/Admin/user-data.html?userId=' + encodeURIComponent(String(userId));
+  link.removeAttribute('aria-disabled');
 }
 
 async function checkAdminSession() {
@@ -124,6 +166,17 @@ document.getElementById('adminLoginForm').addEventListener('submit', async (e) =
     setAdminMessage('Network error during admin login.', true);
   } finally {
     button.disabled = false;
+  }
+});
+
+document.getElementById('adminViewUserSelect').addEventListener('change', updateViewUserDataLink);
+
+document.getElementById('viewUserDataBtn').addEventListener('click', (e) => {
+  const select = document.getElementById('adminViewUserSelect');
+  const userId = Number(select.value);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    e.preventDefault();
+    setAdminMessage('Select a valid user first.', true);
   }
 });
 
