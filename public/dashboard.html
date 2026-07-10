@@ -52,6 +52,14 @@
           </div>
         </section>
 
+        <section class="listing-form-section" id="emptyNightsSection">
+          <h3>Empty Nights</h3>
+          <p id="dashboardEmptyNightsStatus" class="activity-status" aria-live="polite"></p>
+          <div id="dashboardEmptyNightsContent" aria-live="polite">
+            <p class="cleaning-empty">Loading empty nights...</p>
+          </div>
+        </section>
+
         <section class="listing-form-section" id="eventLogSection">
           <div class="config-block-header">
             <h3>Calendar Event Log</h3>
@@ -274,6 +282,30 @@
             </div>
             <div class="feed-actions" style="margin-top: 0.9rem; justify-content: flex-end;">
               <button type="submit" id="saveBankDetailsBtn" class="btn primary action-icon action-save" aria-label="Save Bank Details">Save Bank Details</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Dashboard Settings</h3>
+          <p id="dashboardSettingsMessage" class="message"></p>
+          <form id="dashboardSettingsForm" class="bank-details-form" novalidate>
+            <div class="calendar-source-row">
+              <label for="dashboardActivityOutlookDays">Activity Outlook Period</label>
+              <div>
+                <input id="dashboardActivityOutlookDays" type="number" min="1" step="1" inputmode="numeric" />
+                <div class="hint">Days</div>
+              </div>
+            </div>
+            <div class="calendar-source-row">
+              <label for="dashboardHighlightEmptyNightsDays">Highlight Empty Nights</label>
+              <div>
+                <input id="dashboardHighlightEmptyNightsDays" type="number" min="1" step="1" inputmode="numeric" />
+                <div class="hint">Days ahead</div>
+              </div>
+            </div>
+            <div class="feed-actions" style="margin-top: 0.9rem; justify-content: flex-end;">
+              <button type="submit" id="saveDashboardSettingsBtn" class="btn primary action-icon action-save" aria-label="Save Dashboard Settings">Save Dashboard Settings</button>
             </div>
           </form>
         </section>

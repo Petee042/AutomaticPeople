@@ -444,6 +444,16 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS dashboard_activity_outlook_days INTEGER NOT NULL DEFAULT 7
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS dashboard_highlight_empty_nights_days INTEGER NOT NULL DEFAULT 7
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS client_accounts (
       id BIGSERIAL PRIMARY KEY,
       created_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
@@ -4016,8 +4026,11 @@ async function getUserById(userId) {
     `
         SELECT id, username, email, password_hash,
           first_name, family_name, country_of_residence, telephone, is_validated,
+             postal_address,
              stripe_account_id, stripe_onboarding_complete,
              stripe_charges_enabled, stripe_payouts_enabled,
+             dashboard_activity_outlook_days,
+             dashboard_highlight_empty_nights_days,
              created_at
       FROM users
       WHERE id = $1
@@ -11982,6 +11995,8 @@ app.get('/api/me', requireAuth, async (req, res) => {
       email: user.email || req.session.email,
       telephone: user.telephone || '',
       postalAddress: user.postal_address || '',
+      dashboardActivityOutlookDays: Number(user.dashboard_activity_outlook_days || 7) || 7,
+      dashboardHighlightEmptyNightsDays: Number(user.dashboard_highlight_empty_nights_days || 7) || 7,
       isValidated: user.is_validated !== false,
       consolidated_ics_token: buildConsolidatedIcsToken(req.session.userId),
       stripeConnect: formatStripeConnectStatus(user),
@@ -12462,6 +12477,44 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   } catch (err) {
     console.error('[BankDetails] Error loading bank details:', err);
     return res.status(500).json({ error: 'Failed to load bank details.' });
+  }
+});
+
+// PUT /api/account/dashboard-settings — save dashboard settings for current host user
+app.put('/api/account/dashboard-settings', requireScopedRole('Client'), async (req, res) => {
+  const activityOutlookDays = Number(req.body && req.body.activityOutlookDays);
+  const highlightEmptyNightsDays = Number(req.body && req.body.highlightEmptyNightsDays);
+
+  if (!Number.isInteger(activityOutlookDays) || activityOutlookDays < 1) {
+    return res.status(400).json({ error: 'Activity Outlook Period must be a whole number of 1 or more.' });
+  }
+  if (!Number.isInteger(highlightEmptyNightsDays) || highlightEmptyNightsDays < 1) {
+    return res.status(400).json({ error: 'Highlight Empty Nights must be a whole number of 1 or more.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET dashboard_activity_outlook_days = $1,
+            dashboard_highlight_empty_nights_days = $2
+        WHERE id = $3
+        RETURNING dashboard_activity_outlook_days, dashboard_highlight_empty_nights_days
+      `,
+      [activityOutlookDays, highlightEmptyNightsDays, Number(req.session.userId)]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    return res.json({
+      activityOutlookDays: Number(result.rows[0].dashboard_activity_outlook_days || 7) || 7,
+      highlightEmptyNightsDays: Number(result.rows[0].dashboard_highlight_empty_nights_days || 7) || 7
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to save dashboard settings.' });
   }
 });
 

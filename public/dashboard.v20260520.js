@@ -32,6 +32,10 @@ let currentGuests = [];
 let currentEditingTeamUserId = null;
 let currentTeamMemberDeleteImpact = null;
 let currentMeProfile = null;
+let currentDashboardSettings = {
+  activityOutlookDays: 7,
+  highlightEmptyNightsDays: 7
+};
 let currentDashboardContextMode = 'hosting';
 let dashboardContextAvailability = { hosting: true, guest: false };
 let dashboardTabController = null;
@@ -1931,6 +1935,43 @@ function setDashboardActivityStatus(text) {
   el.textContent = String(text || '').trim();
 }
 
+function setDashboardEmptyNightsStatus(text) {
+  const el = document.getElementById('dashboardEmptyNightsStatus');
+  if (!el) {
+    return;
+  }
+  el.textContent = String(text || '').trim();
+}
+
+function getDashboardActivityOutlookDays() {
+  const value = Number(currentDashboardSettings && currentDashboardSettings.activityOutlookDays);
+  return Number.isInteger(value) && value >= 1 ? value : 7;
+}
+
+function getDashboardHighlightEmptyNightsDays() {
+  const value = Number(currentDashboardSettings && currentDashboardSettings.highlightEmptyNightsDays);
+  return Number.isInteger(value) && value >= 1 ? value : 7;
+}
+
+function applyDashboardSettings(settings) {
+  const activityOutlookDays = Number(settings && settings.activityOutlookDays);
+  const highlightEmptyNightsDays = Number(settings && settings.highlightEmptyNightsDays);
+
+  currentDashboardSettings = {
+    activityOutlookDays: Number.isInteger(activityOutlookDays) && activityOutlookDays >= 1 ? activityOutlookDays : 7,
+    highlightEmptyNightsDays: Number.isInteger(highlightEmptyNightsDays) && highlightEmptyNightsDays >= 1 ? highlightEmptyNightsDays : 7
+  };
+
+  const activityInput = document.getElementById('dashboardActivityOutlookDays');
+  const emptyNightsInput = document.getElementById('dashboardHighlightEmptyNightsDays');
+  if (activityInput) {
+    activityInput.value = String(currentDashboardSettings.activityOutlookDays);
+  }
+  if (emptyNightsInput) {
+    emptyNightsInput.value = String(currentDashboardSettings.highlightEmptyNightsDays);
+  }
+}
+
 function formatActivityDayHeader(dayKey) {
   const date = utcDateFromKey(dayKey);
   return WEEKDAY_NAMES[date.getUTCDay()] + ' ' + date.getUTCDate() + ' ' + MONTH_SHORT_NAMES[date.getUTCMonth()];
@@ -2042,9 +2083,66 @@ function renderDashboardActivityRows(dayKeys, activityByDay) {
   });
 }
 
+function renderDashboardEmptyNights(dayKeys, emptyListingsByDay) {
+  const container = document.getElementById('dashboardEmptyNightsContent');
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+
+  const rows = dayKeys
+    .map((dayKey) => ({ dayKey, listings: emptyListingsByDay.get(dayKey) || [] }))
+    .filter((row) => row.listings.length);
+
+  if (!rows.length) {
+    const empty = document.createElement('p');
+    empty.className = 'cleaning-empty';
+    empty.textContent = 'No empty nights in the selected outlook period.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'table-wrap';
+
+  const table = document.createElement('table');
+  table.className = 'calendar-table';
+
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['Date', 'Empty Listings'].forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+
+    const dateCell = document.createElement('td');
+    dateCell.textContent = formatActivityDayHeader(row.dayKey);
+    tr.appendChild(dateCell);
+
+    const listingsCell = document.createElement('td');
+    listingsCell.textContent = row.listings.join(', ');
+    tr.appendChild(listingsCell);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  container.appendChild(tableWrap);
+}
+
 async function refreshDashboardActivity() {
   const container = document.getElementById('dashboardActivityRows');
-  if (!container) {
+  const emptyNightsContainer = document.getElementById('dashboardEmptyNightsContent');
+  if (!container || !emptyNightsContainer) {
     return;
   }
 
@@ -2052,18 +2150,25 @@ async function refreshDashboardActivity() {
   const now = new Date();
   const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
   const dayKeys = [];
-  for (let i = 0; i < 7; i += 1) {
+  for (let i = 0; i < getDashboardActivityOutlookDays(); i += 1) {
     dayKeys.push(keyFromUtcDate(addUtcDays(todayUtc, i)));
+  }
+  const emptyNightKeys = [];
+  for (let i = 0; i < getDashboardHighlightEmptyNightsDays(); i += 1) {
+    emptyNightKeys.push(keyFromUtcDate(addUtcDays(todayUtc, i)));
   }
 
   const listings = Array.isArray(currentListings) ? currentListings.filter((listing) => Number(listing.id) > 0) : [];
   if (!listings.length) {
     setDashboardActivityStatus('');
+    setDashboardEmptyNightsStatus('');
     renderDashboardActivityRows(dayKeys, new Map(dayKeys.map((key) => [key, []])));
+    renderDashboardEmptyNights(emptyNightKeys, new Map(emptyNightKeys.map((key) => [key, []])));
     return;
   }
 
   setDashboardActivityStatus('Loading activity...');
+  setDashboardEmptyNightsStatus('Loading empty nights...');
 
   const results = await Promise.all(listings.map(async (listing) => {
     try {
@@ -2134,6 +2239,8 @@ async function refreshDashboardActivity() {
 
   const dayKeySet = new Set(dayKeys);
   const activityByDay = new Map(dayKeys.map((key) => [key, []]));
+  const emptyNightKeySet = new Set(emptyNightKeys);
+  const occupiedListingsByNight = new Map(emptyNightKeys.map((key) => [key, new Set()]));
   (events || []).forEach((event) => {
     if (event && event.isReservation === false) {
       return;
@@ -2171,6 +2278,17 @@ async function refreshDashboardActivity() {
         guestName
       });
     }
+
+    if (checkinKey && checkoutKey && Number.isInteger(listingId) && listingId > 0) {
+      const startDate = utcDateFromKey(checkinKey);
+      const endDate = utcDateFromKey(checkoutKey);
+      for (let cursor = new Date(startDate.getTime()); cursor < endDate; cursor = addUtcDays(cursor, 1)) {
+        const nightKey = keyFromUtcDate(cursor);
+        if (emptyNightKeySet.has(nightKey) && occupiedListingsByNight.has(nightKey)) {
+          occupiedListingsByNight.get(nightKey).add(listingId);
+        }
+      }
+    }
   });
 
   dayKeys.forEach((dayKey) => {
@@ -2187,11 +2305,24 @@ async function refreshDashboardActivity() {
     });
   });
 
+  const emptyListingsByDay = new Map();
+  emptyNightKeys.forEach((dayKey) => {
+    const occupiedSet = occupiedListingsByNight.get(dayKey) || new Set();
+    const emptyListings = listings
+      .filter((listing) => !occupiedSet.has(Number(listing.id)))
+      .map((listing) => String(listing.name || ('Listing #' + listing.id)).trim())
+      .sort((a, b) => a.localeCompare(b));
+    emptyListingsByDay.set(dayKey, emptyListings);
+  });
+
   renderDashboardActivityRows(dayKeys, activityByDay);
+  renderDashboardEmptyNights(emptyNightKeys, emptyListingsByDay);
   if (issues.length) {
     setDashboardActivityStatus('Loaded with some feed issues.');
+    setDashboardEmptyNightsStatus('Loaded with some feed issues.');
   } else {
     setDashboardActivityStatus('');
+    setDashboardEmptyNightsStatus('');
   }
 }
 
@@ -4213,6 +4344,10 @@ async function sendScheduleEmailToRecipient(toEmail) {
     }
     const meData = await meRes.json();
     currentMeProfile = meData;
+    applyDashboardSettings({
+      activityOutlookDays: meData.dashboardActivityOutlookDays,
+      highlightEmptyNightsDays: meData.dashboardHighlightEmptyNightsDays
+    });
     setConsolidatedIcsUrl(meData.consolidated_ics_token || '');
     currentUserEmail = String(meData.email || '').toLowerCase();
     loadDashboardState();
@@ -4652,6 +4787,13 @@ if (_dashboardContextToggle) _dashboardContextToggle.addEventListener('click', a
 
 function setBankDetailsMessage(text, isError) {
   const el = document.getElementById('bankDetailsMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setDashboardSettingsMessage(text, isError) {
+  const el = document.getElementById('dashboardSettingsMessage');
   if (!el) return;
   el.textContent = text || '';
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
@@ -5399,6 +5541,42 @@ async function fetchBankDetails() {
   }
 }
 
+async function saveDashboardSettings() {
+  const activityOutlookDays = Number(String((document.getElementById('dashboardActivityOutlookDays') || {}).value || '').trim());
+  const highlightEmptyNightsDays = Number(String((document.getElementById('dashboardHighlightEmptyNightsDays') || {}).value || '').trim());
+
+  if (!Number.isInteger(activityOutlookDays) || activityOutlookDays < 1) {
+    throw new Error('Activity Outlook Period must be 1 day or more.');
+  }
+  if (!Number.isInteger(highlightEmptyNightsDays) || highlightEmptyNightsDays < 1) {
+    throw new Error('Highlight Empty Nights must be 1 day or more.');
+  }
+
+  const res = await fetch('/api/account/dashboard-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      activityOutlookDays,
+      highlightEmptyNightsDays
+    })
+  });
+
+  if (res.status === 401) {
+    window.location.href = '/';
+    throw new Error('Session expired.');
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to save dashboard settings.');
+  }
+
+  applyDashboardSettings({
+    activityOutlookDays: data.activityOutlookDays,
+    highlightEmptyNightsDays: data.highlightEmptyNightsDays
+  });
+}
+
 const _bankDetailsForm = document.getElementById('bankDetailsForm');
 if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -5448,6 +5626,24 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   } catch (err) {
     console.error('[BankDetails] Error saving bank details:', err);
     setBankDetailsMessage(err.message || 'Failed to save bank details.', true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+const _dashboardSettingsForm = document.getElementById('dashboardSettingsForm');
+if (_dashboardSettingsForm) _dashboardSettingsForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  setDashboardSettingsMessage('', false);
+  const btn = document.getElementById('saveDashboardSettingsBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    await saveDashboardSettings();
+    setDashboardSettingsMessage('Dashboard settings saved.', false);
+    await refreshDashboardActivity();
+  } catch (err) {
+    setDashboardSettingsMessage(err.message || 'Failed to save dashboard settings.', true);
   } finally {
     if (btn) btn.disabled = false;
   }
