@@ -46,6 +46,8 @@ const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT
 const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
   || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
   || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+const ENABLE_LEGACY_FEED_CRON = ['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_LEGACY_FEED_CRON || '').trim().toLowerCase());
+const CALENDAR_CRON_DB_LOCK_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CALENDAR_CRON_DB_LOCK_ENABLED || 'true').trim().toLowerCase());
 const DATA_RESET_FLAG_KEY = 'minimal-profile-reset-v1';
 const IS_ALPHA = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'development';
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim();
@@ -154,6 +156,46 @@ const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
+
+const CALENDAR_EVENTS_CRON_LOCK_KEY = 820001;
+const LEGACY_FEEDS_CRON_LOCK_KEY = 820002;
+let isLegacyFeedRefreshInFlight = false;
+let isCalendarChannelRefreshInFlight = false;
+
+async function runWithCronAdvisoryLock(lockKey, label, handler) {
+  if (!CALENDAR_CRON_DB_LOCK_ENABLED) {
+    await handler();
+    return;
+  }
+
+  let client = null;
+  try {
+    client = await pool.connect();
+    const lockResult = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [lockKey]);
+    const hasLock = Boolean(lockResult.rows[0] && lockResult.rows[0].locked);
+
+    if (!hasLock) {
+      console.log('[Cron:' + label + '] Skipped because another instance holds the advisory lock.');
+      return;
+    }
+
+    try {
+      await handler();
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [lockKey]).catch((err) => {
+        console.error('[Cron:' + label + '] Failed to release advisory lock:', err && err.message);
+      });
+    }
+  } catch (err) {
+    // If advisory lock checks fail, continue so calendar sync is still attempted.
+    console.error('[Cron:' + label + '] Advisory lock check failed:', err && err.message);
+    await handler();
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+}
 
 async function runOneTimeSiteDataResetIfNeeded() {
   
@@ -8928,6 +8970,67 @@ async function getFeedsForListing(listingId, userId) {
   return result.rows;
 }
 
+async function collapseDuplicateListingChannels(listingId, label) {
+  const rowsResult = await pool.query(
+    'SELECT id FROM listing_channels WHERE listing_id = $1 AND label = $2 ORDER BY id ASC',
+    [listingId, label]
+  );
+
+  const ids = rowsResult.rows
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  if (ids.length <= 1) {
+    return;
+  }
+
+  await pool.query(
+    'DELETE FROM listing_channels WHERE id = ANY($1::bigint[])',
+    [ids.slice(1)]
+  );
+}
+
+async function upsertListingChannelFromFeed(listingId, label, url) {
+  const channelLabel = String(label || '').trim();
+  const importUrl = String(url || '').trim();
+  if (!channelLabel || !importUrl) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO listing_channels (listing_id, label, import_url, created_at, updated_at)
+      VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT DO NOTHING
+    `,
+    [listingId, channelLabel, importUrl]
+  );
+
+  await pool.query(
+    `
+      UPDATE listing_channels
+      SET import_url = $1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE listing_id = $2
+        AND label = $3
+    `,
+    [importUrl, listingId, channelLabel]
+  );
+
+  await collapseDuplicateListingChannels(listingId, channelLabel);
+}
+
+async function removeListingChannelsForFeed(listingId, label) {
+  const channelLabel = String(label || '').trim();
+  if (!channelLabel) {
+    return;
+  }
+
+  await pool.query(
+    'DELETE FROM listing_channels WHERE listing_id = $1 AND label = $2',
+    [listingId, channelLabel]
+  );
+}
+
 async function createFeedForListing(listingId, userId, label, url) {
   
 
@@ -8943,6 +9046,8 @@ async function createFeedForListing(listingId, userId, label, url) {
     'INSERT INTO calendar_feeds (listing_id, label, url) VALUES ($1, $2, $3) RETURNING id, listing_id, label, url, created_at',
     [listingId, label, url]
   );
+
+  await upsertListingChannelFromFeed(listingId, label, url);
   return { feed: result.rows[0] };
 }
 
@@ -8957,6 +9062,12 @@ async function updateFeedForListing(feedId, listingId, userId, label, url) {
     return { error: 'Listing not found.' };
   }
 
+  const existingFeedResult = await pool.query(
+    'SELECT id, label, url FROM calendar_feeds WHERE id = $1 AND listing_id = $2 LIMIT 1',
+    [feedId, listingId]
+  );
+  const existingFeed = existingFeedResult.rows[0] || null;
+
   const result = await pool.query(
     'UPDATE calendar_feeds SET label = $1, url = $2 WHERE id = $3 AND listing_id = $4 RETURNING id, listing_id, label, url, created_at',
     [label, url, feedId, listingId]
@@ -8965,6 +9076,13 @@ async function updateFeedForListing(feedId, listingId, userId, label, url) {
   if (!result.rows[0]) {
     return { error: 'Feed not found.' };
   }
+
+  const previousLabel = String(existingFeed && existingFeed.label || '').trim();
+  const nextLabel = String(label || '').trim();
+  if (previousLabel && previousLabel !== nextLabel) {
+    await removeListingChannelsForFeed(listingId, previousLabel);
+  }
+  await upsertListingChannelFromFeed(listingId, label, url);
 
   return { feed: result.rows[0] };
 }
@@ -8978,6 +9096,12 @@ async function deleteFeedForListing(feedId, listingId, userId) {
     return { error: 'Listing not found.' };
   }
 
+  const existingFeedResult = await pool.query(
+    'SELECT id, label FROM calendar_feeds WHERE id = $1 AND listing_id = $2 LIMIT 1',
+    [feedId, listingId]
+  );
+  const existingFeed = existingFeedResult.rows[0] || null;
+
   const result = await pool.query(
     'DELETE FROM calendar_feeds WHERE id = $1 AND listing_id = $2 RETURNING id',
     [feedId, listingId]
@@ -8986,6 +9110,8 @@ async function deleteFeedForListing(feedId, listingId, userId) {
   if (!result.rows[0]) {
     return { error: 'Feed not found.' };
   }
+
+  await removeListingChannelsForFeed(listingId, existingFeed && existingFeed.label);
 
   return { deletedFeedId: Number(result.rows[0].id) };
 }
@@ -9266,10 +9392,18 @@ async function getCachedEventsForListing(listingId) {
 
 async function refreshEventsForListing(listingId) {
   const feeds = await getFeedsForListingInternal(listingId);
+  const seenImportUrls = new Set();
   await Promise.all(
     feeds.map(async (feed) => {
       const importingChannelLabel = String(feed.label || '').trim() || 'Calendar Feed';
-      const importUrl = String(feed.url || '').trim();
+      const importUrl = normaliseCalendarUrl(feed.url) || String(feed.url || '').trim();
+      if (!importUrl) {
+        return;
+      }
+      if (seenImportUrls.has(importUrl)) {
+        return;
+      }
+      seenImportUrls.add(importUrl);
       const exportingChannelLabel = await findExportingChannelLabel(importUrl);
 
       let fetched;
@@ -10146,12 +10280,58 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
 
 async function refreshListingCalendar(listing, clientAccountId) {
   const channels = await getChannelsForListing(Number(listing.id));
+  const seenImportUrls = new Set();
   for (const channel of channels) {
+    const normalisedImportUrl = normaliseCalendarUrl(channel.import_url || channel.url) || String(channel.import_url || channel.url || '').trim();
+    if (!normalisedImportUrl) {
+      continue;
+    }
+    if (seenImportUrls.has(normalisedImportUrl)) {
+      console.log('[CalendarSync] Skipping duplicate import URL for listing', listing.id, 'channel', channel.id);
+      continue;
+    }
+    seenImportUrls.add(normalisedImportUrl);
+
     try {
-      await syncChannelEvents(listing, channel, clientAccountId);
+      await syncChannelEvents(listing, { ...channel, import_url: normalisedImportUrl }, clientAccountId);
     } catch (err) {
       console.error(`[CalendarSync] Channel ${channel.id} listing ${listing.id}:`, err && err.message);
     }
+  }
+}
+
+async function runLegacyFeedRefreshTick() {
+  if (!ENABLE_LEGACY_FEED_CRON) {
+    return;
+  }
+  if (isLegacyFeedRefreshInFlight) {
+    console.log('[Cron:LegacyFeedSync] Skipped because previous run is still in progress.');
+    return;
+  }
+
+  isLegacyFeedRefreshInFlight = true;
+  try {
+    await runWithCronAdvisoryLock(LEGACY_FEEDS_CRON_LOCK_KEY, 'LegacyFeedSync', async () => {
+      await refreshAllListingsEvents();
+    });
+  } finally {
+    isLegacyFeedRefreshInFlight = false;
+  }
+}
+
+async function runCalendarChannelRefreshTick() {
+  if (isCalendarChannelRefreshInFlight) {
+    console.log('[Cron:CalendarChannelSync] Skipped because previous run is still in progress.');
+    return;
+  }
+
+  isCalendarChannelRefreshInFlight = true;
+  try {
+    await runWithCronAdvisoryLock(CALENDAR_EVENTS_CRON_LOCK_KEY, 'CalendarChannelSync', async () => {
+      await refreshAllListingsCalendars();
+    });
+  } finally {
+    isCalendarChannelRefreshInFlight = false;
   }
 }
 
@@ -16238,14 +16418,18 @@ async function startServer() {
       }
     });
 
-    // Run initial refresh 15 s after startup, then every 10 minutes
+    // Run initial refresh 15 s after startup, then every 10 minutes.
+    // Legacy feed cron is opt-in via ENABLE_LEGACY_FEED_CRON=true.
     setTimeout(() => {
-      // Legacy cached_events refresh (old ICS blob store)
-      refreshAllListingsEvents();
-      setInterval(refreshAllListingsEvents, 10 * 60 * 1000);
       // New per-event calendar store sync with conflict detection
-      refreshAllListingsCalendars();
-      setInterval(refreshAllListingsCalendars, 10 * 60 * 1000);
+      runCalendarChannelRefreshTick();
+      setInterval(runCalendarChannelRefreshTick, 10 * 60 * 1000);
+
+      if (ENABLE_LEGACY_FEED_CRON) {
+        // Legacy cached_events refresh (old ICS blob store)
+        runLegacyFeedRefreshTick();
+        setInterval(runLegacyFeedRefreshTick, 10 * 60 * 1000);
+      }
     }, 15000);
   } catch (err) {
     console.error('Failed to start server:', err);
