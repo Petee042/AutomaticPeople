@@ -2095,7 +2095,19 @@ function renderDashboardEmptyNights(dayKeys, emptyListingsByDay) {
     .map((dayKey) => ({ dayKey, listings: emptyListingsByDay.get(dayKey) || [] }))
     .filter((row) => row.listings.length);
 
-  if (!rows.length) {
+  const listingColumns = Array.from(
+    rows.reduce((set, row) => {
+      (row.listings || []).forEach((listingName) => {
+        const name = String(listingName || '').trim();
+        if (name) {
+          set.add(name);
+        }
+      });
+      return set;
+    }, new Set())
+  ).sort((a, b) => a.localeCompare(b));
+
+  if (!rows.length || !listingColumns.length) {
     const empty = document.createElement('p');
     empty.className = 'cleaning-empty';
     empty.textContent = 'No empty nights in the selected outlook period.';
@@ -2111,7 +2123,7 @@ function renderDashboardEmptyNights(dayKeys, emptyListingsByDay) {
 
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['Date', 'Empty Listings'].forEach((label) => {
+  ['Date'].concat(listingColumns).forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
     headRow.appendChild(th);
@@ -2127,9 +2139,12 @@ function renderDashboardEmptyNights(dayKeys, emptyListingsByDay) {
     dateCell.textContent = formatActivityDayHeader(row.dayKey);
     tr.appendChild(dateCell);
 
-    const listingsCell = document.createElement('td');
-    listingsCell.textContent = row.listings.join(', ');
-    tr.appendChild(listingsCell);
+    const rowListingSet = new Set((row.listings || []).map((name) => String(name || '').trim()).filter(Boolean));
+    listingColumns.forEach((listingName) => {
+      const listingCell = document.createElement('td');
+      listingCell.textContent = rowListingSet.has(listingName) ? listingName : '';
+      tr.appendChild(listingCell);
+    });
 
     tbody.appendChild(tr);
   });
