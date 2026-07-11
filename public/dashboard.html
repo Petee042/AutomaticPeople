@@ -14,7 +14,7 @@
           <span id="dashboardContextToggleIcon" class="context-toggle-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"></circle><path d="M5.5 18.5c1.2-3.2 3.6-4.8 6.5-4.8s5.3 1.6 6.5 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path></svg>
           </span>
-          <span id="dashboardContextLabel" class="context-toggle-label">Hosting</span>
+          <span id="dashboardContextLabel" class="context-toggle-label"></span>
         </button>
         <nav class="dashboard-tab-bar" role="tablist" aria-label="Main sections">
           <button id="tabBtnPrimary" class="dashboard-tab-btn active" data-panel="panel-dashboard" role="tab" aria-selected="true" aria-controls="panel-dashboard">Dashboard</button>
@@ -49,6 +49,14 @@
           <p id="dashboardActivityStatus" class="activity-status" aria-live="polite"></p>
           <div id="dashboardActivityRows" class="activity-rows" aria-live="polite">
             <p class="cleaning-empty">Loading activity...</p>
+          </div>
+        </section>
+
+        <section class="listing-form-section" id="emptyNightsSection">
+          <h3>Empty Nights</h3>
+          <p id="dashboardEmptyNightsStatus" class="activity-status" aria-live="polite"></p>
+          <div id="dashboardEmptyNightsContent" aria-live="polite">
+            <p class="cleaning-empty">Loading empty nights...</p>
           </div>
         </section>
 
@@ -274,6 +282,30 @@
             </div>
             <div class="feed-actions" style="margin-top: 0.9rem; justify-content: flex-end;">
               <button type="submit" id="saveBankDetailsBtn" class="btn primary action-icon action-save" aria-label="Save Bank Details">Save Bank Details</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="listing-form-section">
+          <h3>Dashboard Settings</h3>
+          <p id="dashboardSettingsMessage" class="message"></p>
+          <form id="dashboardSettingsForm" class="bank-details-form" novalidate>
+            <div class="calendar-source-row">
+              <label for="dashboardActivityOutlookDays">Activity Outlook Period</label>
+              <div>
+                <input id="dashboardActivityOutlookDays" type="number" min="1" step="1" inputmode="numeric" />
+                <div class="hint">Days</div>
+              </div>
+            </div>
+            <div class="calendar-source-row">
+              <label for="dashboardHighlightEmptyNightsDays">Highlight Empty Nights</label>
+              <div>
+                <input id="dashboardHighlightEmptyNightsDays" type="number" min="1" step="1" inputmode="numeric" />
+                <div class="hint">Days ahead</div>
+              </div>
+            </div>
+            <div class="feed-actions" style="margin-top: 0.9rem; justify-content: flex-end;">
+              <button type="submit" id="saveDashboardSettingsBtn" class="btn primary action-icon action-save" aria-label="Save Dashboard Settings">Save Dashboard Settings</button>
             </div>
           </form>
         </section>

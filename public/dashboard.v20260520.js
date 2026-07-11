@@ -32,6 +32,10 @@ let currentGuests = [];
 let currentEditingTeamUserId = null;
 let currentTeamMemberDeleteImpact = null;
 let currentMeProfile = null;
+let currentDashboardSettings = {
+  activityOutlookDays: 7,
+  highlightEmptyNightsDays: 7
+};
 let currentDashboardContextMode = 'hosting';
 let dashboardContextAvailability = { hosting: true, guest: false };
 let dashboardTabController = null;
@@ -1219,12 +1223,12 @@ function renderDashboardContextToggle() {
   const canSwitchModes = hasDashboardContextSwitchAvailable();
   toggleBtn.classList.toggle('hidden', !canSwitchModes);
   toggleBtn.disabled = !canSwitchModes;
+  labelEl.textContent = '';
+  labelEl.classList.add('hidden');
   if (!canSwitchModes) {
     return;
   }
 
-  const modeLabel = currentDashboardContextMode === 'guest' ? 'Hosting' : 'Guest';
-  labelEl.textContent = modeLabel;
   iconEl.innerHTML = getContextToggleIconSvg(currentDashboardContextMode);
 
   if (currentDashboardContextMode === 'guest') {
@@ -1931,6 +1935,43 @@ function setDashboardActivityStatus(text) {
   el.textContent = String(text || '').trim();
 }
 
+function setDashboardEmptyNightsStatus(text) {
+  const el = document.getElementById('dashboardEmptyNightsStatus');
+  if (!el) {
+    return;
+  }
+  el.textContent = String(text || '').trim();
+}
+
+function getDashboardActivityOutlookDays() {
+  const value = Number(currentDashboardSettings && currentDashboardSettings.activityOutlookDays);
+  return Number.isInteger(value) && value >= 1 ? value : 7;
+}
+
+function getDashboardHighlightEmptyNightsDays() {
+  const value = Number(currentDashboardSettings && currentDashboardSettings.highlightEmptyNightsDays);
+  return Number.isInteger(value) && value >= 1 ? value : 7;
+}
+
+function applyDashboardSettings(settings) {
+  const activityOutlookDays = Number(settings && settings.activityOutlookDays);
+  const highlightEmptyNightsDays = Number(settings && settings.highlightEmptyNightsDays);
+
+  currentDashboardSettings = {
+    activityOutlookDays: Number.isInteger(activityOutlookDays) && activityOutlookDays >= 1 ? activityOutlookDays : 7,
+    highlightEmptyNightsDays: Number.isInteger(highlightEmptyNightsDays) && highlightEmptyNightsDays >= 1 ? highlightEmptyNightsDays : 7
+  };
+
+  const activityInput = document.getElementById('dashboardActivityOutlookDays');
+  const emptyNightsInput = document.getElementById('dashboardHighlightEmptyNightsDays');
+  if (activityInput) {
+    activityInput.value = String(currentDashboardSettings.activityOutlookDays);
+  }
+  if (emptyNightsInput) {
+    emptyNightsInput.value = String(currentDashboardSettings.highlightEmptyNightsDays);
+  }
+}
+
 function formatActivityDayHeader(dayKey) {
   const date = utcDateFromKey(dayKey);
   return WEEKDAY_NAMES[date.getUTCDay()] + ' ' + date.getUTCDate() + ' ' + MONTH_SHORT_NAMES[date.getUTCMonth()];
@@ -1960,6 +2001,21 @@ function getActivityGuestName(event) {
   }
 
   return '';
+}
+
+function getActivityFeedSource(event, listingName) {
+  const sourceKey = opsCalendarSourceKey(event && event.source);
+  const reservationActivityId = Number(event && event.reservationActivityId || 0);
+  if (
+    (Number.isInteger(reservationActivityId) && reservationActivityId > 0)
+    || sourceKey === 'direct booking'
+    || sourceKey === 'automaticpeople'
+  ) {
+    return 'Private';
+  }
+
+  const metadata = parseApMetadataFromDescription(event && event.description);
+  return deriveOpsEventSource(event, metadata, listingName) || 'Unknown';
 }
 
 function renderDashboardActivityRows(dayKeys, activityByDay) {
@@ -2007,6 +2063,9 @@ function renderDashboardActivityRows(dayKeys, activityByDay) {
       if (entry.guestName) {
         parts.push('Guest: ' + entry.guestName);
       }
+      if (entry.type === 'Check-in' && entry.feedSource) {
+        parts.push('Source: ' + entry.feedSource);
+      }
 
       parts.forEach((part) => {
         const chip = document.createElement('span');
@@ -2024,9 +2083,98 @@ function renderDashboardActivityRows(dayKeys, activityByDay) {
   });
 }
 
+function renderDashboardEmptyNights(dayKeys, emptyListingsByDay) {
+  const container = document.getElementById('dashboardEmptyNightsContent');
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = '';
+
+  const rows = dayKeys
+    .map((dayKey) => ({ dayKey, listings: emptyListingsByDay.get(dayKey) || [] }))
+    .filter((row) => row.listings.length);
+
+  const listingColumns = Array.from(
+    rows.reduce((set, row) => {
+      (row.listings || []).forEach((listingName) => {
+        const name = String(listingName || '').trim();
+        if (name) {
+          set.add(name);
+        }
+      });
+      return set;
+    }, new Set())
+  ).sort((a, b) => a.localeCompare(b));
+
+  if (!rows.length || !listingColumns.length) {
+    const empty = document.createElement('p');
+    empty.className = 'cleaning-empty';
+    empty.textContent = 'No empty nights in the selected outlook period.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'table-wrap';
+
+  const table = document.createElement('table');
+  table.className = 'calendar-table';
+
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['Date'].concat(listingColumns).forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  rows.forEach((row, index) => {
+    if (index > 0) {
+      const previousDayKey = rows[index - 1].dayKey;
+      const currentDayKey = row.dayKey;
+      const previousDate = utcDateFromKey(previousDayKey);
+      const currentDate = utcDateFromKey(currentDayKey);
+      const dayDelta = Math.round((currentDate.getTime() - previousDate.getTime()) / 86400000);
+      if (dayDelta > 1) {
+        const gapRow = document.createElement('tr');
+        gapRow.className = 'empty-nights-gap-row';
+
+        const gapCell = document.createElement('td');
+        gapCell.colSpan = listingColumns.length + 1;
+        gapRow.appendChild(gapCell);
+        tbody.appendChild(gapRow);
+      }
+    }
+
+    const tr = document.createElement('tr');
+
+    const dateCell = document.createElement('td');
+    dateCell.textContent = formatActivityDayHeader(row.dayKey);
+    tr.appendChild(dateCell);
+
+    const rowListingSet = new Set((row.listings || []).map((name) => String(name || '').trim()).filter(Boolean));
+    listingColumns.forEach((listingName) => {
+      const listingCell = document.createElement('td');
+      listingCell.textContent = rowListingSet.has(listingName) ? listingName : '';
+      tr.appendChild(listingCell);
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  container.appendChild(tableWrap);
+}
+
 async function refreshDashboardActivity() {
   const container = document.getElementById('dashboardActivityRows');
-  if (!container) {
+  const emptyNightsContainer = document.getElementById('dashboardEmptyNightsContent');
+  if (!container || !emptyNightsContainer) {
     return;
   }
 
@@ -2034,18 +2182,25 @@ async function refreshDashboardActivity() {
   const now = new Date();
   const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
   const dayKeys = [];
-  for (let i = 0; i < 7; i += 1) {
+  for (let i = 0; i < getDashboardActivityOutlookDays(); i += 1) {
     dayKeys.push(keyFromUtcDate(addUtcDays(todayUtc, i)));
+  }
+  const emptyNightKeys = [];
+  for (let i = 0; i < getDashboardHighlightEmptyNightsDays(); i += 1) {
+    emptyNightKeys.push(keyFromUtcDate(addUtcDays(todayUtc, i)));
   }
 
   const listings = Array.isArray(currentListings) ? currentListings.filter((listing) => Number(listing.id) > 0) : [];
   if (!listings.length) {
     setDashboardActivityStatus('');
+    setDashboardEmptyNightsStatus('');
     renderDashboardActivityRows(dayKeys, new Map(dayKeys.map((key) => [key, []])));
+    renderDashboardEmptyNights(emptyNightKeys, new Map(emptyNightKeys.map((key) => [key, []])));
     return;
   }
 
   setDashboardActivityStatus('Loading activity...');
+  setDashboardEmptyNightsStatus('Loading empty nights...');
 
   const results = await Promise.all(listings.map(async (listing) => {
     try {
@@ -2116,6 +2271,8 @@ async function refreshDashboardActivity() {
 
   const dayKeySet = new Set(dayKeys);
   const activityByDay = new Map(dayKeys.map((key) => [key, []]));
+  const emptyNightKeySet = new Set(emptyNightKeys);
+  const occupiedListingsByNight = new Map(emptyNightKeys.map((key) => [key, new Set()]));
   (events || []).forEach((event) => {
     if (event && event.isReservation === false) {
       return;
@@ -2128,6 +2285,7 @@ async function refreshDashboardActivity() {
     const checkinKey = toDateKey(event && event.start);
     const checkoutKey = toDateKey(event && event.end);
     const guestName = getActivityGuestName(event);
+    const feedSource = getActivityFeedSource(event, listingName);
     const dateBasis = listingMeta.date_basis === 'checkin' ? 'checkin' : 'checkout';
     const reservationKeyValue = reservationChangeKey(listingId, checkinKey, checkoutKey);
     const changeoverName = cleanerByReservationKey.get(reservationKeyValue) || '';
@@ -2138,7 +2296,8 @@ async function refreshDashboardActivity() {
         propertyName,
         listingName,
         changeoverName: dateBasis === 'checkin' ? changeoverName : '',
-        guestName
+        guestName,
+        feedSource
       });
     }
 
@@ -2150,6 +2309,17 @@ async function refreshDashboardActivity() {
         changeoverName: dateBasis === 'checkout' ? changeoverName : '',
         guestName
       });
+    }
+
+    if (checkinKey && checkoutKey && Number.isInteger(listingId) && listingId > 0) {
+      const startDate = utcDateFromKey(checkinKey);
+      const endDate = utcDateFromKey(checkoutKey);
+      for (let cursor = new Date(startDate.getTime()); cursor < endDate; cursor = addUtcDays(cursor, 1)) {
+        const nightKey = keyFromUtcDate(cursor);
+        if (emptyNightKeySet.has(nightKey) && occupiedListingsByNight.has(nightKey)) {
+          occupiedListingsByNight.get(nightKey).add(listingId);
+        }
+      }
     }
   });
 
@@ -2167,11 +2337,24 @@ async function refreshDashboardActivity() {
     });
   });
 
+  const emptyListingsByDay = new Map();
+  emptyNightKeys.forEach((dayKey) => {
+    const occupiedSet = occupiedListingsByNight.get(dayKey) || new Set();
+    const emptyListings = listings
+      .filter((listing) => !occupiedSet.has(Number(listing.id)))
+      .map((listing) => String(listing.name || ('Listing #' + listing.id)).trim())
+      .sort((a, b) => a.localeCompare(b));
+    emptyListingsByDay.set(dayKey, emptyListings);
+  });
+
   renderDashboardActivityRows(dayKeys, activityByDay);
+  renderDashboardEmptyNights(emptyNightKeys, emptyListingsByDay);
   if (issues.length) {
     setDashboardActivityStatus('Loaded with some feed issues.');
+    setDashboardEmptyNightsStatus('Loaded with some feed issues.');
   } else {
     setDashboardActivityStatus('');
+    setDashboardEmptyNightsStatus('');
   }
 }
 
@@ -3261,6 +3444,7 @@ function opsCalendarBuildReservationCleanerBadgeMap(changes) {
     const key = reservationChangeKey(listingId, checkinKey, checkoutKey);
     if (!map.has(key)) {
       map.set(key, {
+        listingId,
         initials,
         color: opsCalendarGetCleanerColor(change),
         name: opsCalendarGetCleanerDisplayName(change),
@@ -3286,6 +3470,109 @@ function opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleaner
 
   const key = reservationChangeKey(listingId, checkinKey, checkoutKey);
   return reservationCleanerBadgeMap.get(key) || null;
+}
+
+function opsCalendarBuildDefaultCleanerBadgeForEvent(event, dayKey) {
+  if (!event || event.isReservation === false || !dayKey) {
+    return null;
+  }
+
+  const listingId = Number(event && (event.listingId || event.listing_id) || 0);
+  if (!Number.isInteger(listingId) || listingId <= 0) {
+    return null;
+  }
+
+  const checkinKey = toDateKey(event && event.start);
+  const checkoutKey = toDateKey(event && event.end);
+  if (!checkinKey || !checkoutKey) {
+    return null;
+  }
+
+  const listingMeta = getListingMetaById(listingId);
+  if (!listingMeta) {
+    return null;
+  }
+
+  const basis = listingMeta.date_basis === 'checkin' ? 'checkin' : 'checkout';
+  const basisDay = basis === 'checkin' ? checkinKey : checkoutKey;
+  if (basisDay !== dayKey) {
+    return null;
+  }
+
+  const defaultCleaner = getDefaultCleanerForListing(listingMeta.usual_cleaner_id);
+  const defaultCleanerName = defaultCleaner ? String(defaultCleaner.name || '').trim() : '';
+  if (!defaultCleanerName || defaultCleanerName.toLowerCase() === 'unallocated') {
+    return null;
+  }
+
+  const badgeSource = {
+    default_cleaner_id: defaultCleaner.id,
+    default_cleaner_name: defaultCleanerName
+  };
+  const initials = opsCalendarGetCleanerInitials(badgeSource);
+  if (!initials) {
+    return null;
+  }
+
+  return {
+    initials,
+    color: opsCalendarGetCleanerColor(badgeSource),
+    name: defaultCleanerName,
+    changeoverDate: basisDay
+  };
+}
+
+function opsCalendarGetReservationCleanerBadgeForDay(events, dayKey, reservationCleanerBadgeMap) {
+  if (!Array.isArray(events) || !events.length || !dayKey || !reservationCleanerBadgeMap || !reservationCleanerBadgeMap.size) {
+    if (!Array.isArray(events) || !events.length || !dayKey) {
+      return null;
+    }
+
+    for (let i = 0; i < events.length; i += 1) {
+      const fallbackBadge = opsCalendarBuildDefaultCleanerBadgeForEvent(events[i], dayKey);
+      if (fallbackBadge) {
+        return fallbackBadge;
+      }
+    }
+
+    return null;
+  }
+
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i];
+    if (!event || event.isReservation === false) {
+      continue;
+    }
+
+    const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(event, reservationCleanerBadgeMap);
+    if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === dayKey) {
+      return cleanerBadge;
+    }
+
+    const fallbackBadge = opsCalendarBuildDefaultCleanerBadgeForEvent(event, dayKey);
+    if (fallbackBadge) {
+      return fallbackBadge;
+    }
+  }
+
+  // If reservation keys drift due source date formatting/timezone differences,
+  // fall back to listing + changeover day so allocated initials still render.
+  const firstReservationEvent = events.find((event) => event && event.isReservation !== false) || null;
+  const listingId = Number(firstReservationEvent && (firstReservationEvent.listingId || firstReservationEvent.listing_id) || 0);
+  if (Number.isInteger(listingId) && listingId > 0) {
+    for (const badge of reservationCleanerBadgeMap.values()) {
+      if (
+        badge
+        && Number(badge.listingId) === listingId
+        && badge.changeoverDate === dayKey
+        && badge.initials
+      ) {
+        return badge;
+      }
+    }
+  }
+
+  return null;
 }
 
 function opsCalendarRenderCleanerLegend(changes) {
@@ -3508,9 +3795,8 @@ function opsCalendarRenderReservationCalendar(events, changes) {
         }
 
         if (!bar.classList.contains('day-bar-empty') && hasReservationEligible(activeBarEvents)) {
-          const reservationEvent = (activeBarEvents || []).find((event) => event && event.isReservation !== false) || null;
-          const cleanerBadge = opsCalendarGetReservationCleanerBadgeForEvent(reservationEvent, reservationCleanerBadgeMap);
-          if (cleanerBadge && cleanerBadge.initials && cleanerBadge.changeoverDate === key) {
+          const cleanerBadge = opsCalendarGetReservationCleanerBadgeForDay(activeBarEvents, key, reservationCleanerBadgeMap);
+          if (cleanerBadge && cleanerBadge.initials) {
             const initialsEl = document.createElement('span');
             initialsEl.className = 'day-bar-initials';
             initialsEl.textContent = cleanerBadge.initials;
@@ -4090,6 +4376,10 @@ async function sendScheduleEmailToRecipient(toEmail) {
     }
     const meData = await meRes.json();
     currentMeProfile = meData;
+    applyDashboardSettings({
+      activityOutlookDays: meData.dashboardActivityOutlookDays,
+      highlightEmptyNightsDays: meData.dashboardHighlightEmptyNightsDays
+    });
     setConsolidatedIcsUrl(meData.consolidated_ics_token || '');
     currentUserEmail = String(meData.email || '').toLowerCase();
     loadDashboardState();
@@ -4529,6 +4819,13 @@ if (_dashboardContextToggle) _dashboardContextToggle.addEventListener('click', a
 
 function setBankDetailsMessage(text, isError) {
   const el = document.getElementById('bankDetailsMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setDashboardSettingsMessage(text, isError) {
+  const el = document.getElementById('dashboardSettingsMessage');
   if (!el) return;
   el.textContent = text || '';
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
@@ -5276,6 +5573,42 @@ async function fetchBankDetails() {
   }
 }
 
+async function saveDashboardSettings() {
+  const activityOutlookDays = Number(String((document.getElementById('dashboardActivityOutlookDays') || {}).value || '').trim());
+  const highlightEmptyNightsDays = Number(String((document.getElementById('dashboardHighlightEmptyNightsDays') || {}).value || '').trim());
+
+  if (!Number.isInteger(activityOutlookDays) || activityOutlookDays < 1) {
+    throw new Error('Activity Outlook Period must be 1 day or more.');
+  }
+  if (!Number.isInteger(highlightEmptyNightsDays) || highlightEmptyNightsDays < 1) {
+    throw new Error('Highlight Empty Nights must be 1 day or more.');
+  }
+
+  const res = await fetch('/api/account/dashboard-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      activityOutlookDays,
+      highlightEmptyNightsDays
+    })
+  });
+
+  if (res.status === 401) {
+    window.location.href = '/';
+    throw new Error('Session expired.');
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to save dashboard settings.');
+  }
+
+  applyDashboardSettings({
+    activityOutlookDays: data.activityOutlookDays,
+    highlightEmptyNightsDays: data.highlightEmptyNightsDays
+  });
+}
+
 const _bankDetailsForm = document.getElementById('bankDetailsForm');
 if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -5325,6 +5658,24 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   } catch (err) {
     console.error('[BankDetails] Error saving bank details:', err);
     setBankDetailsMessage(err.message || 'Failed to save bank details.', true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+const _dashboardSettingsForm = document.getElementById('dashboardSettingsForm');
+if (_dashboardSettingsForm) _dashboardSettingsForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  setDashboardSettingsMessage('', false);
+  const btn = document.getElementById('saveDashboardSettingsBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    await saveDashboardSettings();
+    setDashboardSettingsMessage('Dashboard settings saved.', false);
+    await refreshDashboardActivity();
+  } catch (err) {
+    setDashboardSettingsMessage(err.message || 'Failed to save dashboard settings.', true);
   } finally {
     if (btn) btn.disabled = false;
   }

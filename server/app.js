@@ -46,6 +46,8 @@ const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT
 const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
   || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
   || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+const ENABLE_LEGACY_FEED_CRON = ['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_LEGACY_FEED_CRON || '').trim().toLowerCase());
+const CALENDAR_CRON_DB_LOCK_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CALENDAR_CRON_DB_LOCK_ENABLED || 'true').trim().toLowerCase());
 const DATA_RESET_FLAG_KEY = 'minimal-profile-reset-v1';
 const IS_ALPHA = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'development';
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim();
@@ -154,6 +156,46 @@ const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
+
+const CALENDAR_EVENTS_CRON_LOCK_KEY = 820001;
+const LEGACY_FEEDS_CRON_LOCK_KEY = 820002;
+let isLegacyFeedRefreshInFlight = false;
+let isCalendarChannelRefreshInFlight = false;
+
+async function runWithCronAdvisoryLock(lockKey, label, handler) {
+  if (!CALENDAR_CRON_DB_LOCK_ENABLED) {
+    await handler();
+    return;
+  }
+
+  let client = null;
+  try {
+    client = await pool.connect();
+    const lockResult = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [lockKey]);
+    const hasLock = Boolean(lockResult.rows[0] && lockResult.rows[0].locked);
+
+    if (!hasLock) {
+      console.log('[Cron:' + label + '] Skipped because another instance holds the advisory lock.');
+      return;
+    }
+
+    try {
+      await handler();
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [lockKey]).catch((err) => {
+        console.error('[Cron:' + label + '] Failed to release advisory lock:', err && err.message);
+      });
+    }
+  } catch (err) {
+    // If advisory lock checks fail, continue so calendar sync is still attempted.
+    console.error('[Cron:' + label + '] Advisory lock check failed:', err && err.message);
+    await handler();
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+}
 
 async function runOneTimeSiteDataResetIfNeeded() {
   
@@ -441,6 +483,16 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS is_validated BOOLEAN NOT NULL DEFAULT TRUE
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS dashboard_activity_outlook_days INTEGER NOT NULL DEFAULT 7
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS dashboard_highlight_empty_nights_days INTEGER NOT NULL DEFAULT 7
   `);
 
   await pool.query(`
@@ -3347,7 +3399,7 @@ function buildPasswordResetToken(user, issuedAtMs) {
   const email = String(user && user.email || '').trim().toLowerCase();
   const passwordHash = String(user && user.password_hash || '');
   const issued = Number(issuedAtMs || Date.now());
-  if (!Number.isInteger(userId) || userId <= 0 || !email || !passwordHash || !Number.isFinite(issued) || issued <= 0) {
+  if (!Number.isInteger(userId) || userId <= 0 || !email || !Number.isFinite(issued) || issued <= 0) {
     return null;
   }
   const signature = buildPasswordResetSignature(userId, email, passwordHash, issued);
@@ -3397,7 +3449,7 @@ async function validatePasswordResetToken(token) {
   }
 
   const user = await getUserById(parsed.userId);
-  if (!user || !user.email || !user.password_hash) {
+  if (!user || !user.email) {
     return { error: 'Password reset link is invalid.' };
   }
 
@@ -4016,8 +4068,11 @@ async function getUserById(userId) {
     `
         SELECT id, username, email, password_hash,
           first_name, family_name, country_of_residence, telephone, is_validated,
+             postal_address,
              stripe_account_id, stripe_onboarding_complete,
              stripe_charges_enabled, stripe_payouts_enabled,
+             dashboard_activity_outlook_days,
+             dashboard_highlight_empty_nights_days,
              created_at
       FROM users
       WHERE id = $1
@@ -6378,16 +6433,6 @@ function annotateReservationEventConflicts(events) {
     }
   }
 
-  for (let i = 0; i < list.length; i += 1) {
-    if (!isConflictCandidateReservation(list[i])) continue;
-    for (let j = 0; j < list.length; j += 1) {
-      if (!isDynamicLocalPolicyBlock(list[j])) continue;
-      if (doConflictRangesOverlap(ranges[i], ranges[j])) {
-        conflictIndexes.add(i);
-      }
-    }
-  }
-
   return list.map((event, index) => {
     if (!event || typeof event !== 'object') {
       return event;
@@ -6474,7 +6519,6 @@ async function writeDetectedReservationConflictsToEventLog(listing, events, expl
   }
 
   const conflictPairs = buildReservationConflictPairs(events);
-  const dynamicBlockPairs = buildReservationDynamicBlockConflictPairs(events);
   const emailConflictLines = [];
   for (const pair of conflictPairs) {
     const overlapStart = pair.overlapStart;
@@ -6515,47 +6559,6 @@ async function writeDetectedReservationConflictsToEventLog(listing, events, expl
     const rightChannel = String(pair.right && pair.right.source || 'Unknown').trim();
     emailConflictLines.push(
       `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${leftChannel} vs ${rightChannel}, Summary: ${leftTitle} vs ${rightTitle}`
-    );
-  }
-
-  for (const pair of dynamicBlockPairs) {
-    const overlapStart = pair.overlapStart;
-    const overlapEnd = pair.overlapEnd;
-    const reservationTitle = String(pair.reservation && pair.reservation.title || pair.reservation && pair.reservation.source || 'Reservation').trim();
-    const blockReason = String(pair.block && (pair.block.description || pair.block.title) || 'Dynamic policy block').trim();
-
-    const duplicateCheck = await pool.query(
-      `SELECT id
-       FROM listing_event_log
-       WHERE client_account_id = $1
-         AND listing_id = $2
-         AND entry_type = 'conflict'
-         AND channel_label = 'Conflict Detector'
-         AND new_start_date = $3::date
-         AND new_end_date = $4::date
-         AND created_at >= (NOW() - INTERVAL '6 hours')
-       LIMIT 1`,
-      [clientAccountId, listingId, overlapStart, overlapEnd]
-    );
-    if (duplicateCheck.rows[0]) {
-      continue;
-    }
-
-    await writeEventLog({
-      clientAccountId,
-      listingId,
-      entryType: 'conflict',
-      channelLabel: 'Conflict Detector',
-      description: `CONFLICT on listing ${listingId}: "${reservationTitle}" overlaps dynamic block (${blockReason}) (${overlapStart} to ${overlapEnd}).`,
-      newStartDate: overlapStart,
-      newEndDate: overlapEnd,
-      affectedEventId: getConflictEventIdentifier(pair.reservation),
-      conflictingEventId: null
-    });
-
-    const reservationChannel = String(pair.reservation && pair.reservation.source || 'Unknown').trim();
-    emailConflictLines.push(
-      `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${reservationChannel} vs Dynamic Block, Summary: ${reservationTitle} vs ${blockReason}`
     );
   }
 
@@ -8967,6 +8970,67 @@ async function getFeedsForListing(listingId, userId) {
   return result.rows;
 }
 
+async function collapseDuplicateListingChannels(listingId, label) {
+  const rowsResult = await pool.query(
+    'SELECT id FROM listing_channels WHERE listing_id = $1 AND label = $2 ORDER BY id ASC',
+    [listingId, label]
+  );
+
+  const ids = rowsResult.rows
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  if (ids.length <= 1) {
+    return;
+  }
+
+  await pool.query(
+    'DELETE FROM listing_channels WHERE id = ANY($1::bigint[])',
+    [ids.slice(1)]
+  );
+}
+
+async function upsertListingChannelFromFeed(listingId, label, url) {
+  const channelLabel = String(label || '').trim();
+  const importUrl = String(url || '').trim();
+  if (!channelLabel || !importUrl) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO listing_channels (listing_id, label, import_url, created_at, updated_at)
+      VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT DO NOTHING
+    `,
+    [listingId, channelLabel, importUrl]
+  );
+
+  await pool.query(
+    `
+      UPDATE listing_channels
+      SET import_url = $1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE listing_id = $2
+        AND label = $3
+    `,
+    [importUrl, listingId, channelLabel]
+  );
+
+  await collapseDuplicateListingChannels(listingId, channelLabel);
+}
+
+async function removeListingChannelsForFeed(listingId, label) {
+  const channelLabel = String(label || '').trim();
+  if (!channelLabel) {
+    return;
+  }
+
+  await pool.query(
+    'DELETE FROM listing_channels WHERE listing_id = $1 AND label = $2',
+    [listingId, channelLabel]
+  );
+}
+
 async function createFeedForListing(listingId, userId, label, url) {
   
 
@@ -8982,6 +9046,8 @@ async function createFeedForListing(listingId, userId, label, url) {
     'INSERT INTO calendar_feeds (listing_id, label, url) VALUES ($1, $2, $3) RETURNING id, listing_id, label, url, created_at',
     [listingId, label, url]
   );
+
+  await upsertListingChannelFromFeed(listingId, label, url);
   return { feed: result.rows[0] };
 }
 
@@ -8996,6 +9062,12 @@ async function updateFeedForListing(feedId, listingId, userId, label, url) {
     return { error: 'Listing not found.' };
   }
 
+  const existingFeedResult = await pool.query(
+    'SELECT id, label, url FROM calendar_feeds WHERE id = $1 AND listing_id = $2 LIMIT 1',
+    [feedId, listingId]
+  );
+  const existingFeed = existingFeedResult.rows[0] || null;
+
   const result = await pool.query(
     'UPDATE calendar_feeds SET label = $1, url = $2 WHERE id = $3 AND listing_id = $4 RETURNING id, listing_id, label, url, created_at',
     [label, url, feedId, listingId]
@@ -9004,6 +9076,13 @@ async function updateFeedForListing(feedId, listingId, userId, label, url) {
   if (!result.rows[0]) {
     return { error: 'Feed not found.' };
   }
+
+  const previousLabel = String(existingFeed && existingFeed.label || '').trim();
+  const nextLabel = String(label || '').trim();
+  if (previousLabel && previousLabel !== nextLabel) {
+    await removeListingChannelsForFeed(listingId, previousLabel);
+  }
+  await upsertListingChannelFromFeed(listingId, label, url);
 
   return { feed: result.rows[0] };
 }
@@ -9017,6 +9096,12 @@ async function deleteFeedForListing(feedId, listingId, userId) {
     return { error: 'Listing not found.' };
   }
 
+  const existingFeedResult = await pool.query(
+    'SELECT id, label FROM calendar_feeds WHERE id = $1 AND listing_id = $2 LIMIT 1',
+    [feedId, listingId]
+  );
+  const existingFeed = existingFeedResult.rows[0] || null;
+
   const result = await pool.query(
     'DELETE FROM calendar_feeds WHERE id = $1 AND listing_id = $2 RETURNING id',
     [feedId, listingId]
@@ -9025,6 +9110,8 @@ async function deleteFeedForListing(feedId, listingId, userId) {
   if (!result.rows[0]) {
     return { error: 'Feed not found.' };
   }
+
+  await removeListingChannelsForFeed(listingId, existingFeed && existingFeed.label);
 
   return { deletedFeedId: Number(result.rows[0].id) };
 }
@@ -9305,10 +9392,18 @@ async function getCachedEventsForListing(listingId) {
 
 async function refreshEventsForListing(listingId) {
   const feeds = await getFeedsForListingInternal(listingId);
+  const seenImportUrls = new Set();
   await Promise.all(
     feeds.map(async (feed) => {
       const importingChannelLabel = String(feed.label || '').trim() || 'Calendar Feed';
-      const importUrl = String(feed.url || '').trim();
+      const importUrl = normaliseCalendarUrl(feed.url) || String(feed.url || '').trim();
+      if (!importUrl) {
+        return;
+      }
+      if (seenImportUrls.has(importUrl)) {
+        return;
+      }
+      seenImportUrls.add(importUrl);
       const exportingChannelLabel = await findExportingChannelLabel(importUrl);
 
       let fetched;
@@ -10185,12 +10280,58 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
 
 async function refreshListingCalendar(listing, clientAccountId) {
   const channels = await getChannelsForListing(Number(listing.id));
+  const seenImportUrls = new Set();
   for (const channel of channels) {
+    const normalisedImportUrl = normaliseCalendarUrl(channel.import_url || channel.url) || String(channel.import_url || channel.url || '').trim();
+    if (!normalisedImportUrl) {
+      continue;
+    }
+    if (seenImportUrls.has(normalisedImportUrl)) {
+      console.log('[CalendarSync] Skipping duplicate import URL for listing', listing.id, 'channel', channel.id);
+      continue;
+    }
+    seenImportUrls.add(normalisedImportUrl);
+
     try {
-      await syncChannelEvents(listing, channel, clientAccountId);
+      await syncChannelEvents(listing, { ...channel, import_url: normalisedImportUrl }, clientAccountId);
     } catch (err) {
       console.error(`[CalendarSync] Channel ${channel.id} listing ${listing.id}:`, err && err.message);
     }
+  }
+}
+
+async function runLegacyFeedRefreshTick() {
+  if (!ENABLE_LEGACY_FEED_CRON) {
+    return;
+  }
+  if (isLegacyFeedRefreshInFlight) {
+    console.log('[Cron:LegacyFeedSync] Skipped because previous run is still in progress.');
+    return;
+  }
+
+  isLegacyFeedRefreshInFlight = true;
+  try {
+    await runWithCronAdvisoryLock(LEGACY_FEEDS_CRON_LOCK_KEY, 'LegacyFeedSync', async () => {
+      await refreshAllListingsEvents();
+    });
+  } finally {
+    isLegacyFeedRefreshInFlight = false;
+  }
+}
+
+async function runCalendarChannelRefreshTick() {
+  if (isCalendarChannelRefreshInFlight) {
+    console.log('[Cron:CalendarChannelSync] Skipped because previous run is still in progress.');
+    return;
+  }
+
+  isCalendarChannelRefreshInFlight = true;
+  try {
+    await runWithCronAdvisoryLock(CALENDAR_EVENTS_CRON_LOCK_KEY, 'CalendarChannelSync', async () => {
+      await refreshAllListingsCalendars();
+    });
+  } finally {
+    isCalendarChannelRefreshInFlight = false;
   }
 }
 
@@ -11780,6 +11921,23 @@ app.post('/api/access/team', requireScopedRole('Client'), async (req, res) => {
       if (!passwordEmailSent) {
         passwordEmailError = String(passwordEmailResult.error || 'Failed to send password setup email.');
       }
+
+      await writeUserEventLog({
+        actorUserId: Number(req.session.userId || 0),
+        clientAccountId: Number(req.accessContext.activeClientAccountId || 0),
+        eventType: passwordEmailSent ? 'team_member_password_setup_email_sent' : 'team_member_password_setup_email_failed',
+        description: passwordEmailSent
+          ? ('Team member password setup email sent - ' + String(normalizedEmail || ''))
+          : ('Team member password setup email failed - ' + String(normalizedEmail || '')),
+        detail: {
+          dtg: new Date().toISOString(),
+          invitedUserId: Number(siteUser && siteUser.id || 0),
+          invitedUserEmail: String(normalizedEmail || ''),
+          createdNewUser: true,
+          passwordSetupEmailSent: passwordEmailSent,
+          passwordSetupEmailError: passwordEmailError
+        }
+      });
     }
 
     const result = await setClientTeamRolesForUser(
@@ -11965,6 +12123,8 @@ app.get('/api/me', requireAuth, async (req, res) => {
       email: user.email || req.session.email,
       telephone: user.telephone || '',
       postalAddress: user.postal_address || '',
+      dashboardActivityOutlookDays: Number(user.dashboard_activity_outlook_days || 7) || 7,
+      dashboardHighlightEmptyNightsDays: Number(user.dashboard_highlight_empty_nights_days || 7) || 7,
       isValidated: user.is_validated !== false,
       consolidated_ics_token: buildConsolidatedIcsToken(req.session.userId),
       stripeConnect: formatStripeConnectStatus(user),
@@ -12445,6 +12605,44 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   } catch (err) {
     console.error('[BankDetails] Error loading bank details:', err);
     return res.status(500).json({ error: 'Failed to load bank details.' });
+  }
+});
+
+// PUT /api/account/dashboard-settings — save dashboard settings for current host user
+app.put('/api/account/dashboard-settings', requireScopedRole('Client'), async (req, res) => {
+  const activityOutlookDays = Number(req.body && req.body.activityOutlookDays);
+  const highlightEmptyNightsDays = Number(req.body && req.body.highlightEmptyNightsDays);
+
+  if (!Number.isInteger(activityOutlookDays) || activityOutlookDays < 1) {
+    return res.status(400).json({ error: 'Activity Outlook Period must be a whole number of 1 or more.' });
+  }
+  if (!Number.isInteger(highlightEmptyNightsDays) || highlightEmptyNightsDays < 1) {
+    return res.status(400).json({ error: 'Highlight Empty Nights must be a whole number of 1 or more.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET dashboard_activity_outlook_days = $1,
+            dashboard_highlight_empty_nights_days = $2
+        WHERE id = $3
+        RETURNING dashboard_activity_outlook_days, dashboard_highlight_empty_nights_days
+      `,
+      [activityOutlookDays, highlightEmptyNightsDays, Number(req.session.userId)]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    return res.json({
+      activityOutlookDays: Number(result.rows[0].dashboard_activity_outlook_days || 7) || 7,
+      highlightEmptyNightsDays: Number(result.rows[0].dashboard_highlight_empty_nights_days || 7) || 7
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to save dashboard settings.' });
   }
 });
 
@@ -13045,12 +13243,8 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
     return res.status(400).json({ error: 'CSV schedule content is required for CSV export.' });
   }
 
-  const transportResult = getScheduleEmailTransporter();
-  if (transportResult.error) {
-    return res.status(503).json({ error: transportResult.error });
-  }
-
   try {
+    const transportResult = getScheduleEmailTransporter();
     const attachments = [];
     if (format === 'csv') {
       attachments.push({
@@ -13060,33 +13254,59 @@ app.post('/api/schedules/email', requireScopedRole('Staff'), async (req, res) =>
       });
     }
 
-    await transportResult.transporter.sendMail({
-      from: transportResult.from,
+    if (!transportResult.error) {
+      await transportResult.transporter.sendMail({
+        from: transportResult.from,
+        to,
+        subject,
+        text: textContent,
+        attachments
+      });
+
+      await writeUserEventLog({
+        actorUserId: Number(req.session && req.session.userId || 0),
+        clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
+        eventType: 'email_sent',
+        description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(to || 'recipient'),
+        detail: {
+          dtg: new Date().toISOString(),
+          fromAddress: String(transportResult.from || ''),
+          toAddress: String(to || ''),
+          subject,
+          messageContent: textContent,
+          provider: 'smtp',
+          messageId: '',
+          hasAttachments: attachments.length > 0,
+          attachmentCount: attachments.length
+        }
+      });
+
+      return res.json({ message: 'Schedule email sent.' });
+    }
+
+    const fallbackTextBody = format === 'csv'
+      ? [
+        textContent,
+        '',
+        'CSV export content:',
+        csvContent
+      ].join('\n')
+      : textContent;
+
+    const fallbackEmailResult = await sendAppEmail({
       to,
       subject,
-      text: textContent,
-      attachments
+      textBody: fallbackTextBody
     });
+    if (!fallbackEmailResult.ok) {
+      return res.status(503).json({ error: fallbackEmailResult.error || transportResult.error || 'Failed to send schedule email.' });
+    }
 
-    await writeUserEventLog({
-      actorUserId: Number(req.session && req.session.userId || 0),
-      clientAccountId: Number(req.accessContext && req.accessContext.activeClientAccountId || 0),
-      eventType: 'email_sent',
-      description: 'Email: ' + String(subject || 'No subject') + ' | To: ' + String(to || 'recipient'),
-      detail: {
-        dtg: new Date().toISOString(),
-        fromAddress: String(transportResult.from || ''),
-        toAddress: String(to || ''),
-        subject,
-        messageContent: textContent,
-        provider: 'smtp',
-        messageId: '',
-        hasAttachments: attachments.length > 0,
-        attachmentCount: attachments.length
-      }
+    return res.json({
+      message: format === 'csv'
+        ? 'Schedule email sent. CSV content was included in the email body.'
+        : 'Schedule email sent.'
     });
-
-    return res.json({ message: 'Schedule email sent.' });
   } catch (err) {
     console.error('Failed to send schedule email:', err);
     return res.status(500).json({ error: 'Failed to send schedule email.' });
@@ -16198,14 +16418,18 @@ async function startServer() {
       }
     });
 
-    // Run initial refresh 15 s after startup, then every 10 minutes
+    // Run initial refresh 15 s after startup, then every 10 minutes.
+    // Legacy feed cron is opt-in via ENABLE_LEGACY_FEED_CRON=true.
     setTimeout(() => {
-      // Legacy cached_events refresh (old ICS blob store)
-      refreshAllListingsEvents();
-      setInterval(refreshAllListingsEvents, 10 * 60 * 1000);
       // New per-event calendar store sync with conflict detection
-      refreshAllListingsCalendars();
-      setInterval(refreshAllListingsCalendars, 10 * 60 * 1000);
+      runCalendarChannelRefreshTick();
+      setInterval(runCalendarChannelRefreshTick, 10 * 60 * 1000);
+
+      if (ENABLE_LEGACY_FEED_CRON) {
+        // Legacy cached_events refresh (old ICS blob store)
+        runLegacyFeedRefreshTick();
+        setInterval(runLegacyFeedRefreshTick, 10 * 60 * 1000);
+      }
     }, 15000);
   } catch (err) {
     console.error('Failed to start server:', err);

@@ -391,7 +391,7 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  min-width: 5.2rem;
+  min-width: 2.3rem;
   padding: 0 0.5rem;
   border: 1px solid #d7deef;
   border-bottom: 2px solid #e0e4f0;
@@ -426,10 +426,7 @@ textarea:focus {
 }
 
 .context-toggle-label {
-  font-size: 0.78rem;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
+  display: none;
 }
 
 .tab-menu-btn {
@@ -799,6 +796,14 @@ textarea:focus {
 
 .calendar-table tr.conflict-row:hover td {
   background: #ffe3e3;
+}
+
+.calendar-table tr.empty-nights-gap-row td {
+  padding: 0;
+  height: 0;
+  border-bottom: 0;
+  border-top: 4px solid #133070;
+  background: transparent;
 }
 
 .event-log-info-btn {
@@ -2467,16 +2472,25 @@ textarea:focus {
 
 .day-bar-initials {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 0.8rem;
+  height: 0.56rem;
+  padding: 0 0.16rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: rgba(17, 24, 39, 0.82);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   font-size: 0.44rem;
   line-height: 1;
   font-weight: 700;
   letter-spacing: 0.01em;
   color: #ffffff;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
+  text-shadow: none;
   z-index: 2;
   pointer-events: none;
 }
