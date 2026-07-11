@@ -1223,12 +1223,12 @@ function renderDashboardContextToggle() {
   const canSwitchModes = hasDashboardContextSwitchAvailable();
   toggleBtn.classList.toggle('hidden', !canSwitchModes);
   toggleBtn.disabled = !canSwitchModes;
+  labelEl.textContent = '';
+  labelEl.classList.add('hidden');
   if (!canSwitchModes) {
     return;
   }
 
-  const modeLabel = currentDashboardContextMode === 'guest' ? 'Hosting' : 'Guest';
-  labelEl.textContent = modeLabel;
   iconEl.innerHTML = getContextToggleIconSvg(currentDashboardContextMode);
 
   if (currentDashboardContextMode === 'guest') {

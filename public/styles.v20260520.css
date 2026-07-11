@@ -391,7 +391,7 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  min-width: 5.2rem;
+  min-width: 2.3rem;
   padding: 0 0.5rem;
   border: 1px solid #d7deef;
   border-bottom: 2px solid #e0e4f0;
@@ -426,10 +426,7 @@ textarea:focus {
 }
 
 .context-toggle-label {
-  font-size: 0.78rem;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
+  display: none;
 }
 
 .tab-menu-btn {
