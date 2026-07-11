@@ -801,6 +801,14 @@ textarea:focus {
   background: #ffe3e3;
 }
 
+.calendar-table tr.empty-nights-gap-row td {
+  padding: 0;
+  height: 0;
+  border-bottom: 0;
+  border-top: 4px solid #133070;
+  background: transparent;
+}
+
 .event-log-info-btn {
   display: inline-flex;
   align-items: center;

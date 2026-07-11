@@ -2132,7 +2132,24 @@ function renderDashboardEmptyNights(dayKeys, emptyListingsByDay) {
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  rows.forEach((row) => {
+  rows.forEach((row, index) => {
+    if (index > 0) {
+      const previousDayKey = rows[index - 1].dayKey;
+      const currentDayKey = row.dayKey;
+      const previousDate = utcDateFromKey(previousDayKey);
+      const currentDate = utcDateFromKey(currentDayKey);
+      const dayDelta = Math.round((currentDate.getTime() - previousDate.getTime()) / 86400000);
+      if (dayDelta > 1) {
+        const gapRow = document.createElement('tr');
+        gapRow.className = 'empty-nights-gap-row';
+
+        const gapCell = document.createElement('td');
+        gapCell.colSpan = listingColumns.length + 1;
+        gapRow.appendChild(gapCell);
+        tbody.appendChild(gapRow);
+      }
+    }
+
     const tr = document.createElement('tr');
 
     const dateCell = document.createElement('td');
