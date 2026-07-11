@@ -6391,16 +6391,6 @@ function annotateReservationEventConflicts(events) {
     }
   }
 
-  for (let i = 0; i < list.length; i += 1) {
-    if (!isConflictCandidateReservation(list[i])) continue;
-    for (let j = 0; j < list.length; j += 1) {
-      if (!isDynamicLocalPolicyBlock(list[j])) continue;
-      if (doConflictRangesOverlap(ranges[i], ranges[j])) {
-        conflictIndexes.add(i);
-      }
-    }
-  }
-
   return list.map((event, index) => {
     if (!event || typeof event !== 'object') {
       return event;
@@ -6487,7 +6477,6 @@ async function writeDetectedReservationConflictsToEventLog(listing, events, expl
   }
 
   const conflictPairs = buildReservationConflictPairs(events);
-  const dynamicBlockPairs = buildReservationDynamicBlockConflictPairs(events);
   const emailConflictLines = [];
   for (const pair of conflictPairs) {
     const overlapStart = pair.overlapStart;
@@ -6528,47 +6517,6 @@ async function writeDetectedReservationConflictsToEventLog(listing, events, expl
     const rightChannel = String(pair.right && pair.right.source || 'Unknown').trim();
     emailConflictLines.push(
       `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${leftChannel} vs ${rightChannel}, Summary: ${leftTitle} vs ${rightTitle}`
-    );
-  }
-
-  for (const pair of dynamicBlockPairs) {
-    const overlapStart = pair.overlapStart;
-    const overlapEnd = pair.overlapEnd;
-    const reservationTitle = String(pair.reservation && pair.reservation.title || pair.reservation && pair.reservation.source || 'Reservation').trim();
-    const blockReason = String(pair.block && (pair.block.description || pair.block.title) || 'Dynamic policy block').trim();
-
-    const duplicateCheck = await pool.query(
-      `SELECT id
-       FROM listing_event_log
-       WHERE client_account_id = $1
-         AND listing_id = $2
-         AND entry_type = 'conflict'
-         AND channel_label = 'Conflict Detector'
-         AND new_start_date = $3::date
-         AND new_end_date = $4::date
-         AND created_at >= (NOW() - INTERVAL '6 hours')
-       LIMIT 1`,
-      [clientAccountId, listingId, overlapStart, overlapEnd]
-    );
-    if (duplicateCheck.rows[0]) {
-      continue;
-    }
-
-    await writeEventLog({
-      clientAccountId,
-      listingId,
-      entryType: 'conflict',
-      channelLabel: 'Conflict Detector',
-      description: `CONFLICT on listing ${listingId}: "${reservationTitle}" overlaps dynamic block (${blockReason}) (${overlapStart} to ${overlapEnd}).`,
-      newStartDate: overlapStart,
-      newEndDate: overlapEnd,
-      affectedEventId: getConflictEventIdentifier(pair.reservation),
-      conflictingEventId: null
-    });
-
-    const reservationChannel = String(pair.reservation && pair.reservation.source || 'Unknown').trim();
-    emailConflictLines.push(
-      `Start: ${overlapStart}, End: ${overlapEnd}, Listing: ${listingId}, Channel: ${reservationChannel} vs Dynamic Block, Summary: ${reservationTitle} vs ${blockReason}`
     );
   }
 
