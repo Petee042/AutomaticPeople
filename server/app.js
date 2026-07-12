@@ -9988,10 +9988,33 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
     );
 
     if (exactMatch) {
-      // If already in conflict, no further action (avoid duplicate alerts)
+      // Re-evaluate conflict state on refresh so stale flags can be cleared.
+      const exactConflictResult = await pool.query(
+        `SELECT lce.id
+         FROM listing_calendar_events lce
+         WHERE lce.listing_id = $1
+           AND lce.id <> $2
+           AND lce.event_type IN ('local', 'remote')
+           AND (lce.channel_id IS NULL OR lce.channel_id <> $3)
+           AND lce.start_date < $5::date AND lce.end_date > $4::date`,
+        [listingId, Number(exactMatch.id), channelId, importStart, importEnd]
+      );
+
+      const exactLocalConflictResult = await pool.query(
+        `SELECT id FROM reservation_activity
+         WHERE listing_id = $1 AND status = ANY($4::text[])
+           AND reservation_checkin_date < $3::date AND reservation_checkout_date > $2::date`,
+        [listingId, importStart, importEnd, Array.from(DIRECT_RESERVATION_ACTIVE_STATUSES)]
+      );
+
+      const hasSameChannelOverlap = overlapping.some((row) => Number(row.id) !== Number(exactMatch.id));
+      const exactIsConflict = exactConflictResult.rows.length > 0
+        || exactLocalConflictResult.rows.length > 0
+        || hasSameChannelOverlap;
+
       await pool.query(
-        'UPDATE listing_calendar_events SET last_synced_at = $1 WHERE id = $2',
-        [now, exactMatch.id]
+        'UPDATE listing_calendar_events SET last_synced_at = $1, is_in_conflict = $2 WHERE id = $3',
+        [now, exactIsConflict, exactMatch.id]
       );
 
       await logCalendarSyncImportEvent({
@@ -10001,7 +10024,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         exportingChannelLabel: exportingLabel,
         importUrl,
         status: 'success',
-        processingOutcome: 'exact_match_refreshed',
+        processingOutcome: exactIsConflict ? 'exact_match_refreshed_conflict' : 'exact_match_refreshed_no_conflict',
         importedEvent: {
           start: importStart,
           end: importEnd,
