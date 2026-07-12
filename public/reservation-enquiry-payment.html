@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -52,7 +52,7 @@
         <div class="reservation-enquiry-confirm-row">
           <label class="reservation-enquiry-confirm-label" for="reservationEnquiryConfirmTerms">
             <input id="reservationEnquiryConfirmTerms" type="checkbox" required />
-            <span>I confirm that I have read and agree to the <a id="reservationEnquiryPaymentTermsLink" href="/guest-terms-and-conditions.html" target="_blank" rel="noopener noreferrer">Terms and Conditions of Reservation</a>.</span>
+            <span>I confirm that I have read and agree to the <a id="reservationEnquiryPaymentTermsLink" href="/guest-terms-and-conditions.html">Terms and Conditions of Reservation</a>.</span>
           </label>
         </div>
       </section>
@@ -71,5 +71,6 @@
 
   <script src="https://js.stripe.com/v3/"></script>
   <script src="reservation-enquiry-payment.js"></script>
+<script src="/navigation-guard.js"></script>
 </body>
 </html>

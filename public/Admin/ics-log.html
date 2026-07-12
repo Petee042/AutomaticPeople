@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -6,7 +6,7 @@
   <title>ICS Transaction Log - AutomaticPeople</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    /* ── ICS Log page-specific styles ─────────────────────────────── */
+    /* â”€â”€ ICS Log page-specific styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .ics-log-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -66,7 +66,7 @@
     .ics-status-success { background: #d4edda; color: #155724; }
     .ics-status-error   { background: #f8d7da; color: #721c24; }
 
-    /* Payload cell — truncated preview */
+    /* Payload cell â€” truncated preview */
     .ics-info-cell {
       text-align: center;
       width: 2.2rem;
@@ -126,22 +126,22 @@
   <main class="dashboard">
     <div class="card-container wide admin-card">
       <h2>ICS Transaction Log</h2>
-      <p class="hint">Every ICS calendar import attempt is recorded here. Use <strong>(i)</strong> in the first column to open full payload details in a new tab.</p>
+      <p class="hint">Every ICS calendar import attempt is recorded here. Use <strong>(i)</strong> in the first column to view full payload details.</p>
       <p id="icsLogMessage" class="message" aria-live="polite"></p>
 
       <section class="listing-form-section">
         <div class="ics-log-toolbar">
-          <input id="icsLogSearch" type="search" placeholder="Search channel, URL, status…" aria-label="Search log entries" />
+          <input id="icsLogSearch" type="search" placeholder="Search channel, URL, statusâ€¦" aria-label="Search log entries" />
           <select id="icsLogStatusFilter" aria-label="Filter by status">
             <option value="">All statuses</option>
             <option value="success">Success</option>
             <option value="error">Error</option>
           </select>
-          <button id="icsLogRefreshBtn" class="btn secondary">↺ Refresh</button>
+          <button id="icsLogRefreshBtn" class="btn secondary">â†º Refresh</button>
           <button id="icsLogClearBtn" class="btn secondary" title="Delete all ICS log entries">Clear ICS Log</button>
         </div>
 
-        <p id="icsLogCount" class="hint">Loading…</p>
+        <p id="icsLogCount" class="hint">Loadingâ€¦</p>
 
         <div class="ics-log-table-wrap">
           <table class="ics-log-table" aria-label="ICS transaction log">
@@ -160,19 +160,21 @@
               </tr>
             </thead>
             <tbody id="icsLogTableBody">
-              <tr><td colspan="10">Loading…</td></tr>
+              <tr><td colspan="10">Loadingâ€¦</td></tr>
             </tbody>
           </table>
         </div>
 
         <div class="ics-pagination">
-          <button id="icsLogPrevBtn" class="btn secondary" disabled>← Prev</button>
+          <button id="icsLogPrevBtn" class="btn secondary" disabled>â† Prev</button>
           <span id="icsLogPageInfo" class="hint">Page 1</span>
-          <button id="icsLogNextBtn" class="btn secondary" disabled>Next →</button>
+          <button id="icsLogNextBtn" class="btn secondary" disabled>Next â†’</button>
         </div>
       </section>
     </div>
   </main>
   <script src="/Admin/ics-log.js"></script>
+<script src="/navigation-guard.js"></script>
 </body>
 </html>
+

@@ -155,7 +155,7 @@ function renderPage() {
     const payloadFull   = escapeHtml(rawPayload || '(no payload)');
 
     return `<tr>
-      <td class="ics-info-cell"><a href="#" class="ics-info-link" data-title="${encodedTitle}" data-payload="${payloadFull}" aria-label="Open full payload details in a new tab">(i)</a></td>
+      <td class="ics-info-cell"><a href="#" class="ics-info-link" data-title="${encodedTitle}" data-payload="${payloadFull}" aria-label="Open full payload details">(i)</a></td>
       <td>${dtg}</td>
       <td>${listingId}</td>
       <td title="${escapeHtml(entry.listing_name || '')}">${listingName}</td>
@@ -185,33 +185,51 @@ function decodeHtmlEntities(text) {
 }
 
 function openPayloadTab(title, payload) {
-  const tab = window.open('about:blank', '_blank');
-  if (!tab) {
-    setMessage('Popup blocked by browser. Allow popups to view payload details in a new tab.', true);
-    return;
+  let overlay = document.getElementById('icsPayloadOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'icsPayloadOverlay';
+    overlay.className = 'hidden';
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.zIndex = '12000';
+    overlay.style.background = 'rgba(2, 6, 23, 0.72)';
+    overlay.style.padding = '0.9rem';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.innerHTML = `
+      <div style="width:min(980px,100%);max-height:92vh;background:#0f172a;border:1px solid #334155;border-radius:8px;display:flex;flex-direction:column;color:#e2e8f0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0.8rem 0.9rem;border-bottom:1px solid #334155;gap:0.8rem;">
+          <h3 id="icsPayloadTitle" style="margin:0;font-size:0.96rem;color:#bfdbfe;"></h3>
+          <button id="icsPayloadClose" type="button" class="btn secondary">Close</button>
+        </div>
+        <pre id="icsPayloadPre" style="margin:0;padding:0.9rem;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:calc(92vh - 72px);font-family:Consolas,'Courier New',monospace;"></pre>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        overlay.classList.add('hidden');
+      }
+    });
+    const closeBtn = document.getElementById('icsPayloadClose');
+    closeBtn.addEventListener('click', () => {
+      overlay.classList.add('hidden');
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !overlay.classList.contains('hidden')) {
+        overlay.classList.add('hidden');
+      }
+    });
   }
 
-  const escapedTitle = escapeHtml(title || 'ICS Transaction Payload');
-  const escapedPayload = escapeHtml(payload || '(empty)');
-  tab.document.open();
-  tab.document.write(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapedTitle}</title>
-  <style>
-    body { margin: 0; padding: 1rem; font-family: Consolas, 'Courier New', monospace; background: #0f172a; color: #e2e8f0; }
-    h1 { margin: 0 0 0.8rem; font-size: 1rem; font-family: Segoe UI, Arial, sans-serif; color: #bfdbfe; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 1rem; max-height: calc(100vh - 4rem); overflow: auto; }
-  </style>
-</head>
-<body>
-  <h1>${escapedTitle}</h1>
-  <pre>${escapedPayload}</pre>
-</body>
-</html>`);
-  tab.document.close();
+  const titleEl = document.getElementById('icsPayloadTitle');
+  const payloadEl = document.getElementById('icsPayloadPre');
+  titleEl.textContent = title || 'ICS Transaction Payload';
+  payloadEl.textContent = payload || '(empty)';
+  overlay.classList.remove('hidden');
 }
 
 // ── Event Listeners ───────────────────────────────────────────────────────
