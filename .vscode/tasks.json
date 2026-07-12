@@ -23,7 +23,7 @@
     {
       "label": "Publish: Beta → Production (staging → main)",
       "type": "shell",
-      "command": "git checkout main && git merge staging && git push origin main && git checkout develop && echo Done: staging merged into main and pushed.",
+      "command": "git checkout main || (echo FAIL: could not checkout main.& exit /b 1) && git -c core.editor=true merge --no-ff --no-edit staging || (echo FAIL: merge staging into main failed.& git merge --abort >nul 2>nul & exit /b 1) && git push origin main || (echo FAIL: push to origin/main failed.& exit /b 1) && git checkout develop || (echo FAIL: merged and pushed, but could not checkout develop.& exit /b 1) && echo Done: staging merged into main and pushed.",
       "options": {
         "shell": {
           "executable": "cmd.exe",
