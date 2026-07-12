@@ -9938,49 +9938,6 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
   const importUrl = String(channel.import_url || channel.url || '').trim();
   if (!importUrl) return;
 
-  async function getDynamicBlockConflicts(importStart, importEnd) {
-    const storedEvents = await getStoredCalendarEventsForListing(listingId);
-    const eventsWithPolicyBlocks = appendAvailabilityPolicyBlockEvents(listing, storedEvents);
-    const seen = new Set();
-
-    return eventsWithPolicyBlocks
-      .filter((event) => {
-        if (!isBlockEvent(event)) {
-          return false;
-        }
-        const startKey = getDateKeyFromEventDateTime(event.start);
-        const endKey = getDateKeyFromEventDateTime(event.end);
-        if (!startKey || !endKey || endKey <= startKey) {
-          return false;
-        }
-
-        const source = String(event.source || '').trim().toLowerCase();
-        const origin = String(event.eventOrigin || '').trim().toLowerCase();
-        // Dynamic policy blocks are generated locally by availability rules.
-        if (source !== 'automaticpeople' && origin !== 'local') {
-          return false;
-        }
-
-        return startKey < importEnd && endKey > importStart;
-      })
-      .map((event) => {
-        const startKey = getDateKeyFromEventDateTime(event.start);
-        const endKey = getDateKeyFromEventDateTime(event.end);
-        const reason = String(event.description || event.title || 'Dynamic availability block').trim();
-        const key = startKey + '|' + endKey + '|' + reason;
-        if (seen.has(key)) {
-          return null;
-        }
-        seen.add(key);
-        return {
-          start: startKey,
-          end: endKey,
-          reason
-        };
-      })
-      .filter(Boolean);
-  }
-
   const fetched = await fetchEventsFromCalendarUrl(importUrl);
   if (fetched.error) {
     console.error(`[CalendarSync] Listing ${listingId} channel "${channel.label}": ${fetched.error}`);
@@ -10013,9 +9970,6 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
     const importEnd = getDateKeyFromEventDateTime(processedEvent.end);
     if (!importStart || !importEnd || importEnd <= importStart) continue;
 
-    const dynamicBlockConflicts = await getDynamicBlockConflicts(importStart, importEnd);
-    const hasDynamicBlockConflict = dynamicBlockConflicts.length > 0;
-
     // Find existing events from same channel overlapping this date range
     const sameChannelResult = await pool.query(
       `SELECT id, start_date::text AS start_date, end_date::text AS end_date, is_in_conflict, notes
@@ -10034,77 +9988,50 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
     );
 
     if (exactMatch) {
-      if (hasDynamicBlockConflict && !exactMatch.is_in_conflict) {
-        await pool.query(
-          'UPDATE listing_calendar_events SET last_synced_at = $1, is_in_conflict = TRUE WHERE id = $2',
-          [now, exactMatch.id]
-        );
+      // Re-evaluate conflict state on refresh so stale flags can be cleared.
+      const exactConflictResult = await pool.query(
+        `SELECT lce.id
+         FROM listing_calendar_events lce
+         WHERE lce.listing_id = $1
+           AND lce.id <> $2
+           AND lce.event_type IN ('local', 'remote')
+           AND (lce.channel_id IS NULL OR lce.channel_id <> $3)
+           AND lce.start_date < $5::date AND lce.end_date > $4::date`,
+        [listingId, Number(exactMatch.id), channelId, importStart, importEnd]
+      );
 
-        const conflictingNames = dynamicBlockConflicts
-          .map((block) => 'Dynamic Block (' + block.start + '–' + block.end + ': ' + block.reason + ')')
-          .join('; ');
+      const exactLocalConflictResult = await pool.query(
+        `SELECT id FROM reservation_activity
+         WHERE listing_id = $1 AND status = ANY($4::text[])
+           AND reservation_checkin_date < $3::date AND reservation_checkout_date > $2::date`,
+        [listingId, importStart, importEnd, Array.from(DIRECT_RESERVATION_ACTIVE_STATUSES)]
+      );
 
-        const conflictDesc = `CONFLICT on listing ${listingId}: ${channel.label} reservation ${importStart}–${importEnd} overlaps with: ${conflictingNames || 'dynamic block'}.`;
+      const hasSameChannelOverlap = overlapping.some((row) => Number(row.id) !== Number(exactMatch.id));
+      const exactIsConflict = exactConflictResult.rows.length > 0
+        || exactLocalConflictResult.rows.length > 0
+        || hasSameChannelOverlap;
 
-        if (clientAccountId) {
-          await writeEventLog({
-            clientAccountId,
-            listingId,
-            entryType: 'conflict',
-            channelLabel: channel.label,
-            description: conflictDesc,
-            newStartDate: importStart,
-            newEndDate: importEnd,
-            affectedEventId: Number(exactMatch.id),
-            conflictingEventId: null
-          });
+      await pool.query(
+        'UPDATE listing_calendar_events SET last_synced_at = $1, is_in_conflict = $2 WHERE id = $3',
+        [now, exactIsConflict, exactMatch.id]
+      );
+
+      await logCalendarSyncImportEvent({
+        listing,
+        clientAccountId,
+        importingChannelLabel: channel.label,
+        exportingChannelLabel: exportingLabel,
+        importUrl,
+        status: 'success',
+        processingOutcome: exactIsConflict ? 'exact_match_refreshed_conflict' : 'exact_match_refreshed_no_conflict',
+        importedEvent: {
+          start: importStart,
+          end: importEnd,
+          title: String(processedEvent.title || '').trim(),
+          calendarEventId: Number(exactMatch.id)
         }
-
-        await notifyManagersOfCalendarConflict({
-          clientAccountId,
-          listingId,
-          subject: `Calendar Conflict - Listing ${listingId}`,
-          introText: conflictDesc
-        });
-
-        await logCalendarSyncImportEvent({
-          listing,
-          clientAccountId,
-          importingChannelLabel: channel.label,
-          exportingChannelLabel: exportingLabel,
-          importUrl,
-          status: 'success',
-          processingOutcome: 'exact_match_conflict_flagged',
-          importedEvent: {
-            start: importStart,
-            end: importEnd,
-            title: String(processedEvent.title || '').trim(),
-            calendarEventId: Number(exactMatch.id)
-          }
-        });
-      } else {
-        // If already in conflict, no further action (avoid duplicate alerts)
-        await pool.query(
-          'UPDATE listing_calendar_events SET last_synced_at = $1 WHERE id = $2',
-          [now, exactMatch.id]
-        );
-
-        await logCalendarSyncImportEvent({
-          listing,
-          clientAccountId,
-          importingChannelLabel: channel.label,
-          exportingChannelLabel: exportingLabel,
-          importUrl,
-          status: 'success',
-          processingOutcome: 'exact_match_refreshed',
-          importedEvent: {
-            start: importStart,
-            end: importEnd,
-            title: String(processedEvent.title || '').trim(),
-            calendarEventId: Number(exactMatch.id)
-          }
-        });
-      }
+      });
       continue;
     }
 
@@ -10186,7 +10113,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
       [listingId, importStart, importEnd, Array.from(DIRECT_RESERVATION_ACTIVE_STATUSES)]
     );
 
-    const isConflict = conflictResult.rows.length > 0 || overlapping.length > 1 || localConflictResult.rows.length > 0 || hasDynamicBlockConflict;
+    const isConflict = conflictResult.rows.length > 0 || overlapping.length > 1 || localConflictResult.rows.length > 0;
 
     // Insert new remote calendar event
     const newEventResult = await pool.query(
@@ -10215,8 +10142,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
 
       const conflictingNames = [
         ...conflictResult.rows.map((r) => r.channel_label || (r.event_type === 'local' ? 'Local' : 'Unknown')),
-        ...localConflictResult.rows.map(() => 'Local Reservation'),
-        ...dynamicBlockConflicts.map((block) => 'Dynamic Block (' + block.start + '–' + block.end + ': ' + block.reason + ')')
+        ...localConflictResult.rows.map(() => 'Local Reservation')
       ].join('; ');
 
       const conflictDesc = `CONFLICT on listing ${listingId}: ${channel.label} reservation ${importStart}–${importEnd} overlaps with: ${conflictingNames || 'existing event'}.`;
