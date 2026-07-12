@@ -473,14 +473,11 @@ function renderReservationEnquiryLandingPageRows(containerId, rows) {
     previewBtn.type = 'button';
     previewBtn.className = 'btn secondary config-mini-btn';
     previewBtn.textContent = 'Preview';
-    previewBtn.title = 'Open public URL in new tab';
+    previewBtn.title = 'Open public URL';
     previewBtn.setAttribute('aria-label', 'Preview public URL for ' + (rowData.name || 'landing page'));
     previewBtn.addEventListener('click', () => {
       const url = buildReservationEnquiryLandingPublicUrl(rowData);
-      const tab = window.open(url, '_blank', 'noopener');
-      if (!tab) {
-        window.location.href = url;
-      }
+      window.location.href = url;
     });
 
     const copyBtn = document.createElement('button');
@@ -551,7 +548,7 @@ function renderFacilityEnquiryLandingPageRows(containerId, rows) {
     previewBtn.type = 'button';
     previewBtn.className = 'btn secondary config-mini-btn';
     previewBtn.textContent = 'Preview';
-    previewBtn.title = 'Open public URL in new tab';
+    previewBtn.title = 'Open public URL';
     previewBtn.setAttribute('aria-label', 'Preview public URL for ' + (rowData.name || 'landing page'));
     previewBtn.addEventListener('click', () => {
       const url = buildFacilityEnquiryLandingPublicUrl(rowData);
@@ -559,10 +556,7 @@ function renderFacilityEnquiryLandingPageRows(containerId, rows) {
         setMessage('Public URL is not available yet.', true);
         return;
       }
-      const tab = window.open(url, '_blank', 'noopener');
-      if (!tab) {
-        window.location.href = url;
-      }
+      window.location.href = url;
     });
 
     const copyBtn = document.createElement('button');
@@ -6332,33 +6326,112 @@ async function fetchEventLogDetails(entryId) {
   };
 }
 
-async function openEventLogDetailsTab(entry) {
-  const tab = window.open('about:blank', '_blank');
-  if (!tab) {
-    setEventLogMessage('Popup blocked by browser. Allow popups to view event details.', true);
-    return;
+function getOrCreateEventLogDetailsModalElements() {
+  let overlay = document.getElementById('eventLogDetailsOverlay');
+  if (overlay) {
+    return {
+      overlay,
+      title: document.getElementById('eventLogDetailsTitle'),
+      content: document.getElementById('eventLogDetailsPre')
+    };
   }
 
-  const escapedTitle = escapeHtml('Calendar Event Log Details');
-  tab.document.open();
-  tab.document.write(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapedTitle}</title>
-  <style>
-    body { margin: 0; padding: 1rem; font-family: Consolas, 'Courier New', monospace; background: #0f172a; color: #e2e8f0; }
-    h1 { margin: 0 0 0.8rem; font-size: 1rem; font-family: Segoe UI, Arial, sans-serif; color: #bfdbfe; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 1rem; max-height: calc(100vh - 4rem); overflow: auto; }
-  </style>
-</head>
-<body>
-  <h1>${escapedTitle}</h1>
-  <pre>Loading...</pre>
-</body>
-</html>`);
-  tab.document.close();
+  overlay = document.createElement('div');
+  overlay.id = 'eventLogDetailsOverlay';
+  overlay.className = 'event-log-details-overlay hidden';
+  overlay.innerHTML = `
+    <div class="event-log-details-modal" role="dialog" aria-modal="true" aria-labelledby="eventLogDetailsTitle">
+      <div class="event-log-details-header">
+        <h3 id="eventLogDetailsTitle">Calendar Event Log Details</h3>
+        <button id="eventLogDetailsClose" type="button" class="btn secondary">Close</button>
+      </div>
+      <pre id="eventLogDetailsPre">Loading...</pre>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const styleId = 'eventLogDetailsOverlayStyle';
+  if (!document.getElementById(styleId)) {
+    const styleEl = document.createElement('style');
+    styleEl.id = styleId;
+    styleEl.textContent = `
+      .event-log-details-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 12000;
+        background: rgba(2, 6, 23, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.9rem;
+      }
+      .event-log-details-overlay.hidden {
+        display: none;
+      }
+      .event-log-details-modal {
+        width: min(980px, 100%);
+        max-height: 92vh;
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+      }
+      .event-log-details-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.8rem;
+        padding: 0.8rem 0.9rem;
+        border-bottom: 1px solid #334155;
+      }
+      #eventLogDetailsTitle {
+        margin: 0;
+        font-size: 0.96rem;
+        color: #bfdbfe;
+      }
+      #eventLogDetailsPre {
+        margin: 0;
+        padding: 0.9rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+        font-family: Consolas, 'Courier New', monospace;
+        max-height: calc(92vh - 72px);
+      }
+    `;
+    document.head.appendChild(styleEl);
+  }
+
+  const closeBtn = document.getElementById('eventLogDetailsClose');
+  closeBtn.addEventListener('click', () => {
+    overlay.classList.add('hidden');
+  });
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) {
+      overlay.classList.add('hidden');
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !overlay.classList.contains('hidden')) {
+      overlay.classList.add('hidden');
+    }
+  });
+
+  return {
+    overlay,
+    title: document.getElementById('eventLogDetailsTitle'),
+    content: document.getElementById('eventLogDetailsPre')
+  };
+}
+
+async function openEventLogDetailsTab(entry) {
+  const modal = getOrCreateEventLogDetailsModalElements();
+  modal.title.textContent = 'Calendar Event Log Details';
+  modal.content.textContent = 'Loading...';
+  modal.overlay.classList.remove('hidden');
 
   let detailsEntry = entry;
   let conflictEvents = [];
@@ -6372,26 +6445,7 @@ async function openEventLogDetailsTab(entry) {
     setEventLogMessage(err.message || 'Failed to load event details.', true);
   }
 
-  const escapedText = escapeHtml(buildEventLogDetailsText(detailsEntry, conflictEvents));
-  tab.document.open();
-  tab.document.write(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapedTitle}</title>
-  <style>
-    body { margin: 0; padding: 1rem; font-family: Consolas, 'Courier New', monospace; background: #0f172a; color: #e2e8f0; }
-    h1 { margin: 0 0 0.8rem; font-size: 1rem; font-family: Segoe UI, Arial, sans-serif; color: #bfdbfe; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 1rem; max-height: calc(100vh - 4rem); overflow: auto; }
-  </style>
-</head>
-<body>
-  <h1>${escapedTitle}</h1>
-  <pre>${escapedText}</pre>
-</body>
-</html>`);
-  tab.document.close();
+  modal.content.textContent = buildEventLogDetailsText(detailsEntry, conflictEvents);
 }
 
 async function loadEventLog() {

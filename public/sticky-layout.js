@@ -1,5 +1,21 @@
 'use strict';
 
+(function ensureNavigationGuardScriptLoaded() {
+  if (window.__apNavigationGuardInitialized) {
+    return;
+  }
+
+  if (document.querySelector('script[data-ap-navigation-guard="1"]')) {
+    return;
+  }
+
+  const script = document.createElement('script');
+  script.src = '/navigation-guard.js';
+  script.defer = true;
+  script.setAttribute('data-ap-navigation-guard', '1');
+  document.head.appendChild(script);
+})();
+
 (function initStickyMessageBar() {
   const stickyBar = document.getElementById('stickyMessageBar');
   if (!stickyBar) {

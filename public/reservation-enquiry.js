@@ -301,7 +301,7 @@ document.getElementById('reservationEnquiryCalendarGrid').addEventListener('clic
   }
   const url = String(target.getAttribute('data-view-url') || '').trim();
   if (url) {
-    window.open(url, '_blank', 'noopener');
+    window.location.href = url;
   }
 });
 
