@@ -10007,10 +10007,8 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         [listingId, importStart, importEnd, Array.from(DIRECT_RESERVATION_ACTIVE_STATUSES)]
       );
 
-      const hasSameChannelOverlap = overlapping.some((row) => Number(row.id) !== Number(exactMatch.id));
       const exactIsConflict = exactConflictResult.rows.length > 0
-        || exactLocalConflictResult.rows.length > 0
-        || hasSameChannelOverlap;
+        || exactLocalConflictResult.rows.length > 0;
 
       await pool.query(
         'UPDATE listing_calendar_events SET last_synced_at = $1, is_in_conflict = $2 WHERE id = $3',
@@ -10035,11 +10033,14 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
       continue;
     }
 
-    // Single partial overlap from same channel = dates have changed on existing reservation
-    if (overlapping.length === 1 && !overlapping[0].is_in_conflict) {
-      const existing = overlapping[0];
+    // Any overlap from same channel should be reconciled into one row, not treated as conflict.
+    if (overlapping.length >= 1) {
+      const existing = overlapping[overlapping.length - 1];
       const oldStart = String(existing.start_date).slice(0, 10);
       const oldEnd = String(existing.end_date).slice(0, 10);
+      const duplicateIds = overlapping
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isInteger(id) && id > 0 && id !== Number(existing.id));
 
       await pool.query(
         `UPDATE listing_calendar_events
@@ -10047,6 +10048,39 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
              last_synced_at = $3, ics_summary = COALESCE(NULLIF($4, ''), ics_summary)
          WHERE id = $5`,
         [importStart, importEnd, now, processedEvent.title || '', existing.id]
+      );
+
+      if (duplicateIds.length) {
+        await pool.query(
+          'DELETE FROM listing_calendar_events WHERE id = ANY($1::bigint[])',
+          [duplicateIds]
+        );
+      }
+
+      const reconciledConflictResult = await pool.query(
+        `SELECT lce.id
+         FROM listing_calendar_events lce
+         WHERE lce.listing_id = $1
+           AND lce.id <> $2
+           AND lce.event_type IN ('local', 'remote')
+           AND (lce.channel_id IS NULL OR lce.channel_id <> $3)
+           AND lce.start_date < $5::date AND lce.end_date > $4::date`,
+        [listingId, Number(existing.id), channelId, importStart, importEnd]
+      );
+
+      const reconciledLocalConflictResult = await pool.query(
+        `SELECT id FROM reservation_activity
+         WHERE listing_id = $1 AND status = ANY($4::text[])
+           AND reservation_checkin_date < $3::date AND reservation_checkout_date > $2::date`,
+        [listingId, importStart, importEnd, Array.from(DIRECT_RESERVATION_ACTIVE_STATUSES)]
+      );
+
+      const reconciledIsConflict = reconciledConflictResult.rows.length > 0
+        || reconciledLocalConflictResult.rows.length > 0;
+
+      await pool.query(
+        'UPDATE listing_calendar_events SET is_in_conflict = $1 WHERE id = $2',
+        [reconciledIsConflict, existing.id]
       );
 
       // Remove stale changeover record — dates have changed, revert to unallocated
@@ -10079,7 +10113,9 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         exportingChannelLabel: exportingLabel,
         importUrl,
         status: 'success',
-        processingOutcome: 'existing_event_date_changed',
+        processingOutcome: duplicateIds.length
+          ? 'existing_event_date_changed_reconciled_duplicates'
+          : 'existing_event_date_changed',
         importedEvent: {
           oldStart,
           oldEnd,
@@ -10113,7 +10149,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
       [listingId, importStart, importEnd, Array.from(DIRECT_RESERVATION_ACTIVE_STATUSES)]
     );
 
-    const isConflict = conflictResult.rows.length > 0 || overlapping.length > 1 || localConflictResult.rows.length > 0;
+    const isConflict = conflictResult.rows.length > 0 || localConflictResult.rows.length > 0;
 
     // Insert new remote calendar event
     const newEventResult = await pool.query(
@@ -10129,8 +10165,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
 
     if (isConflict) {
       const conflictEventIds = [
-        ...conflictResult.rows.map((r) => Number(r.id)),
-        ...overlapping.filter((r) => !r.is_in_conflict).map((r) => Number(r.id))
+        ...conflictResult.rows.map((r) => Number(r.id))
       ].filter((id) => Number.isInteger(id) && id > 0);
 
       if (conflictEventIds.length) {
