@@ -15184,21 +15184,43 @@ function parseCachedEventsRows(cachedRows) {
 }
 
 async function getIcsEventsForListing(listingId) {
-  let cached = await getCachedEventsForListing(listingId);
-  let events = parseCachedEventsRows(cached);
+  // Primary source: new per-event calendar store populated by the channel sync cron.
+  let events = await getStoredCalendarEventsForListing(listingId);
 
+  // Backwards-compatible fallback for legacy listings not yet represented in listing_calendar_events.
   if (events.length === 0) {
-    try {
-      await refreshEventsForListing(listingId);
-      cached = await getCachedEventsForListing(listingId);
-      events = parseCachedEventsRows(cached);
-    } catch (refreshErr) {
-      console.error('ICS refresh fallback failed for listing', listingId, refreshErr && refreshErr.message);
+    let cached = await getCachedEventsForListing(listingId);
+    events = parseCachedEventsRows(cached);
+
+    if (events.length === 0) {
+      try {
+        await refreshEventsForListing(listingId);
+        cached = await getCachedEventsForListing(listingId);
+        events = parseCachedEventsRows(cached);
+      } catch (refreshErr) {
+        console.error('ICS refresh fallback failed for listing', listingId, refreshErr && refreshErr.message);
+      }
     }
   }
 
   const directEvents = await getDirectReservationEventsForListing(listingId);
-  return [...events, ...directEvents].sort((a, b) => {
+  const knownReservationActivityIds = new Set(
+    (events || [])
+      .map((event) => Number(event && event.reservationActivityId || 0))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  );
+  const merged = [
+    ...(events || []),
+    ...directEvents.filter((event) => {
+      const reservationActivityId = Number(event && event.reservationActivityId || 0);
+      if (Number.isInteger(reservationActivityId) && reservationActivityId > 0) {
+        return !knownReservationActivityIds.has(reservationActivityId);
+      }
+      return true;
+    })
+  ];
+
+  return merged.sort((a, b) => {
     const aTime = a.start ? new Date(a.start).getTime() : 0;
     const bTime = b.start ? new Date(b.start).getTime() : 0;
     return aTime - bTime;
