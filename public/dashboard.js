@@ -250,6 +250,18 @@ function setManualReservationsMessage(text, isError) {
   el.className = text ? 'message ' + (isError ? 'error' : 'success') : 'message';
 }
 
+function formatDateTimeForMessage(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 function setStripeConnectStatus(text, isError) {
   const el = document.getElementById('stripeConnectStatus');
   if (!el) {
