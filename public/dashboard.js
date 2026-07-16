@@ -2994,7 +2994,38 @@ function renderManualReservationListingOptions(listings) {
 }
 
 function renderManualReservations(reservations) {
-  currentManualReservations = Array.isArray(reservations) ? reservations : [];
+  const rows = Array.isArray(reservations)
+    ? reservations
+    : Array.isArray(reservations && reservations.reservations)
+      ? reservations.reservations
+      : [];
+
+  currentManualReservations = rows.map((reservation) => ({
+    id: Number(reservation && (reservation.id || reservation.reservation_id) ? (reservation.id || reservation.reservation_id) : 0),
+    listingId: Number(reservation && (reservation.listingId || reservation.listing_id) ? (reservation.listingId || reservation.listing_id) : 0),
+    listingName: String(
+      reservation && (reservation.listingName || reservation.listing_name)
+        ? (reservation.listingName || reservation.listing_name)
+        : ''
+    ),
+    checkinDate: String(
+      reservation && (reservation.checkinDate || reservation.reservation_checkin_date)
+        ? (reservation.checkinDate || reservation.reservation_checkin_date)
+        : ''
+    ).slice(0, 10),
+    checkoutDate: String(
+      reservation && (reservation.checkoutDate || reservation.reservation_checkout_date)
+        ? (reservation.checkoutDate || reservation.reservation_checkout_date)
+        : ''
+    ).slice(0, 10),
+    notes: String(reservation && reservation.notes ? reservation.notes : ''),
+    createdAt: String(
+      reservation && (reservation.createdAt || reservation.created_at)
+        ? (reservation.createdAt || reservation.created_at)
+        : ''
+    )
+  }));
+
   const tbody = document.getElementById('manualReservationsTableBody');
   if (!tbody) {
     return;
@@ -3060,7 +3091,17 @@ async function fetchManualReservations() {
     throw new Error(data.error || 'Failed to load manual reservations.');
   }
 
-  renderManualReservations(data.reservations || []);
+  const reservations = Array.isArray(data)
+    ? data
+    : Array.isArray(data.reservations)
+      ? data.reservations
+      : Array.isArray(data.manualReservations)
+        ? data.manualReservations
+        : Array.isArray(data.rows)
+          ? data.rows
+          : [];
+
+  renderManualReservations(reservations);
 }
 
 async function createManualReservation(payload) {
