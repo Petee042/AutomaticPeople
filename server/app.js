@@ -6265,6 +6265,53 @@ async function getPrivateReservationsForScope(req) {
   return result.rows.map((row) => mapPrivateReservationRow(row));
 }
 
+async function getManualReservationsForScope(req) {
+  const listings = await getListingsForUser(req.accessContext.effectiveOwnerUserId);
+  const allowedListingIds = listings
+    .filter((listing) => isListingAllowedByScope(req, listing))
+    .map((listing) => Number(listing.id));
+
+  if (!allowedListingIds.length) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT ra.id,
+             ra.reservation_identifier,
+             ra.listing_id,
+             l.name AS listing_name,
+             ra.reservation_checkin_date::text AS reservation_checkin_date,
+             ra.reservation_checkout_date::text AS reservation_checkout_date,
+             ra.notes,
+             ra.status,
+             ra.created_at,
+             ra.updated_at
+      FROM reservation_activity ra
+      JOIN listings l ON l.id = ra.listing_id
+      WHERE ra.client_account_id = $1
+        AND ra.listing_id = ANY($2::int[])
+        AND ra.payment_method = 'Manual Reservation'
+        AND ra.status <> ALL($3::text[])
+      ORDER BY ra.reservation_checkin_date ASC, ra.id DESC
+    `,
+    [req.accessContext.activeClientAccountId, allowedListingIds, ['cancelled', 'expired']]
+  );
+
+  return result.rows.map((row) => ({
+    id: Number(row.id || 0),
+    reservationIdentifier: String(row.reservation_identifier || '').trim(),
+    listingId: Number(row.listing_id || 0),
+    listingName: String(row.listing_name || '').trim(),
+    checkinDate: String(row.reservation_checkin_date || '').slice(0, 10),
+    checkoutDate: String(row.reservation_checkout_date || '').slice(0, 10),
+    notes: String(row.notes || '').trim(),
+    status: String(row.status || '').trim(),
+    createdAt: row.created_at ? String(row.created_at) : '',
+    updatedAt: row.updated_at ? String(row.updated_at) : ''
+  }));
+}
+
 async function getDirectReservationEventsForListing(listingId) {
   const id = Number(listingId);
   if (!Number.isInteger(id) || id <= 0) {
@@ -16083,6 +16130,167 @@ app.delete('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to clear event log.' });
+  }
+});
+
+// GET /api/manual-reservations — list manual reservation blocks for Ops
+app.get('/api/manual-reservations', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const reservations = await getManualReservationsForScope(req);
+    return res.json({ reservations });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load manual reservations.' });
+  }
+});
+
+// POST /api/manual-reservations — create a manual reservation block that propagates to channel exports
+app.post('/api/manual-reservations', requireScopedRole('Manager'), async (req, res) => {
+  const listingId = Number(req.body.listingId || 0);
+  const checkinDate = normaliseDateKey(req.body.startDate || req.body.checkinDate);
+  const checkoutDate = normaliseDateKey(req.body.endDate || req.body.checkoutDate);
+  const notes = String(req.body.notes || '').trim().slice(0, 1000);
+
+  if (!Number.isInteger(listingId) || listingId <= 0) {
+    return res.status(400).json({ error: 'Valid listing is required.' });
+  }
+  if (!checkinDate || !checkoutDate || checkoutDate <= checkinDate) {
+    return res.status(400).json({ error: 'Start and end dates are required (end must be after start).' });
+  }
+  if (!notes) {
+    return res.status(400).json({ error: 'A note is required.' });
+  }
+
+  try {
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
+    const reservationIdentifier = await generateGlobalReservationIdentifier('manual_reservation');
+    const reservation = await createReservationActivityForListing({
+      userId: req.accessContext.effectiveOwnerUserId,
+      clientAccountId: req.accessContext.activeClientAccountId,
+      listingId,
+      reservationIdentifier,
+      checkinDate,
+      checkoutDate,
+      firstName: 'Manual',
+      familyName: 'Reservation',
+      emailAddress: 'manual-reservation@automaticpeople.local',
+      guestCount: 1,
+      reservationAmount: 0,
+      holdUntilAt: null,
+      paymentMethod: 'Manual Reservation',
+      paymentDueAt: null,
+      status: 'confirmed',
+      notes
+    });
+
+    await writeUserEventLog({
+      actorUserId: Number(req.session.userId || 0),
+      clientAccountId: Number(req.accessContext.activeClientAccountId || 0),
+      eventType: 'manual_reservation_created',
+      description: 'Manual reservation created - ' + String(reservationIdentifier || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        reservationId: Number(reservation && reservation.id || 0),
+        reservationIdentifier: String(reservationIdentifier || ''),
+        listingId: Number(listingId || 0),
+        listingName: String(listing && listing.name || ''),
+        checkinDate,
+        checkoutDate,
+        notes
+      }
+    });
+
+    return res.status(201).json({
+      message: 'Manual reservation created.',
+      reservation: {
+        id: Number(reservation && reservation.id || 0),
+        reservationIdentifier: String(reservation && reservation.reservation_identifier || reservationIdentifier || ''),
+        listingId,
+        listingName: String(listing && listing.name || ''),
+        checkinDate,
+        checkoutDate,
+        notes,
+        createdAt: reservation && reservation.created_at ? String(reservation.created_at) : new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to create manual reservation.' });
+  }
+});
+
+// DELETE /api/manual-reservations/:reservationId — delete one manual reservation block
+app.delete('/api/manual-reservations/:reservationId', requireScopedRole('Manager'), async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Invalid reservation id.' });
+  }
+
+  try {
+    const reservationResult = await pool.query(
+      `
+        SELECT ra.id,
+               ra.reservation_identifier,
+               ra.listing_id,
+               l.name AS listing_name,
+               ra.reservation_checkin_date::text AS reservation_checkin_date,
+               ra.reservation_checkout_date::text AS reservation_checkout_date,
+               ra.notes
+        FROM reservation_activity ra
+        JOIN listings l ON l.id = ra.listing_id
+        WHERE ra.id = $1
+          AND ra.client_account_id = $2
+          AND ra.payment_method = 'Manual Reservation'
+        LIMIT 1
+      `,
+      [reservationId, req.accessContext.activeClientAccountId]
+    );
+    const reservation = reservationResult.rows[0] || null;
+    if (!reservation) {
+      return res.status(404).json({ error: 'Manual reservation not found.' });
+    }
+
+    const listing = await getListingByIdForUser(Number(reservation.listing_id), req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Manual reservation not found.' });
+    }
+
+    await pool.query('DELETE FROM reservation_activity WHERE id = $1', [reservationId]);
+
+    await deleteBookedInChangesForUser(
+      req.accessContext.effectiveOwnerUserId,
+      [{
+        listingId: Number(reservation.listing_id),
+        reservationCheckinDate: String(reservation.reservation_checkin_date || '').slice(0, 10),
+        reservationCheckoutDate: String(reservation.reservation_checkout_date || '').slice(0, 10)
+      }]
+    );
+
+    await writeUserEventLog({
+      actorUserId: Number(req.session.userId || 0),
+      clientAccountId: Number(req.accessContext.activeClientAccountId || 0),
+      eventType: 'manual_reservation_deleted',
+      description: 'Manual reservation deleted - ' + String(reservation.reservation_identifier || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        reservationId,
+        reservationIdentifier: String(reservation.reservation_identifier || ''),
+        listingId: Number(reservation.listing_id || 0),
+        listingName: String(reservation.listing_name || ''),
+        checkinDate: String(reservation.reservation_checkin_date || '').slice(0, 10),
+        checkoutDate: String(reservation.reservation_checkout_date || '').slice(0, 10),
+        notes: String(reservation.notes || '')
+      }
+    });
+
+    return res.json({ message: 'Manual reservation deleted.' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete manual reservation.' });
   }
 });
 

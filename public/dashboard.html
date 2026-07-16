@@ -221,6 +221,47 @@
           </form>
         </section>
 
+        <section class="listing-form-section" id="manualReservationsSection">
+          <div class="ops-section-header">
+            <h3>Manual Reservations</h3>
+          </div>
+          <form id="manualReservationForm" novalidate>
+            <div class="calendar-source-row">
+              <label for="manualReservationListing">Listing</label>
+              <select id="manualReservationListing" required>
+                <option value="">Select listing</option>
+              </select>
+            </div>
+            <div class="cleaning-actions-row">
+              <label for="manualReservationStartDate">Start date</label>
+              <input id="manualReservationStartDate" type="date" required />
+              <label for="manualReservationEndDate">End date</label>
+              <input id="manualReservationEndDate" type="date" required />
+            </div>
+            <div class="calendar-source-row">
+              <label for="manualReservationNotes">Notes</label>
+              <textarea id="manualReservationNotes" rows="3" maxlength="1000" placeholder="Reason for this manual reservation" required></textarea>
+            </div>
+            <button id="createManualReservationBtn" type="submit" class="btn primary">Create Manual Reservation</button>
+          </form>
+          <p id="manualReservationsMessage" class="message"></p>
+          <table class="calendar-table" aria-label="Manual reservations">
+            <thead>
+              <tr>
+                <th>Listing</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Notes</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="manualReservationsTableBody">
+              <tr><td colspan="6">No manual reservations.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
         <dialog id="scheduleEmailDialog" class="resource-dialog schedule-email-dialog">
           <form id="scheduleEmailDialogForm" method="dialog" novalidate>
             <div class="resource-dialog-header">

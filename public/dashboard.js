@@ -38,6 +38,7 @@ let opsCalCurrentCleaningChanges = [];
 let opsCalCurrentFetchedAt = null;
 let opsCalSelectedListingIds = new Set();
 let opsCalRequestId = 0;
+let currentManualReservations = [];
 let savedDashboardState = null;
 
 const opsCalSourceColorMap = {};
@@ -237,6 +238,15 @@ function setConsolidatedIcsUrl(token) {
 function setMessage(text, isError) {
   const el = document.getElementById('dashboardMessage');
   el.textContent = text;
+  el.className = text ? 'message ' + (isError ? 'error' : 'success') : 'message';
+}
+
+function setManualReservationsMessage(text, isError) {
+  const el = document.getElementById('manualReservationsMessage');
+  if (!el) {
+    return;
+  }
+  el.textContent = text || '';
   el.className = text ? 'message ' + (isError ? 'error' : 'success') : 'message';
 }
 
@@ -2957,6 +2967,140 @@ function renderFeedSources(sources) {
   });
 }
 
+function renderManualReservationListingOptions(listings) {
+  const select = document.getElementById('manualReservationListing');
+  if (!select) {
+    return;
+  }
+
+  const currentValue = String(select.value || '');
+  select.innerHTML = '';
+
+  const prompt = document.createElement('option');
+  prompt.value = '';
+  prompt.textContent = 'Select listing';
+  select.appendChild(prompt);
+
+  (listings || []).forEach((listing) => {
+    const option = document.createElement('option');
+    option.value = String(listing.id);
+    option.textContent = String(listing.name || ('Listing #' + listing.id));
+    select.appendChild(option);
+  });
+
+  if (currentValue && Array.from(select.options).some((opt) => opt.value === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+function renderManualReservations(reservations) {
+  currentManualReservations = Array.isArray(reservations) ? reservations : [];
+  const tbody = document.getElementById('manualReservationsTableBody');
+  if (!tbody) {
+    return;
+  }
+
+  tbody.innerHTML = '';
+  if (!currentManualReservations.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 6;
+    cell.textContent = 'No manual reservations.';
+    row.appendChild(cell);
+    tbody.appendChild(row);
+    return;
+  }
+
+  currentManualReservations.forEach((reservation) => {
+    const row = document.createElement('tr');
+
+    const listingCell = document.createElement('td');
+    listingCell.textContent = String(reservation.listingName || ('Listing #' + reservation.listingId));
+
+    const startCell = document.createElement('td');
+    startCell.textContent = String(reservation.checkinDate || '');
+
+    const endCell = document.createElement('td');
+    endCell.textContent = String(reservation.checkoutDate || '');
+
+    const notesCell = document.createElement('td');
+    notesCell.textContent = String(reservation.notes || '');
+
+    const createdCell = document.createElement('td');
+    createdCell.textContent = formatDateTimeForMessage(reservation.createdAt) || '';
+
+    const actionCell = document.createElement('td');
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn secondary';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.dataset.reservationId = String(reservation.id || '');
+    deleteBtn.dataset.action = 'delete-manual-reservation';
+    actionCell.appendChild(deleteBtn);
+
+    row.appendChild(listingCell);
+    row.appendChild(startCell);
+    row.appendChild(endCell);
+    row.appendChild(notesCell);
+    row.appendChild(createdCell);
+    row.appendChild(actionCell);
+    tbody.appendChild(row);
+  });
+}
+
+async function fetchManualReservations() {
+  const res = await fetch('/api/manual-reservations');
+  if (res.status === 401) {
+    window.location.href = '/';
+    return;
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to load manual reservations.');
+  }
+
+  renderManualReservations(data.reservations || []);
+}
+
+async function createManualReservation(payload) {
+  const res = await fetch('/api/manual-reservations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (res.status === 401) {
+    window.location.href = '/';
+    return { ok: false, error: 'Session expired.' };
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to create manual reservation.');
+  }
+
+  return data;
+}
+
+async function deleteManualReservation(reservationId) {
+  const res = await fetch('/api/manual-reservations/' + encodeURIComponent(String(reservationId)), {
+    method: 'DELETE'
+  });
+
+  if (res.status === 401) {
+    window.location.href = '/';
+    return { ok: false, error: 'Session expired.' };
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to delete manual reservation.');
+  }
+
+  return data;
+}
+
 async function fetchListings() {
   const res = await fetch('/api/listings');
   if (res.status === 401) {
@@ -2973,6 +3117,7 @@ async function fetchListings() {
   renderListings(currentListings);
   renderCleaningListings(currentListings);
   renderOpsCalendarListingSelector(currentListings);
+  renderManualReservationListingOptions(currentListings);
   await refreshOpsCalendar(false);
 }
 
@@ -3073,6 +3218,7 @@ async function loadDashboardData() {
   await fetchFeedSources();
   await fetchCleaners();
   await fetchListings();
+  await fetchManualReservations();
   await fetchSharedResources();
   await fetchTeamMembers();
   await fetchManagerAssignments();
@@ -3620,6 +3766,79 @@ if (_opsCalendarRefreshBtn) _opsCalendarRefreshBtn.addEventListener('click', asy
     await refreshOpsCalendar(true);
   } finally {
     button.disabled = false;
+  }
+});
+
+const _manualReservationForm = document.getElementById('manualReservationForm');
+if (_manualReservationForm) _manualReservationForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('createManualReservationBtn');
+  const listingId = Number(document.getElementById('manualReservationListing').value || 0);
+  const startDate = String(document.getElementById('manualReservationStartDate').value || '').trim();
+  const endDate = String(document.getElementById('manualReservationEndDate').value || '').trim();
+  const notes = String(document.getElementById('manualReservationNotes').value || '').trim();
+
+  if (!Number.isInteger(listingId) || listingId <= 0) {
+    setManualReservationsMessage('Please select a listing.', true);
+    return;
+  }
+  if (!startDate || !endDate || endDate <= startDate) {
+    setManualReservationsMessage('Please select valid start/end dates (end must be after start).', true);
+    return;
+  }
+  if (!notes) {
+    setManualReservationsMessage('Please enter a note.', true);
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    await createManualReservation({ listingId, startDate, endDate, notes });
+    setManualReservationsMessage('Manual reservation created.', false);
+    document.getElementById('manualReservationStartDate').value = '';
+    document.getElementById('manualReservationEndDate').value = '';
+    document.getElementById('manualReservationNotes').value = '';
+    await fetchManualReservations();
+    await refreshOpsCalendar(true);
+  } catch (err) {
+    setManualReservationsMessage(err.message || 'Failed to create manual reservation.', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+const _manualReservationsTableBody = document.getElementById('manualReservationsTableBody');
+if (_manualReservationsTableBody) _manualReservationsTableBody.addEventListener('click', async (event) => {
+  const target = event.target;
+  if (!target || target.dataset.action !== 'delete-manual-reservation') {
+    return;
+  }
+
+  const reservationId = Number(target.dataset.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    setManualReservationsMessage('Invalid manual reservation id.', true);
+    return;
+  }
+
+  const reservation = currentManualReservations.find((item) => Number(item.id) === reservationId);
+  const summary = reservation
+    ? (String(reservation.listingName || '') + ' ' + String(reservation.checkinDate || '') + ' to ' + String(reservation.checkoutDate || '')).trim()
+    : ('Reservation #' + String(reservationId));
+  const confirmed = window.confirm('Delete manual reservation ' + summary + '?');
+  if (!confirmed) {
+    return;
+  }
+
+  target.disabled = true;
+  try {
+    await deleteManualReservation(reservationId);
+    setManualReservationsMessage('Manual reservation deleted.', false);
+    await fetchManualReservations();
+    await refreshOpsCalendar(true);
+  } catch (err) {
+    setManualReservationsMessage(err.message || 'Failed to delete manual reservation.', true);
+  } finally {
+    target.disabled = false;
   }
 });
 
