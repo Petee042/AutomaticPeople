@@ -21,6 +21,33 @@ function setAdminAuthenticated(isAuthenticated) {
   }
 }
 
+function setPurgeAirbnbNotAvailableStats(text) {
+  const el = document.getElementById('purgeAirbnbNotAvailableStats');
+  if (!el) {
+    return;
+  }
+  el.textContent = String(text || '').trim();
+}
+
+function formatPurgeDiagnosticsLabel(diag) {
+  const listingCount = Number(diag && diag.listingCalendarEventsCount || 0);
+  const cachedCount = Number(diag && diag.cachedEventsCount || 0);
+  const cachedRows = Number(diag && diag.cachedRowsWithMatches || 0);
+  return 'Listing calendar matches: ' + String(listingCount)
+    + ' | Legacy cache matches: ' + String(cachedCount)
+    + ' (rows: ' + String(cachedRows) + ')';
+}
+
+async function refreshPurgeAirbnbNotAvailableStats() {
+  const res = await fetch('/api/admin/system/purge-airbnb-not-available/counts');
+  if (!res.ok) {
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  const diag = data && data.diagnostics ? data.diagnostics : null;
+  setPurgeAirbnbNotAvailableStats(formatPurgeDiagnosticsLabel(diag));
+}
+
 function renderUsers(users) {
   adminUsers = users || [];
   const deleteSelect = document.getElementById('adminUserSelect');
@@ -120,6 +147,7 @@ async function loadUsers() {
   }
 
   renderUsers(data.users || []);
+  await refreshPurgeAirbnbNotAvailableStats();
 }
 
 (async () => {
@@ -267,6 +295,15 @@ document.getElementById('purgeAirbnbNotAvailableBtn').addEventListener('click', 
     }
 
     const deletedCount = Number(data && data.deletedCount || 0);
+    const before = data && data.diagnosticsBefore ? data.diagnosticsBefore : null;
+    const after = data && data.diagnosticsAfter ? data.diagnosticsAfter : null;
+    if (before || after) {
+      const beforeLabel = formatPurgeDiagnosticsLabel(before);
+      const afterLabel = formatPurgeDiagnosticsLabel(after);
+      setPurgeAirbnbNotAvailableStats('Before purge: ' + beforeLabel + ' | After purge: ' + afterLabel);
+    } else {
+      await refreshPurgeAirbnbNotAvailableStats();
+    }
     setAdminMessage('Airbnb Not Available purge complete. Deleted ' + String(deletedCount) + ' event(s).', false);
   } catch (err) {
     setAdminMessage(err.message || 'Network error executing purge.', true);

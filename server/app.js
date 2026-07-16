@@ -11517,8 +11517,66 @@ app.post('/api/admin/system/reset-schema', requireAdminAuth, async (req, res) =>
 });
 
 // POST /api/admin/system/purge-airbnb-not-available — one-time purge of imported Airbnb "Not Available" rows
+async function getAirbnbNotAvailableDiagnostics() {
+  const listingEventsResult = await pool.query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM listing_calendar_events lce
+      JOIN listing_channels lc ON lc.id = lce.channel_id
+      WHERE lce.event_type = 'remote'
+        AND LOWER(TRIM(COALESCE(lc.label, ''))) LIKE '%airbnb%'
+        AND LOWER(COALESCE(lce.ics_summary, '')) LIKE '%not available%'
+    `
+  );
+
+  const legacyRows = await pool.query(
+    `
+      SELECT events_json
+      FROM cached_events
+      WHERE LOWER(TRIM(COALESCE(label, ''))) LIKE '%airbnb%'
+        AND error_text IS NULL
+    `
+  );
+
+  let cachedEventsCount = 0;
+  let cachedRowsWithMatches = 0;
+  for (const row of legacyRows.rows || []) {
+    let parsedEvents = [];
+    try {
+      const next = JSON.parse(String(row.events_json || '[]'));
+      parsedEvents = Array.isArray(next) ? next : [];
+    } catch {
+      parsedEvents = [];
+    }
+
+    const matchCount = parsedEvents.filter((event) => isAirbnbNotAvailableSummary(event && event.title)).length;
+    if (matchCount > 0) {
+      cachedRowsWithMatches += 1;
+      cachedEventsCount += matchCount;
+    }
+  }
+
+  return {
+    listingCalendarEventsCount: Number(listingEventsResult.rows[0] && listingEventsResult.rows[0].count || 0),
+    cachedEventsCount,
+    cachedRowsWithMatches
+  };
+}
+
+app.get('/api/admin/system/purge-airbnb-not-available/counts', requireAdminAuth, async (_req, res) => {
+  try {
+    const diagnostics = await getAirbnbNotAvailableDiagnostics();
+    return res.json({ diagnostics });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load Airbnb Not Available diagnostics.' });
+  }
+});
+
 app.post('/api/admin/system/purge-airbnb-not-available', requireAdminAuth, async (_req, res) => {
   try {
+    const diagnosticsBefore = await getAirbnbNotAvailableDiagnostics();
+
     const purgeResult = await pool.query(
       `
         DELETE FROM listing_calendar_events lce
@@ -11569,12 +11627,16 @@ app.post('/api/admin/system/purge-airbnb-not-available', requireAdminAuth, async
       );
     }
 
+    const diagnosticsAfter = await getAirbnbNotAvailableDiagnostics();
+
     return res.json({
       message: 'Airbnb Not Available purge completed.',
       deletedCount: Number(purgeResult.rowCount || 0) + cachedEventsDeleted,
       deletedFromListingCalendarEvents: Number(purgeResult.rowCount || 0),
       deletedFromCachedEvents: Number(cachedEventsDeleted || 0),
-      cachedRowsUpdated: Number(cachedRowsUpdated || 0)
+      cachedRowsUpdated: Number(cachedRowsUpdated || 0),
+      diagnosticsBefore,
+      diagnosticsAfter
     });
   } catch (err) {
     console.error(err);
