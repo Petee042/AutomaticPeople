@@ -9890,7 +9890,30 @@ async function findExportingChannelLabel(importUrl) {
 
 // Import rules pipeline — structured for future channel-specific rules.
 // Each rule: { id: string, apply(rawEvent, channel, listing) => event | null }
-const CALENDAR_IMPORT_RULES = [];
+function shouldDiscardAirbnbNotAvailableImportEvent(rawEvent, channel) {
+  const sourceLabel = String(channel && channel.label || '').trim();
+  if (!isAirbnbSource(sourceLabel)) {
+    return false;
+  }
+
+  const summary = String(rawEvent && rawEvent.title || '').trim();
+  return isAirbnbNotAvailableSummary(summary);
+}
+
+const CALENDAR_IMPORT_RULES = [
+  {
+    // TEMPORARY BUSINESS RULE (2026-07):
+    // Airbnb sends synthetic "Not Available" blocks that should not be imported or re-propagated.
+    // Remove this rule when/if Airbnb feed semantics change and these events should be retained.
+    id: 'discard_airbnb_not_available_blocks',
+    apply: (rawEvent, channel) => {
+      if (shouldDiscardAirbnbNotAvailableImportEvent(rawEvent, channel)) {
+        return null;
+      }
+      return rawEvent;
+    }
+  }
+];
 
 function applyImportRulesForEvent(rawEvent, channel, listing) {
   let event = { ...rawEvent };
@@ -11485,6 +11508,33 @@ app.post('/api/admin/system/reset-schema', requireAdminAuth, async (req, res) =>
     });
   } finally {
     dbClient.release();
+  }
+});
+
+// POST /api/admin/system/purge-airbnb-not-available — one-time purge of imported Airbnb "Not Available" rows
+app.post('/api/admin/system/purge-airbnb-not-available', requireAdminAuth, async (_req, res) => {
+  try {
+    const purgeResult = await pool.query(
+      `
+        DELETE FROM listing_calendar_events lce
+        USING listing_channels lc
+        WHERE lce.channel_id = lc.id
+          AND lce.event_type = 'remote'
+          AND LOWER(TRIM(COALESCE(lc.label, ''))) LIKE '%airbnb%'
+          AND LOWER(COALESCE(lce.ics_summary, '')) LIKE '%not available%'
+      `
+    );
+
+    return res.json({
+      message: 'Airbnb Not Available purge completed.',
+      deletedCount: Number(purgeResult.rowCount || 0)
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      error: 'Failed to purge Airbnb Not Available events.',
+      details: err && err.message ? String(err.message) : ''
+    });
   }
 });
 
