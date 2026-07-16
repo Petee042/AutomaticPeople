@@ -9341,7 +9341,7 @@ function isAirbnbReservedSummary(summary) {
 
 function isAirbnbNotAvailableSummary(summary) {
   const text = normaliseSummary(summary);
-  return text === '(not available)' || text === 'not available';
+  return /\bnot\s+available\b/i.test(text);
 }
 
 // ── Persistent event cache ───────────────────────────────────────────────────
@@ -9442,7 +9442,12 @@ async function refreshEventsForListing(listingId) {
         return;
       }
 
-      const events = dedupeBlockEvents(fetched.events.map((event) => {
+      const events = dedupeBlockEvents(fetched.events
+        // TEMPORARY BUSINESS RULE (2026-07):
+        // Drop Airbnb "Not Available" feed entries from legacy cache path as well.
+        // Remove when/if Airbnb feed semantics change and these should be retained.
+        .filter((event) => !shouldDiscardAirbnbNotAvailableImportEvent(event, { label: feed.label }))
+        .map((event) => {
         const metadata = parseIcsMetadataFromDescription(event.description);
         const metadataType = String(metadata.type || '').trim().toLowerCase();
         const hasTypeMetadata = metadataType === 'reservation' || metadataType === 'block';
@@ -11525,9 +11530,51 @@ app.post('/api/admin/system/purge-airbnb-not-available', requireAdminAuth, async
       `
     );
 
+    const legacyRows = await pool.query(
+      `
+        SELECT listing_id, feed_id, label, events_json
+        FROM cached_events
+        WHERE LOWER(TRIM(COALESCE(label, ''))) LIKE '%airbnb%'
+          AND error_text IS NULL
+      `
+    );
+
+    let cachedRowsUpdated = 0;
+    let cachedEventsDeleted = 0;
+
+    for (const row of legacyRows.rows || []) {
+      let parsedEvents = [];
+      try {
+        const next = JSON.parse(String(row.events_json || '[]'));
+        parsedEvents = Array.isArray(next) ? next : [];
+      } catch {
+        parsedEvents = [];
+      }
+
+      const filteredEvents = parsedEvents.filter((event) => !shouldDiscardAirbnbNotAvailableImportEvent(event, { label: row.label }));
+      if (filteredEvents.length === parsedEvents.length) {
+        continue;
+      }
+
+      cachedRowsUpdated += 1;
+      cachedEventsDeleted += (parsedEvents.length - filteredEvents.length);
+      await pool.query(
+        `
+          UPDATE cached_events
+          SET events_json = $3,
+              fetched_at = NOW()
+          WHERE listing_id = $1 AND feed_id = $2
+        `,
+        [row.listing_id, row.feed_id, JSON.stringify(filteredEvents)]
+      );
+    }
+
     return res.json({
       message: 'Airbnb Not Available purge completed.',
-      deletedCount: Number(purgeResult.rowCount || 0)
+      deletedCount: Number(purgeResult.rowCount || 0) + cachedEventsDeleted,
+      deletedFromListingCalendarEvents: Number(purgeResult.rowCount || 0),
+      deletedFromCachedEvents: Number(cachedEventsDeleted || 0),
+      cachedRowsUpdated: Number(cachedRowsUpdated || 0)
     });
   } catch (err) {
     console.error(err);
