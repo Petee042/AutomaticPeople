@@ -6265,6 +6265,53 @@ async function getPrivateReservationsForScope(req) {
   return result.rows.map((row) => mapPrivateReservationRow(row));
 }
 
+async function getManualReservationsForScope(req) {
+  const listings = await getListingsForUser(req.accessContext.effectiveOwnerUserId);
+  const allowedListingIds = listings
+    .filter((listing) => isListingAllowedByScope(req, listing))
+    .map((listing) => Number(listing.id));
+
+  if (!allowedListingIds.length) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT ra.id,
+             ra.reservation_identifier,
+             ra.listing_id,
+             l.name AS listing_name,
+             ra.reservation_checkin_date::text AS reservation_checkin_date,
+             ra.reservation_checkout_date::text AS reservation_checkout_date,
+             ra.notes,
+             ra.status,
+             ra.created_at,
+             ra.updated_at
+      FROM reservation_activity ra
+      JOIN listings l ON l.id = ra.listing_id
+      WHERE ra.client_account_id = $1
+        AND ra.listing_id = ANY($2::int[])
+        AND ra.payment_method = 'Manual Reservation'
+        AND ra.status <> ALL($3::text[])
+      ORDER BY ra.reservation_checkin_date ASC, ra.id DESC
+    `,
+    [req.accessContext.activeClientAccountId, allowedListingIds, ['cancelled', 'expired']]
+  );
+
+  return result.rows.map((row) => ({
+    id: Number(row.id || 0),
+    reservationIdentifier: String(row.reservation_identifier || '').trim(),
+    listingId: Number(row.listing_id || 0),
+    listingName: String(row.listing_name || '').trim(),
+    checkinDate: String(row.reservation_checkin_date || '').slice(0, 10),
+    checkoutDate: String(row.reservation_checkout_date || '').slice(0, 10),
+    notes: String(row.notes || '').trim(),
+    status: String(row.status || '').trim(),
+    createdAt: row.created_at ? String(row.created_at) : '',
+    updatedAt: row.updated_at ? String(row.updated_at) : ''
+  }));
+}
+
 async function getDirectReservationEventsForListing(listingId) {
   const id = Number(listingId);
   if (!Number.isInteger(id) || id <= 0) {
@@ -9341,7 +9388,7 @@ function isAirbnbReservedSummary(summary) {
 
 function isAirbnbNotAvailableSummary(summary) {
   const text = normaliseSummary(summary);
-  return text === '(not available)' || text === 'not available';
+  return /\bnot\s+available\b/i.test(text);
 }
 
 // ── Persistent event cache ───────────────────────────────────────────────────
@@ -9442,7 +9489,12 @@ async function refreshEventsForListing(listingId) {
         return;
       }
 
-      const events = dedupeBlockEvents(fetched.events.map((event) => {
+      const events = dedupeBlockEvents(fetched.events
+        // TEMPORARY BUSINESS RULE (2026-07):
+        // Drop Airbnb "Not Available" feed entries from legacy cache path as well.
+        // Remove when/if Airbnb feed semantics change and these should be retained.
+        .filter((event) => !shouldDiscardAirbnbNotAvailableImportEvent(event, { label: feed.label }))
+        .map((event) => {
         const metadata = parseIcsMetadataFromDescription(event.description);
         const metadataType = String(metadata.type || '').trim().toLowerCase();
         const hasTypeMetadata = metadataType === 'reservation' || metadataType === 'block';
@@ -9890,7 +9942,30 @@ async function findExportingChannelLabel(importUrl) {
 
 // Import rules pipeline — structured for future channel-specific rules.
 // Each rule: { id: string, apply(rawEvent, channel, listing) => event | null }
-const CALENDAR_IMPORT_RULES = [];
+function shouldDiscardAirbnbNotAvailableImportEvent(rawEvent, channel) {
+  const sourceLabel = String(channel && channel.label || '').trim();
+  if (!isAirbnbSource(sourceLabel)) {
+    return false;
+  }
+
+  const summary = String(rawEvent && rawEvent.title || '').trim();
+  return isAirbnbNotAvailableSummary(summary);
+}
+
+const CALENDAR_IMPORT_RULES = [
+  {
+    // TEMPORARY BUSINESS RULE (2026-07):
+    // Airbnb sends synthetic "Not Available" blocks that should not be imported or re-propagated.
+    // Remove this rule when/if Airbnb feed semantics change and these events should be retained.
+    id: 'discard_airbnb_not_available_blocks',
+    apply: (rawEvent, channel) => {
+      if (shouldDiscardAirbnbNotAvailableImportEvent(rawEvent, channel)) {
+        return null;
+      }
+      return rawEvent;
+    }
+  }
+];
 
 function applyImportRulesForEvent(rawEvent, channel, listing) {
   let event = { ...rawEvent };
@@ -11485,6 +11560,137 @@ app.post('/api/admin/system/reset-schema', requireAdminAuth, async (req, res) =>
     });
   } finally {
     dbClient.release();
+  }
+});
+
+// POST /api/admin/system/purge-airbnb-not-available — one-time purge of imported Airbnb "Not Available" rows
+async function getAirbnbNotAvailableDiagnostics() {
+  const listingEventsResult = await pool.query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM listing_calendar_events lce
+      JOIN listing_channels lc ON lc.id = lce.channel_id
+      WHERE lce.event_type = 'remote'
+        AND LOWER(TRIM(COALESCE(lc.label, ''))) LIKE '%airbnb%'
+        AND LOWER(COALESCE(lce.ics_summary, '')) LIKE '%not available%'
+    `
+  );
+
+  const legacyRows = await pool.query(
+    `
+      SELECT events_json
+      FROM cached_events
+      WHERE LOWER(TRIM(COALESCE(label, ''))) LIKE '%airbnb%'
+        AND error_text IS NULL
+    `
+  );
+
+  let cachedEventsCount = 0;
+  let cachedRowsWithMatches = 0;
+  for (const row of legacyRows.rows || []) {
+    let parsedEvents = [];
+    try {
+      const next = JSON.parse(String(row.events_json || '[]'));
+      parsedEvents = Array.isArray(next) ? next : [];
+    } catch {
+      parsedEvents = [];
+    }
+
+    const matchCount = parsedEvents.filter((event) => isAirbnbNotAvailableSummary(event && event.title)).length;
+    if (matchCount > 0) {
+      cachedRowsWithMatches += 1;
+      cachedEventsCount += matchCount;
+    }
+  }
+
+  return {
+    listingCalendarEventsCount: Number(listingEventsResult.rows[0] && listingEventsResult.rows[0].count || 0),
+    cachedEventsCount,
+    cachedRowsWithMatches
+  };
+}
+
+app.get('/api/admin/system/purge-airbnb-not-available/counts', requireAdminAuth, async (_req, res) => {
+  try {
+    const diagnostics = await getAirbnbNotAvailableDiagnostics();
+    return res.json({ diagnostics });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load Airbnb Not Available diagnostics.' });
+  }
+});
+
+app.post('/api/admin/system/purge-airbnb-not-available', requireAdminAuth, async (_req, res) => {
+  try {
+    const diagnosticsBefore = await getAirbnbNotAvailableDiagnostics();
+
+    const purgeResult = await pool.query(
+      `
+        DELETE FROM listing_calendar_events lce
+        USING listing_channels lc
+        WHERE lce.channel_id = lc.id
+          AND lce.event_type = 'remote'
+          AND LOWER(TRIM(COALESCE(lc.label, ''))) LIKE '%airbnb%'
+          AND LOWER(COALESCE(lce.ics_summary, '')) LIKE '%not available%'
+      `
+    );
+
+    const legacyRows = await pool.query(
+      `
+        SELECT listing_id, feed_id, label, events_json
+        FROM cached_events
+        WHERE LOWER(TRIM(COALESCE(label, ''))) LIKE '%airbnb%'
+          AND error_text IS NULL
+      `
+    );
+
+    let cachedRowsUpdated = 0;
+    let cachedEventsDeleted = 0;
+
+    for (const row of legacyRows.rows || []) {
+      let parsedEvents = [];
+      try {
+        const next = JSON.parse(String(row.events_json || '[]'));
+        parsedEvents = Array.isArray(next) ? next : [];
+      } catch {
+        parsedEvents = [];
+      }
+
+      const filteredEvents = parsedEvents.filter((event) => !shouldDiscardAirbnbNotAvailableImportEvent(event, { label: row.label }));
+      if (filteredEvents.length === parsedEvents.length) {
+        continue;
+      }
+
+      cachedRowsUpdated += 1;
+      cachedEventsDeleted += (parsedEvents.length - filteredEvents.length);
+      await pool.query(
+        `
+          UPDATE cached_events
+          SET events_json = $3,
+              fetched_at = NOW()
+          WHERE listing_id = $1 AND feed_id = $2
+        `,
+        [row.listing_id, row.feed_id, JSON.stringify(filteredEvents)]
+      );
+    }
+
+    const diagnosticsAfter = await getAirbnbNotAvailableDiagnostics();
+
+    return res.json({
+      message: 'Airbnb Not Available purge completed.',
+      deletedCount: Number(purgeResult.rowCount || 0) + cachedEventsDeleted,
+      deletedFromListingCalendarEvents: Number(purgeResult.rowCount || 0),
+      deletedFromCachedEvents: Number(cachedEventsDeleted || 0),
+      cachedRowsUpdated: Number(cachedRowsUpdated || 0),
+      diagnosticsBefore,
+      diagnosticsAfter
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      error: 'Failed to purge Airbnb Not Available events.',
+      details: err && err.message ? String(err.message) : ''
+    });
   }
 });
 
@@ -15184,21 +15390,43 @@ function parseCachedEventsRows(cachedRows) {
 }
 
 async function getIcsEventsForListing(listingId) {
-  let cached = await getCachedEventsForListing(listingId);
-  let events = parseCachedEventsRows(cached);
+  // Primary source: new per-event calendar store populated by the channel sync cron.
+  let events = await getStoredCalendarEventsForListing(listingId);
 
+  // Backwards-compatible fallback for legacy listings not yet represented in listing_calendar_events.
   if (events.length === 0) {
-    try {
-      await refreshEventsForListing(listingId);
-      cached = await getCachedEventsForListing(listingId);
-      events = parseCachedEventsRows(cached);
-    } catch (refreshErr) {
-      console.error('ICS refresh fallback failed for listing', listingId, refreshErr && refreshErr.message);
+    let cached = await getCachedEventsForListing(listingId);
+    events = parseCachedEventsRows(cached);
+
+    if (events.length === 0) {
+      try {
+        await refreshEventsForListing(listingId);
+        cached = await getCachedEventsForListing(listingId);
+        events = parseCachedEventsRows(cached);
+      } catch (refreshErr) {
+        console.error('ICS refresh fallback failed for listing', listingId, refreshErr && refreshErr.message);
+      }
     }
   }
 
   const directEvents = await getDirectReservationEventsForListing(listingId);
-  return [...events, ...directEvents].sort((a, b) => {
+  const knownReservationActivityIds = new Set(
+    (events || [])
+      .map((event) => Number(event && event.reservationActivityId || 0))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  );
+  const merged = [
+    ...(events || []),
+    ...directEvents.filter((event) => {
+      const reservationActivityId = Number(event && event.reservationActivityId || 0);
+      if (Number.isInteger(reservationActivityId) && reservationActivityId > 0) {
+        return !knownReservationActivityIds.has(reservationActivityId);
+      }
+      return true;
+    })
+  ];
+
+  return merged.sort((a, b) => {
     const aTime = a.start ? new Date(a.start).getTime() : 0;
     const bTime = b.start ? new Date(b.start).getTime() : 0;
     return aTime - bTime;
@@ -15902,6 +16130,167 @@ app.delete('/api/event-log', requireScopedRole('Manager'), async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to clear event log.' });
+  }
+});
+
+// GET /api/manual-reservations — list manual reservation blocks for Ops
+app.get('/api/manual-reservations', requireScopedRole('Manager'), async (req, res) => {
+  try {
+    const reservations = await getManualReservationsForScope(req);
+    return res.json({ reservations });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load manual reservations.' });
+  }
+});
+
+// POST /api/manual-reservations — create a manual reservation block that propagates to channel exports
+app.post('/api/manual-reservations', requireScopedRole('Manager'), async (req, res) => {
+  const listingId = Number(req.body.listingId || 0);
+  const checkinDate = normaliseDateKey(req.body.startDate || req.body.checkinDate);
+  const checkoutDate = normaliseDateKey(req.body.endDate || req.body.checkoutDate);
+  const notes = String(req.body.notes || '').trim().slice(0, 1000);
+
+  if (!Number.isInteger(listingId) || listingId <= 0) {
+    return res.status(400).json({ error: 'Valid listing is required.' });
+  }
+  if (!checkinDate || !checkoutDate || checkoutDate <= checkinDate) {
+    return res.status(400).json({ error: 'Start and end dates are required (end must be after start).' });
+  }
+  if (!notes) {
+    return res.status(400).json({ error: 'A note is required.' });
+  }
+
+  try {
+    const listing = await getListingByIdForUser(listingId, req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Listing not found.' });
+    }
+
+    const reservationIdentifier = await generateGlobalReservationIdentifier('manual_reservation');
+    const reservation = await createReservationActivityForListing({
+      userId: req.accessContext.effectiveOwnerUserId,
+      clientAccountId: req.accessContext.activeClientAccountId,
+      listingId,
+      reservationIdentifier,
+      checkinDate,
+      checkoutDate,
+      firstName: 'Manual',
+      familyName: 'Reservation',
+      emailAddress: 'manual-reservation@automaticpeople.local',
+      guestCount: 1,
+      reservationAmount: 0,
+      holdUntilAt: null,
+      paymentMethod: 'Manual Reservation',
+      paymentDueAt: null,
+      status: 'confirmed',
+      notes
+    });
+
+    await writeUserEventLog({
+      actorUserId: Number(req.session.userId || 0),
+      clientAccountId: Number(req.accessContext.activeClientAccountId || 0),
+      eventType: 'manual_reservation_created',
+      description: 'Manual reservation created - ' + String(reservationIdentifier || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        reservationId: Number(reservation && reservation.id || 0),
+        reservationIdentifier: String(reservationIdentifier || ''),
+        listingId: Number(listingId || 0),
+        listingName: String(listing && listing.name || ''),
+        checkinDate,
+        checkoutDate,
+        notes
+      }
+    });
+
+    return res.status(201).json({
+      message: 'Manual reservation created.',
+      reservation: {
+        id: Number(reservation && reservation.id || 0),
+        reservationIdentifier: String(reservation && reservation.reservation_identifier || reservationIdentifier || ''),
+        listingId,
+        listingName: String(listing && listing.name || ''),
+        checkinDate,
+        checkoutDate,
+        notes,
+        createdAt: reservation && reservation.created_at ? String(reservation.created_at) : new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to create manual reservation.' });
+  }
+});
+
+// DELETE /api/manual-reservations/:reservationId — delete one manual reservation block
+app.delete('/api/manual-reservations/:reservationId', requireScopedRole('Manager'), async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Invalid reservation id.' });
+  }
+
+  try {
+    const reservationResult = await pool.query(
+      `
+        SELECT ra.id,
+               ra.reservation_identifier,
+               ra.listing_id,
+               l.name AS listing_name,
+               ra.reservation_checkin_date::text AS reservation_checkin_date,
+               ra.reservation_checkout_date::text AS reservation_checkout_date,
+               ra.notes
+        FROM reservation_activity ra
+        JOIN listings l ON l.id = ra.listing_id
+        WHERE ra.id = $1
+          AND ra.client_account_id = $2
+          AND ra.payment_method = 'Manual Reservation'
+        LIMIT 1
+      `,
+      [reservationId, req.accessContext.activeClientAccountId]
+    );
+    const reservation = reservationResult.rows[0] || null;
+    if (!reservation) {
+      return res.status(404).json({ error: 'Manual reservation not found.' });
+    }
+
+    const listing = await getListingByIdForUser(Number(reservation.listing_id), req.accessContext.effectiveOwnerUserId);
+    if (!listing || !isListingAllowedByScope(req, listing)) {
+      return res.status(404).json({ error: 'Manual reservation not found.' });
+    }
+
+    await pool.query('DELETE FROM reservation_activity WHERE id = $1', [reservationId]);
+
+    await deleteBookedInChangesForUser(
+      req.accessContext.effectiveOwnerUserId,
+      [{
+        listingId: Number(reservation.listing_id),
+        reservationCheckinDate: String(reservation.reservation_checkin_date || '').slice(0, 10),
+        reservationCheckoutDate: String(reservation.reservation_checkout_date || '').slice(0, 10)
+      }]
+    );
+
+    await writeUserEventLog({
+      actorUserId: Number(req.session.userId || 0),
+      clientAccountId: Number(req.accessContext.activeClientAccountId || 0),
+      eventType: 'manual_reservation_deleted',
+      description: 'Manual reservation deleted - ' + String(reservation.reservation_identifier || ''),
+      detail: {
+        dtg: new Date().toISOString(),
+        reservationId,
+        reservationIdentifier: String(reservation.reservation_identifier || ''),
+        listingId: Number(reservation.listing_id || 0),
+        listingName: String(reservation.listing_name || ''),
+        checkinDate: String(reservation.reservation_checkin_date || '').slice(0, 10),
+        checkoutDate: String(reservation.reservation_checkout_date || '').slice(0, 10),
+        notes: String(reservation.notes || '')
+      }
+    });
+
+    return res.json({ message: 'Manual reservation deleted.' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to delete manual reservation.' });
   }
 });
 

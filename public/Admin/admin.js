@@ -21,6 +21,33 @@ function setAdminAuthenticated(isAuthenticated) {
   }
 }
 
+function setPurgeAirbnbNotAvailableStats(text) {
+  const el = document.getElementById('purgeAirbnbNotAvailableStats');
+  if (!el) {
+    return;
+  }
+  el.textContent = String(text || '').trim();
+}
+
+function formatPurgeDiagnosticsLabel(diag) {
+  const listingCount = Number(diag && diag.listingCalendarEventsCount || 0);
+  const cachedCount = Number(diag && diag.cachedEventsCount || 0);
+  const cachedRows = Number(diag && diag.cachedRowsWithMatches || 0);
+  return 'Listing calendar matches: ' + String(listingCount)
+    + ' | Legacy cache matches: ' + String(cachedCount)
+    + ' (rows: ' + String(cachedRows) + ')';
+}
+
+async function refreshPurgeAirbnbNotAvailableStats() {
+  const res = await fetch('/api/admin/system/purge-airbnb-not-available/counts');
+  if (!res.ok) {
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  const diag = data && data.diagnostics ? data.diagnostics : null;
+  setPurgeAirbnbNotAvailableStats(formatPurgeDiagnosticsLabel(diag));
+}
+
 function renderUsers(users) {
   adminUsers = users || [];
   const deleteSelect = document.getElementById('adminUserSelect');
@@ -120,6 +147,7 @@ async function loadUsers() {
   }
 
   renderUsers(data.users || []);
+  await refreshPurgeAirbnbNotAvailableStats();
 }
 
 (async () => {
@@ -229,6 +257,59 @@ document.getElementById('deleteUserBtn').addEventListener('click', async () => {
 document.getElementById('adminLogoutBtn').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   window.location.href = '/Admin/index.html';
+});
+
+document.getElementById('purgeAirbnbNotAvailableBtn').addEventListener('click', async () => {
+  const confirmed = window.confirm(
+    'This will permanently delete imported Airbnb events with the summary "Not Available" across all listing calendars. Continue?'
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const typed = window.prompt('Type PURGE AIRBNB NOT AVAILABLE to confirm this action.');
+  if (typed !== 'PURGE AIRBNB NOT AVAILABLE') {
+    setAdminMessage('Purge cancelled. Confirmation text did not match.', true);
+    return;
+  }
+
+  const button = document.getElementById('purgeAirbnbNotAvailableBtn');
+  button.disabled = true;
+  setAdminMessage('Purging Airbnb Not Available events. Please wait...', false);
+
+  try {
+    const res = await fetch('/api/admin/system/purge-airbnb-not-available', {
+      method: 'POST'
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      setAdminAuthenticated(false);
+      setAdminMessage('Admin login required.', true);
+      return;
+    }
+    if (!res.ok) {
+      const detailText = data && data.details ? (' Details: ' + String(data.details)) : '';
+      setAdminMessage((data.error || 'Failed to purge Airbnb Not Available events.') + detailText, true);
+      return;
+    }
+
+    const deletedCount = Number(data && data.deletedCount || 0);
+    const before = data && data.diagnosticsBefore ? data.diagnosticsBefore : null;
+    const after = data && data.diagnosticsAfter ? data.diagnosticsAfter : null;
+    if (before || after) {
+      const beforeLabel = formatPurgeDiagnosticsLabel(before);
+      const afterLabel = formatPurgeDiagnosticsLabel(after);
+      setPurgeAirbnbNotAvailableStats('Before purge: ' + beforeLabel + ' | After purge: ' + afterLabel);
+    } else {
+      await refreshPurgeAirbnbNotAvailableStats();
+    }
+    setAdminMessage('Airbnb Not Available purge complete. Deleted ' + String(deletedCount) + ' event(s).', false);
+  } catch (err) {
+    setAdminMessage(err.message || 'Network error executing purge.', true);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 document.getElementById('resetSchemaBtn').addEventListener('click', async () => {
