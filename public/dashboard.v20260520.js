@@ -4278,7 +4278,6 @@ async function fetchListings() {
   renderListings(currentListings);
   renderCleaningListings(currentListings);
   renderOpsCalendarListingSelector(currentListings);
-  renderManualReservationListingOptions(currentListings);
   await refreshOpsCalendar(false);
   await refreshDashboardActivity();
 }
@@ -4380,7 +4379,6 @@ async function loadDashboardData() {
   await fetchFeedSources();
   await fetchCleaners();
   await fetchListings();
-  await fetchManualReservations();
   await fetchSharedResources();
   await fetchTeamMembers();
   await fetchManagerAssignments();
@@ -6391,6 +6389,7 @@ async function loadAllReservations() {
   const HOST_SUBMENU_ITEMS = [
     { label: 'Private Reservations', href: '/dashboard-private-reservations.html' },
     { label: 'Facility Reservations', href: '/dashboard-facility-reservations.html' },
+    { label: 'Manual Reservations', href: '/dashboard-manual-reservations.html' },
     { label: 'View Logging', href: '/dashboard-view-logging.html' }
   ];
 

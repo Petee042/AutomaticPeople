@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manual Reservations - AutomaticPeople</title>
+  <link rel="stylesheet" href="styles.v20260520.css" />
+</head>
+<body class="logged-page">
+  <div class="sticky-page-chrome">
+    <div class="sticky-page-inner">
+      <nav class="dashboard-tab-bar page-top-nav" aria-label="Main navigation">
+        <a class="dashboard-tab-link active" href="/dashboard.html?tab=panel-dashboard">Dashboard</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-config">Config</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-ops">Ops</a>
+        <a class="dashboard-tab-link" href="/dashboard.html?tab=panel-account">Account</a>
+      </nav>
+      <p id="stickyMessageBar" class="sticky-message-bar" aria-live="polite">No current messages.</p>
+    </div>
+  </div>
+
+  <main class="dashboard">
+    <div class="card-container wide">
+      <div class="feed-actions back-row" style="margin-bottom: 0.7rem;">
+        <button id="backBtn" type="button" class="back-arrow-control" aria-label="Back"></button>
+      </div>
+
+      <p class="dashboard-breadcrumb" aria-label="Breadcrumb">Dashboard / Manual Reservations</p>
+
+      <h2>Manual Reservations</h2>
+      <p id="manualReservationsPageMessage" class="message"></p>
+
+      <section class="listing-form-section">
+        <h3>Create Manual Reservation</h3>
+        <form id="manualReservationForm" novalidate>
+          <div class="calendar-source-row">
+            <label for="manualReservationListing">Listing</label>
+            <select id="manualReservationListing" required>
+              <option value="">Select listing</option>
+            </select>
+          </div>
+          <div class="cleaning-actions-row">
+            <label for="manualReservationStartDate">Start date</label>
+            <input id="manualReservationStartDate" type="date" required />
+            <label for="manualReservationEndDate">End date</label>
+            <input id="manualReservationEndDate" type="date" required />
+          </div>
+          <div class="calendar-source-row">
+            <label for="manualReservationNotes">Notes</label>
+            <textarea id="manualReservationNotes" rows="3" maxlength="1000" placeholder="Reason for this manual reservation" required></textarea>
+          </div>
+          <button id="createManualReservationBtn" type="submit" class="btn primary">Create Manual Reservation</button>
+        </form>
+      </section>
+
+      <section class="listing-form-section">
+        <p id="manualReservationsMessage" class="message"></p>
+        <div class="table-wrap">
+          <table class="calendar-table" aria-label="Manual reservations">
+            <thead>
+              <tr>
+                <th>Listing</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Notes</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="manualReservationsTableBody">
+              <tr><td colspan="6">Loading manual reservations...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="sticky-layout.js"></script>
+  <script src="dashboard-manual-reservations.js"></script>
+</body>
+</html>

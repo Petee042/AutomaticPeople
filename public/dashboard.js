@@ -3170,7 +3170,6 @@ async function fetchListings() {
   renderListings(currentListings);
   renderCleaningListings(currentListings);
   renderOpsCalendarListingSelector(currentListings);
-  renderManualReservationListingOptions(currentListings);
   await refreshOpsCalendar(false);
 }
 
@@ -3271,7 +3270,6 @@ async function loadDashboardData() {
   await fetchFeedSources();
   await fetchCleaners();
   await fetchListings();
-  await fetchManualReservations();
   await fetchSharedResources();
   await fetchTeamMembers();
   await fetchManagerAssignments();
