@@ -5463,7 +5463,7 @@ async function getSharedResourceByIdPublic(resourceId) {
               free_of_charge_message_html, cash_on_site_message_html, bank_transfer_message_html, online_payment_message_html,
               charge_basis, daily_charge_mode, daily_rate, hourly_charge_mode, hourly_rate, hourly_rates_json,
                     created_at, updated_at,
-              property_id, listing_id
+              property_id, listing_id, client_account_id
       FROM shared_resources
       WHERE id = $1
       LIMIT 1
@@ -5499,7 +5499,8 @@ async function getSharedResourceByIdPublic(resourceId) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     property_id: row.property_id,
-    listing_id: row.listing_id
+    listing_id: row.listing_id,
+    client_account_id: row.client_account_id
   };
 }
 
