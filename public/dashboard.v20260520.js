@@ -5396,27 +5396,52 @@ function getGuestAccommodationReservationAction(reservation) {
   return null;
 }
 
+function getGuestFacilityReservationAction(reservation) {
+  const statusValue = normalizeGuestReservationValue(reservation && reservation.status);
+  const isAwaitingOnline = statusValue === 'awaiting online confirmation' || statusValue === 'awaiting_online_confirmation';
+  const isAwaitingBankTransfer = statusValue === 'awaiting bank transfer' || statusValue === 'awaiting_bank_transfer';
+
+  if (isAwaitingOnline) {
+    return {
+      key: 'pay-now-facility',
+      label: 'Make Payment'
+    };
+  }
+
+  if (isAwaitingBankTransfer) {
+    return {
+      key: 'notify-payment-facility',
+      label: 'Confirm Transfer'
+    };
+  }
+
+  return null;
+}
+
 function consumeGuestReservationReturnMessageFromUrl() {
   let paymentState = '';
   let reservationId = '';
   let sessionId = '';
+  let reservationType = '';
   try {
     const params = new URLSearchParams(window.location.search);
     paymentState = String(params.get('payment') || '').trim().toLowerCase();
     reservationId = String(params.get('reservationId') || '').trim();
     sessionId = String(params.get('session_id') || params.get('sessionId') || '').trim();
+    reservationType = String(params.get('reservationType') || '').trim().toLowerCase();
     if (!paymentState) {
-      return { paymentState: '', reservationId: '', sessionId: '' };
+      return { paymentState: '', reservationId: '', sessionId: '', reservationType: '' };
     }
 
     params.delete('payment');
     params.delete('reservationId');
     params.delete('session_id');
     params.delete('sessionId');
+    params.delete('reservationType');
     const nextQuery = params.toString();
     window.history.replaceState({}, '', window.location.pathname + (nextQuery ? ('?' + nextQuery) : ''));
   } catch {
-    return { paymentState: '', reservationId: '', sessionId: '' };
+    return { paymentState: '', reservationId: '', sessionId: '', reservationType: '' };
   }
 
   if (paymentState === 'success') {
@@ -5424,22 +5449,25 @@ function consumeGuestReservationReturnMessageFromUrl() {
       'Payment completed for reservation' + (reservationId ? (' #' + reservationId) : '') + '. Status will refresh once payment is confirmed.',
       false
     );
-    return { paymentState, reservationId, sessionId };
+    return { paymentState, reservationId, sessionId, reservationType };
   }
 
   if (paymentState === 'cancelled') {
     setGuestReservationsMessage('Payment was cancelled. You can try again using Pay Now.', true);
   }
 
-  return { paymentState, reservationId, sessionId };
+  return { paymentState, reservationId, sessionId, reservationType };
 }
 
-async function reconcileGuestReservationPaymentIfNeeded(paymentState, reservationId, sessionId) {
+async function reconcileGuestReservationPaymentIfNeeded(paymentState, reservationId, sessionId, reservationType) {
   if (paymentState !== 'success' || !reservationId) {
     return null;
   }
 
-  const syncUrl = '/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/sync-payment'
+  const syncEndpoint = reservationType === 'facility'
+    ? '/api/guest/dashboard/facility-reservations/' + encodeURIComponent(String(reservationId)) + '/sync-payment'
+    : '/api/guest/dashboard/reservations/' + encodeURIComponent(String(reservationId)) + '/sync-payment';
+  const syncUrl = syncEndpoint
     + (sessionId ? ('?sessionId=' + encodeURIComponent(String(sessionId))) : '');
 
   const response = await fetch(syncUrl, {
@@ -5531,6 +5559,78 @@ async function notifyGuestReservationBankTransfer(reservationId, button) {
   }
 }
 
+async function startGuestFacilityOnlinePayment(reservationId, button) {
+  if (button) {
+    button.disabled = true;
+  }
+  setGuestReservationsMessage('Starting secure payment...', false);
+
+  try {
+    const response = await fetch('/api/guest/dashboard/facility-reservations/' + encodeURIComponent(String(reservationId)) + '/pay-now', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to start facility reservation payment.');
+    }
+
+    if (!data || !data.checkoutUrl) {
+      throw new Error('Stripe checkout URL is missing.');
+    }
+
+    window.location.href = String(data.checkoutUrl);
+  } catch (err) {
+    setGuestReservationsMessage(err.message || 'Failed to start facility reservation payment.', true);
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
+async function notifyGuestFacilityBankTransfer(reservationId, button) {
+  if (button) {
+    button.disabled = true;
+  }
+  setGuestReservationsMessage('Sending payment notification...', false);
+
+  try {
+    const response = await fetch('/api/guest/dashboard/facility-reservations/' + encodeURIComponent(String(reservationId)) + '/notify-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to notify transfer.');
+    }
+
+    setGuestReservationsMessage(data.message || 'Transfer confirmation sent.', false);
+    await loadGuestReservations();
+  } catch (err) {
+    setGuestReservationsMessage(err.message || 'Failed to notify transfer.', true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
 async function loadGuestReservations() {
   const accommodationBody = document.getElementById('guestAccommodationTableBody');
   const facilityBody = document.getElementById('guestFacilityTableBody');
@@ -5538,14 +5638,14 @@ async function loadGuestReservations() {
     return;
   }
 
-  let returnMessage = { paymentState: '', reservationId: '', sessionId: '' };
+  let returnMessage = { paymentState: '', reservationId: '', sessionId: '', reservationType: '' };
   if (!hasAppliedGuestReservationReturnMessage) {
-    returnMessage = consumeGuestReservationReturnMessageFromUrl() || { paymentState: '', reservationId: '', sessionId: '' };
+    returnMessage = consumeGuestReservationReturnMessageFromUrl() || { paymentState: '', reservationId: '', sessionId: '', reservationType: '' };
     hasAppliedGuestReservationReturnMessage = true;
   }
 
   accommodationBody.innerHTML = '<tr><td colspan="9">Loading accommodation reservations...</td></tr>';
-  facilityBody.innerHTML = '<tr><td colspan="6">Loading facility reservations...</td></tr>';
+  facilityBody.innerHTML = '<tr><td colspan="7">Loading facility reservations...</td></tr>';
   if (!String(document.getElementById('guestReservationsMessage') && document.getElementById('guestReservationsMessage').textContent || '').trim()) {
     setGuestReservationsMessage('', false);
   }
@@ -5553,7 +5653,7 @@ async function loadGuestReservations() {
   try {
     if (returnMessage.paymentState === 'success' && returnMessage.reservationId) {
       setGuestReservationsMessage('Reconciling payment status...', false);
-      const syncResult = await reconcileGuestReservationPaymentIfNeeded(returnMessage.paymentState, returnMessage.reservationId, returnMessage.sessionId);
+      const syncResult = await reconcileGuestReservationPaymentIfNeeded(returnMessage.paymentState, returnMessage.reservationId, returnMessage.sessionId, returnMessage.reservationType);
       const reservationStatus = String(syncResult && syncResult.reservation && syncResult.reservation.status || '').trim().toLowerCase();
       if (reservationStatus === 'confirmed') {
         setGuestReservationsMessage(
@@ -5649,11 +5749,33 @@ async function loadGuestReservations() {
     }
 
     if (!facilities.length) {
-      facilityBody.innerHTML = '<tr><td colspan="6">No facility reservations found.</td></tr>';
+      facilityBody.innerHTML = '<tr><td colspan="7">No facility reservations found.</td></tr>';
     } else {
       facilityBody.innerHTML = '';
       facilities.forEach((reservation) => {
         const tr = document.createElement('tr');
+
+        const actionCell = document.createElement('td');
+        const action = getGuestFacilityReservationAction(reservation);
+        if (action) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn secondary inline-btn guest-reservation-action-btn';
+          button.textContent = action.label;
+          if (action.key === 'pay-now-facility') {
+            button.addEventListener('click', () => {
+              startGuestFacilityOnlinePayment(reservation.id, button);
+            });
+          }
+          if (action.key === 'notify-payment-facility') {
+            button.addEventListener('click', () => {
+              notifyGuestFacilityBankTransfer(reservation.id, button);
+            });
+          }
+          actionCell.appendChild(button);
+        } else {
+          actionCell.textContent = '—';
+        }
 
         const resourceCell = document.createElement('td');
         resourceCell.textContent = reservation.resourceName || '—';
@@ -5673,6 +5795,7 @@ async function loadGuestReservations() {
         const statusCell = document.createElement('td');
         statusCell.textContent = reservation.status || '—';
 
+        tr.appendChild(actionCell);
         tr.appendChild(resourceCell);
         tr.appendChild(startCell);
         tr.appendChild(endCell);
@@ -5684,7 +5807,7 @@ async function loadGuestReservations() {
     }
   } catch (err) {
     accommodationBody.innerHTML = '<tr><td colspan="9">Failed to load accommodation reservations.</td></tr>';
-    facilityBody.innerHTML = '<tr><td colspan="6">Failed to load facility reservations.</td></tr>';
+    facilityBody.innerHTML = '<tr><td colspan="7">Failed to load facility reservations.</td></tr>';
     setGuestReservationsMessage(err.message || 'Failed to load guest reservations.', true);
   }
 }

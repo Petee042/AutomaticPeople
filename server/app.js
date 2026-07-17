@@ -2816,6 +2816,50 @@ async function getGuestDashboardReservationByIdForUser(reservationId, userId, no
   return result.rows[0] || null;
 }
 
+async function getGuestDashboardFacilityReservationByIdForUser(reservationId, userId, normalizedEmail) {
+  const id = Number(reservationId || 0);
+  const uid = Number(userId || 0);
+  const guestEmail = String(normalizedEmail || '').trim().toLowerCase();
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(uid) || uid <= 0) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT srr.id,
+             srr.user_id AS host_user_id,
+             srr.client_account_id,
+             srr.shared_resource_id,
+             sr.short_description AS resource_name,
+             srr.reservation_identifier,
+             srr.requested_start_at,
+             srr.requested_end_at,
+             srr.first_name,
+             srr.family_name,
+             srr.email_address,
+             srr.telephone,
+             srr.reservation_amount,
+             srr.status,
+             srr.payment_status,
+             srr.payment_intent_id,
+             srr.payment_currency,
+             srr.payment_amount_minor,
+             srr.created_at
+      FROM shared_resource_reservations srr
+      LEFT JOIN shared_resources sr ON sr.id = srr.shared_resource_id
+      WHERE srr.id = $1
+        AND (
+          srr.user_id = $2
+          OR ($3 <> '' AND LOWER(TRIM(COALESCE(srr.email_address, ''))) = $3)
+        )
+      LIMIT 1
+    `,
+    [id, uid, guestEmail]
+  );
+
+  return result.rows[0] || null;
+}
+
 function normaliseSharedResourceReservationEmail(value) {
   const email = String(value || '').trim().toLowerCase();
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
@@ -3732,18 +3776,34 @@ async function sendSiteUserValidationEmail(req, user) {
   });
 }
 
-async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource) {
+function buildLoginUrlWithPrefilledEmail(req, emailAddress) {
+  const normalizedEmail = normaliseOptionalEmail(emailAddress);
+  const baseUrl = getPreferredAppBaseUrl(req);
+  if (!baseUrl) {
+    return '';
+  }
+
+  const root = baseUrl.replace(/\/$/, '');
+  if (!normalizedEmail) {
+    return root + '/index.html';
+  }
+  return root + '/index.html?email=' + encodeURIComponent(normalizedEmail);
+}
+
+async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource, options) {
+  const opts = options && typeof options === 'object' ? options : {};
   const emailAddress = normaliseOptionalEmail(reservation && reservation.email_address);
   if (!emailAddress) {
     return { ok: false, error: 'No guest email address found for reservation notification.' };
   }
 
-  const baseUrl = getPreferredAppBaseUrl(req);
-  if (!baseUrl) {
+  const loginUrl = String(opts.loginUrl || buildLoginUrlWithPrefilledEmail(req, emailAddress) || '').trim();
+  if (!loginUrl) {
     return { ok: false, error: 'Cannot build login URL because APP_BASE_URL is not configured.' };
   }
 
-  const loginUrl = baseUrl.replace(/\/$/, '') + '/index.html';
+  const passwordSetupExpected = opts.passwordSetupExpected === true;
+  const passwordSetupUrl = String(opts.passwordSetupUrl || '').trim();
   const guestName = [String(reservation.first_name || '').trim(), String(reservation.family_name || '').trim()]
     .filter(Boolean)
     .join(' ')
@@ -3766,11 +3826,12 @@ async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation,
     '',
     'Please log in to your AutomaticPeople account to make payment: ',
     loginUrl,
-    '',
-    'If you are new to the site, please follow the link in the separate email you receive to set up your password before you can complete payment.',
+    passwordSetupExpected ? '' : null,
+    passwordSetupExpected ? 'If you are new to the site, please follow the separate password setup email first, then return here to make payment.' : null,
+    (passwordSetupExpected && passwordSetupUrl) ? 'Password setup link: ' + passwordSetupUrl : null,
     '',
     'If you did not expect this email, you can ignore it.'
-  ];
+  ].filter((line) => line !== null);
 
   const subject = 'Reservation created - online payment required';
   return sendAppEmail({
@@ -3813,6 +3874,21 @@ async function sendPasswordResetEmail(req, user) {
     subject,
     textBody
   });
+}
+
+function buildPasswordResetUrl(req, user) {
+  if (!user || !user.email) {
+    return '';
+  }
+  const baseUrl = getPreferredAppBaseUrl(req);
+  if (!baseUrl) {
+    return '';
+  }
+  const token = buildPasswordResetToken(user);
+  if (!token) {
+    return '';
+  }
+  return baseUrl + '/reset-password.html?token=' + encodeURIComponent(token);
 }
 
 async function getCleanersForUser(userId) {
@@ -12687,6 +12763,308 @@ app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requ
   }
 });
 
+// POST /api/guest/dashboard/facility-reservations/:reservationId/pay-now — start Stripe checkout for guest facility online payment
+app.post('/api/guest/dashboard/facility-reservations/:reservationId/pay-now', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    const statusValue = String(reservation.status || '').trim().toLowerCase();
+    if (statusValue !== 'awaiting online confirmation' && statusValue !== 'awaiting_online_confirmation') {
+      return res.status(409).json({ error: 'This facility reservation is not awaiting online payment.' });
+    }
+
+    const amount = Number(reservation.reservation_amount || 0);
+    const amountMinor = toMinorUnits(amount);
+    if (!Number.isInteger(amountMinor) || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Reservation amount is invalid for online payment.' });
+    }
+
+    const hostUser = await getUserById(Number(reservation.host_user_id || 0));
+    if (!hostUser || !hostUser.stripe_account_id) {
+      return res.status(400).json({ error: 'Host Stripe account is not connected yet.' });
+    }
+    if (!isOnlinePaymentAvailableForHostUser(hostUser)) {
+      return res.status(400).json({ error: 'Host online payment is currently unavailable.' });
+    }
+
+    const stripeAccount = await stripeClient.accounts.retrieve(String(hostUser.stripe_account_id));
+    await setUserStripeConnectState(hostUser.id, {
+      stripe_account_id: stripeAccount.id,
+      stripe_onboarding_complete: stripeAccount.details_submitted === true,
+      stripe_charges_enabled: stripeAccount.charges_enabled === true,
+      stripe_payouts_enabled: stripeAccount.payouts_enabled === true
+    });
+    if (stripeAccount.charges_enabled !== true || stripeAccount.payouts_enabled !== true) {
+      return res.status(400).json({ error: 'Host Stripe account onboarding is incomplete.' });
+    }
+
+    const baseUrl = getPreferredAppBaseUrl(req);
+    if (!baseUrl) {
+      return res.status(400).json({ error: 'Unable to determine application URL for payment redirect.' });
+    }
+
+    const successUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=success&reservationType=facility&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const cancelUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=cancelled&reservationType=facility&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const resourceName = String(reservation.resource_name || '').trim() || ('Facility #' + String(reservation.shared_resource_id || ''));
+
+    const checkoutSession = await stripeClient.checkout.sessions.create({
+      mode: 'payment',
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      customer_email: normaliseOptionalEmail(guestUser.email) || normaliseOptionalEmail(reservation.email_address) || undefined,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'gbp',
+            unit_amount: amountMinor,
+            product_data: {
+              name: 'Facility Reservation ' + String(reservation.reservation_identifier || '').trim(),
+              description: resourceName
+            }
+          }
+        }
+      ],
+      payment_intent_data: {
+        transfer_data: {
+          destination: String(stripeAccount.id)
+        },
+        metadata: {
+          reservation_type: 'guest_dashboard_shared_resource_reservation',
+          shared_resource_reservation_id: String(reservation.id),
+          reservation_identifier: String(reservation.reservation_identifier || ''),
+          client_account_id: String(reservation.client_account_id || ''),
+          host_user_id: String(reservation.host_user_id || '')
+        }
+      },
+      metadata: {
+        reservation_type: 'guest_dashboard_shared_resource_reservation',
+        shared_resource_reservation_id: String(reservation.id),
+        reservation_identifier: String(reservation.reservation_identifier || '')
+      }
+    });
+
+    const checkoutPaymentIntentId = checkoutSession && checkoutSession.payment_intent
+      ? String(checkoutSession.payment_intent)
+      : '';
+    if (checkoutPaymentIntentId) {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        paymentProvider: 'stripe',
+        paymentIntentId: checkoutPaymentIntentId,
+        paymentStatus: 'requires_action',
+        paymentCurrency: 'gbp',
+        paymentAmountMinor: amountMinor,
+        paymentLastError: '',
+        status: 'Awaiting Online Confirmation'
+      });
+    }
+
+    if (!checkoutSession || !checkoutSession.url) {
+      return res.status(500).json({ error: 'Failed to start Stripe checkout session.' });
+    }
+
+    return res.json({
+      checkoutUrl: String(checkoutSession.url),
+      reservationId: Number(reservation.id),
+      reservationIdentifier: String(reservation.reservation_identifier || ''),
+      checkoutSessionId: String(checkoutSession.id || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to start facility reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/facility-reservations/:reservationId/sync-payment — reconcile facility payment after returning from Stripe
+app.post('/api/guest/dashboard/facility-reservations/:reservationId/sync-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    let reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    const providedSessionId = String(req.body && req.body.sessionId || req.query && req.query.sessionId || req.query && req.query.session_id || '').trim();
+    let paymentIntentId = String(reservation.payment_intent_id || '').trim();
+    if (!paymentIntentId && providedSessionId) {
+      const checkoutSession = await stripeClient.checkout.sessions.retrieve(providedSessionId);
+      if (checkoutSession && String(checkoutSession.payment_intent || '').trim()) {
+        paymentIntentId = String(checkoutSession.payment_intent).trim();
+        await updateSharedResourceReservationPaymentById(reservation.id, {
+          paymentProvider: 'stripe',
+          paymentIntentId,
+          paymentStatus: String(checkoutSession.payment_status || '').toLowerCase() || 'requires_action',
+          paymentCurrency: 'gbp',
+          paymentAmountMinor: toMinorUnits(reservation.reservation_amount),
+          paymentLastError: '',
+          status: 'Awaiting Online Confirmation'
+        });
+      }
+    }
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: 'No payment intent is linked to this reservation yet. Please wait a moment and try again.' });
+    }
+
+    const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+    const commonUpdate = {
+      paymentProvider: 'stripe',
+      paymentIntentId,
+      paymentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
+      paymentCurrency: String(paymentIntent && paymentIntent.currency || 'gbp').toLowerCase(),
+      paymentAmountMinor: Number.isInteger(paymentIntent && paymentIntent.amount_received)
+        ? paymentIntent.amount_received
+        : (Number.isInteger(paymentIntent && paymentIntent.amount) ? paymentIntent.amount : null),
+      paymentLastError: paymentIntent && paymentIntent.last_payment_error && paymentIntent.last_payment_error.message
+        ? String(paymentIntent.last_payment_error.message)
+        : ''
+    };
+
+    const paymentStatus = String(commonUpdate.paymentStatus || '').trim();
+    if (paymentStatus === 'succeeded') {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        ...commonUpdate,
+        paidAt: new Date().toISOString(),
+        status: 'Confirmed'
+      });
+    } else if (paymentStatus === 'requires_payment_method' || paymentStatus === 'requires_action' || paymentStatus === 'processing') {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        ...commonUpdate,
+        status: 'Awaiting Online Confirmation'
+      });
+    } else if (paymentStatus === 'canceled') {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        ...commonUpdate,
+        status: 'Declined'
+      });
+    } else {
+      await updateSharedResourceReservationPaymentById(reservation.id, commonUpdate);
+    }
+
+    reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    return res.json({
+      reconciled: true,
+      paymentIntentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
+      reservation: reservation || null
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to reconcile facility reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/facility-reservations/:reservationId/notify-payment — guest confirms bank transfer payment for facility reservation
+app.post('/api/guest/dashboard/facility-reservations/:reservationId/notify-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    const statusValue = String(reservation.status || '').trim().toLowerCase();
+    if (statusValue !== 'awaiting bank transfer' && statusValue !== 'awaiting_bank_transfer') {
+      return res.status(409).json({ error: 'This facility reservation is not awaiting bank transfer.' });
+    }
+
+    const ownerUser = await getUserById(Number(reservation.host_user_id || 0));
+    const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
+    if (!ownerEmail) {
+      return res.status(400).json({ error: 'Host contact email is not available for this reservation.' });
+    }
+
+    const notifyEmailResult = await sendAppEmail({
+      to: ownerEmail,
+      subject: 'Guest Bank Transfer Payment Notification',
+      textBody: [
+        'A guest has notified that bank transfer payment has been made for a facility reservation.',
+        '',
+        'Reservation ID: ' + String(reservation.reservation_identifier || ''),
+        'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+        'Guest email: ' + String(reservation.email_address || ''),
+        'Facility: ' + String(reservation.resource_name || ''),
+        'Start: ' + String(reservation.requested_start_at || ''),
+        'End: ' + String(reservation.requested_end_at || ''),
+        'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+        'Notified at: ' + new Date().toISOString(),
+        '',
+        'Please verify bank receipt and confirm payment in the dashboard.'
+      ].join('\n')
+    });
+
+    if (!notifyEmailResult.ok) {
+      return res.status(502).json({ error: notifyEmailResult.error || 'Failed to send payment notification email.' });
+    }
+
+    return res.json({
+      notified: true,
+      message: 'Transfer confirmation sent to host.'
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to send transfer confirmation.' });
+  }
+});
+
 // GET /api/guest/dashboard/profile — current user profile for guest dashboard account section
 app.get('/api/guest/dashboard/profile', requireAuth, async (req, res) => {
   try {
@@ -14060,6 +14438,40 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
       status: selectedOption.status
     });
 
+    let guestLoginUrl = '';
+    let passwordSetupExpected = false;
+    let passwordSetupUrl = '';
+    if (paymentOption === 'bank_transfer' || paymentOption === 'online_payment') {
+      const existingGuestSiteUser = await findUserByEmail(emailAddress);
+      const guestSiteUser = await ensureGuestSiteUserForClientAccount({
+        clientAccountId: Number(resource.client_account_id || 0),
+        ownerUserId: Number(resource.user_id || 0),
+        firstName,
+        familyName,
+        email: emailAddress,
+        sourceType: 'shared_resource_reservation',
+        sourceId: String(reservation.id)
+      });
+
+      guestLoginUrl = buildLoginUrlWithPrefilledEmail(req, emailAddress);
+
+      if (!existingGuestSiteUser && guestSiteUser) {
+        passwordSetupExpected = true;
+        let passwordSetupUser = guestSiteUser;
+        if (!passwordSetupUser.password_hash) {
+          passwordSetupUser = await findUserByEmail(emailAddress);
+        }
+
+        passwordSetupUrl = buildPasswordResetUrl(req, passwordSetupUser);
+
+        const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
+        if (!setupEmailResult.ok) {
+          emailDeliveryWarning = true;
+          emailDeliveryReason = String(setupEmailResult.error || '').trim();
+        }
+      }
+    }
+
     if (paymentOption === 'cash_on_site' || paymentOption === 'bank_transfer') {
       const subject = String(resource.short_description || '').trim() || 'Facility Reservation';
       const fullDescriptionText = htmlToPlainText(resource.full_description_html);
@@ -14109,6 +14521,21 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         lines.push('IBAN: ' + bankIban);
         lines.push('BIC: ' + bankBic);
         lines.push('Account type: ' + bankType);
+
+        if (guestLoginUrl) {
+          lines.push('');
+          lines.push('Sign in to AutomaticPeople using your email address to view this reservation and confirm transfer:');
+          lines.push(guestLoginUrl);
+          if (passwordSetupExpected) {
+            lines.push('');
+            lines.push('If you are new to AutomaticPeople, please set your password first:');
+            if (passwordSetupUrl) {
+              lines.push(passwordSetupUrl);
+            } else {
+              lines.push('Use the separate password setup email, then return to sign in.');
+            }
+          }
+        }
       }
 
       const emailResult = await sendAppEmail({
@@ -14122,7 +14549,11 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         emailDeliveryReason = String(emailResult.error || '').trim();
       }
     } else if (paymentOption === 'online_payment') {
-      const onlineEmailResult = await sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource);
+      const onlineEmailResult = await sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource, {
+        loginUrl: guestLoginUrl,
+        passwordSetupExpected,
+        passwordSetupUrl
+      });
       if (!onlineEmailResult.ok) {
         emailDeliveryWarning = true;
         emailDeliveryReason = String(onlineEmailResult.error || '').trim();

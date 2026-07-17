@@ -10,6 +10,7 @@ const priceParam = params.get('price') || '';
 const checkinDateParam = params.get('checkinDate') || '';
 const checkoutDateParam = params.get('checkoutDate') || '';
 const spacesRequiredParam = params.get('spacesRequired') || '';
+const hostPaymentRequestFlow = String(params.get('hostPaymentRequest') || '').trim() === '1';
 
 let currentResource = null;
 let reservationGuestOptions = [];
@@ -267,6 +268,12 @@ async function loadPublicResource() {
     await loadPublicResource();
     renderReservationDetails();
     await loadReservationGuestOptions();
+    if (hostPaymentRequestFlow) {
+      const submitBtn = document.getElementById('submitReservationBtn');
+      if (submitBtn) {
+        submitBtn.textContent = 'Request Payment';
+      }
+    }
   } catch (err) {
     setReservationMessage(err.message || 'Failed to initialize reservation page.', true);
   }

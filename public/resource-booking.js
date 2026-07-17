@@ -8,6 +8,11 @@ let availabilityConfirmed = false;
 let currentCalculatedRate = null;
 let facilityLandingPage = null;
 
+function isHostManagedFacilityReservationFlow() {
+  const path = String(window.location.pathname || '').toLowerCase();
+  return path.endsWith('/dashboard-facility-reservations.html') || path.endsWith('dashboard-facility-reservations.html');
+}
+
 function setBookingMessage(text, isError) {
   const el = document.getElementById('resourceBookingMessage');
   if (!el) {
@@ -465,7 +470,8 @@ function getReservationPageUrl(paymentKey) {
     + (checkinDate ? '&checkinDate=' + encodeURIComponent(checkinDate) : '')
     + (checkoutDate ? '&checkoutDate=' + encodeURIComponent(checkoutDate) : '')
     + (spacesRequired ? '&spacesRequired=' + encodeURIComponent(spacesRequired) : '')
-    + (price !== '' ? '&price=' + encodeURIComponent(price) : '');
+    + (price !== '' ? '&price=' + encodeURIComponent(price) : '')
+    + (isHostManagedFacilityReservationFlow() ? '&hostPaymentRequest=1' : '');
 }
 
 function initialiseBookingRequestForm() {
@@ -513,6 +519,9 @@ function initialiseBookingRequestForm() {
 
   const reserveBtn = document.getElementById('reserveBtn');
   if (reserveBtn) {
+    if (isHostManagedFacilityReservationFlow()) {
+      reserveBtn.textContent = 'Request Payment';
+    }
     reserveBtn.addEventListener('click', async () => {
       const resourceId = getSelectedResourceId();
       if (!resourceId) {
