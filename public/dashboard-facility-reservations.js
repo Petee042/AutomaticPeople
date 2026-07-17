@@ -29,6 +29,29 @@ function createSharedReservationActionButton(symbol, title, className, onClick) 
   return button;
 }
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
+function formatDisplayDateTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '-';
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear()) + ' '
+    + padDisplayNumber(parsed.getHours()) + ':' + padDisplayNumber(parsed.getMinutes());
+}
+
 async function deleteSharedReservation(resourceId, reservationId, button) {
   const parsedResourceId = Number(resourceId || 0);
   const parsedReservationId = Number(reservationId || 0);
@@ -170,10 +193,10 @@ async function loadAllReservations() {
       guestCell.textContent = ((row.first_name || '') + ' ' + (row.family_name || '')).trim() || row.email_address || '-';
 
       const startCell = document.createElement('td');
-      startCell.textContent = row.requested_start_at ? new Date(row.requested_start_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '-';
+      startCell.textContent = formatDisplayDateTime(row.requested_start_at);
 
       const endCell = document.createElement('td');
-      endCell.textContent = row.requested_end_at ? new Date(row.requested_end_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '-';
+      endCell.textContent = formatDisplayDateTime(row.requested_end_at);
 
       const statusCell = document.createElement('td');
       statusCell.textContent = row.status || '-';

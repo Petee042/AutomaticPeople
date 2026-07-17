@@ -16,11 +16,22 @@ let currentResource = null;
 let reservationGuestOptions = [];
 let facilityLandingPage = null;
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
 function formatReservationDateTime(isoStr) {
   if (!isoStr) return '-';
   const d = new Date(isoStr);
   if (isNaN(d.getTime())) return isoStr;
-  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return DISPLAY_WEEKDAY_SHORT[d.getDay()] + ' '
+    + padDisplayNumber(d.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[d.getMonth()] + ' '
+    + String(d.getFullYear()) + ' '
+    + padDisplayNumber(d.getHours()) + ':' + padDisplayNumber(d.getMinutes());
 }
 
 function renderReservationDetails() {

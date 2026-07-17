@@ -3002,16 +3002,31 @@ function formatDateTimeForMessage(value) {
   if (Number.isNaN(date.getTime())) {
     return String(value || '');
   }
-  return date.toLocaleString('en-GB', {
-    weekday: 'long',
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'UTC'
-  }).replace(',', '');
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getMonth()];
+  const year = String(date.getFullYear());
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return weekday + ' ' + day + ' ' + month + ' ' + year + ' ' + hour + ':' + minute;
+}
+
+function formatDateForMessage(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(raw + 'T00:00:00')
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getMonth()];
+  const year = String(date.getFullYear());
+  return weekday + ' ' + day + ' ' + month + ' ' + year;
 }
 
 function htmlToPlainText(value) {
@@ -12741,10 +12756,10 @@ app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requ
         'Guest email: ' + String(reservation.email_address || ''),
         'Property: ' + String(reservation.property_name || ''),
         'Listing: ' + String(reservation.listing_name || ''),
-        'Arrival date: ' + String(reservation.reservation_checkin_date || ''),
-        'Departure date: ' + String(reservation.reservation_checkout_date || ''),
+        'Arrival date: ' + formatDateForMessage(reservation.reservation_checkin_date),
+        'Departure date: ' + formatDateForMessage(reservation.reservation_checkout_date),
         'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
-        'Notified at: ' + new Date().toISOString(),
+        'Notified at: ' + formatDateTimeForMessage(new Date().toISOString()),
         '',
         'Please verify bank receipt and confirm payment in the dashboard.'
       ].join('\n')
@@ -13043,10 +13058,10 @@ app.post('/api/guest/dashboard/facility-reservations/:reservationId/notify-payme
         'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
         'Guest email: ' + String(reservation.email_address || ''),
         'Facility: ' + String(reservation.resource_name || ''),
-        'Start: ' + String(reservation.requested_start_at || ''),
-        'End: ' + String(reservation.requested_end_at || ''),
+        'Start: ' + formatDateTimeForMessage(reservation.requested_start_at),
+        'End: ' + formatDateTimeForMessage(reservation.requested_end_at),
         'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
-        'Notified at: ' + new Date().toISOString(),
+        'Notified at: ' + formatDateTimeForMessage(new Date().toISOString()),
         '',
         'Please verify bank receipt and confirm payment in the dashboard.'
       ].join('\n')

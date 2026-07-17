@@ -474,7 +474,43 @@ function getReservationPageUrl(paymentKey) {
     + (isHostManagedFacilityReservationFlow() ? '&hostPaymentRequest=1' : '');
 }
 
+function applyDefaultFacilityReservationDateTime() {
+  const now = new Date();
+  const today = now.getFullYear()
+    + '-' + String(now.getMonth() + 1).padStart(2, '0')
+    + '-' + String(now.getDate()).padStart(2, '0');
+  const tomorrowDate = new Date(now.getTime());
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = tomorrowDate.getFullYear()
+    + '-' + String(tomorrowDate.getMonth() + 1).padStart(2, '0')
+    + '-' + String(tomorrowDate.getDate()).padStart(2, '0');
+
+  const defaults = {
+    guestCheckinDate: today,
+    guestCheckoutDate: tomorrow,
+    requestedBookingStartDate: today,
+    requestedBookingEndDate: tomorrow,
+    guestCheckinHour: '12',
+    guestCheckinMinute: '00',
+    guestCheckoutHour: '12',
+    guestCheckoutMinute: '00',
+    requestedBookingStartHour: '12',
+    requestedBookingStartMinute: '00',
+    requestedBookingEndHour: '12',
+    requestedBookingEndMinute: '00'
+  };
+
+  Object.keys(defaults).forEach((id) => {
+    const input = document.getElementById(id);
+    if (input) {
+      input.value = defaults[id];
+    }
+  });
+}
+
 function initialiseBookingRequestForm() {
+  applyDefaultFacilityReservationDateTime();
+
   syncMirroredField('guestCheckinDate', 'requestedBookingStartDate');
   syncMirroredField('guestCheckinHour', 'requestedBookingStartHour');
   syncMirroredField('guestCheckinMinute', 'requestedBookingStartMinute');

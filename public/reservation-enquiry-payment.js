@@ -9,6 +9,13 @@ let reservationEnquiryStripeElements = null;
 let reservationEnquiryStripePaymentElement = null;
 let reservationEnquiryPreparedPayment = null;
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
 function setReservationEnquiryPaymentMessage(text, isError) {
   const el = document.getElementById('reservationEnquiryPaymentMessage');
   if (!el) {
@@ -31,17 +38,14 @@ function formatReservationEnquiryPaymentDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     return text || '-';
   }
-  const dt = new Date(text + 'T00:00:00Z');
+  const dt = new Date(text + 'T00:00:00');
   if (!Number.isFinite(dt.getTime())) {
     return text;
   }
-  return dt.toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC'
-  });
+  return DISPLAY_WEEKDAY_SHORT[dt.getDay()] + ' '
+    + padDisplayNumber(dt.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[dt.getMonth()] + ' '
+    + String(dt.getFullYear());
 }
 
 function loadReservationEnquirySelection() {

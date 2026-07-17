@@ -260,6 +260,46 @@ function setManualReservationsMessage(text, isError) {
   el.className = text ? 'message ' + (isError ? 'error' : 'success') : 'message';
 }
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
+function formatDisplayDateOnly(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(raw + 'T00:00:00')
+    : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear());
+}
+
+function formatDisplayDateTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear()) + ' '
+    + padDisplayNumber(parsed.getHours()) + ':' + padDisplayNumber(parsed.getMinutes());
+}
+
 function formatDateTimeForMessage(value) {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -269,7 +309,7 @@ function formatDateTimeForMessage(value) {
   if (Number.isNaN(parsed.getTime())) {
     return raw;
   }
-  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return formatDisplayDateTime(parsed.toISOString()) || raw;
 }
 
 function setStripeConnectStatus(text, isError) {
@@ -2801,12 +2841,7 @@ function mergeScheduleRowsWithSnapshot(rows, snapshot) {
 
 function formatDisplayDate(dateKey) {
   if (!dateKey) return '';
-  const utcDate = utcDateFromKey(dateKey);
-  const dayName = WEEKDAY_NAMES[utcDate.getUTCDay()].substring(0, 3);
-  const day = utcDate.getUTCDate();
-  const monthName = MONTH_SHORT_NAMES[utcDate.getUTCMonth()];
-  const year = String(utcDate.getUTCFullYear()).slice(-2);
-  return dayName + ' ' + day + ' ' + monthName + ' ' + year;
+  return formatDisplayDateOnly(dateKey);
 }
 
 function renderSchedulePreviewTable(rows, errors, notifications) {
@@ -2973,8 +3008,7 @@ function opsCalendarSetFetchedAt(isoString) {
     el.textContent = '';
     return;
   }
-  const date = new Date(isoString);
-  el.textContent = 'Last updated: ' + date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  el.textContent = 'Last updated: ' + (formatDisplayDateTime(isoString) || isoString);
 }
 
 function renderOpsCalendarListingSelector(listings) {
@@ -3188,9 +3222,7 @@ function formatDateKeyForTooltip(key) {
   if (!key) {
     return 'Unknown';
   }
-  const date = utcDateFromKey(key);
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return date.getUTCDate() + ' ' + monthNames[date.getUTCMonth()] + ' ' + date.getUTCFullYear();
+  return formatDisplayDateOnly(key) || 'Unknown';
 }
 
 function getOpsEventRange(event) {
@@ -5034,11 +5066,7 @@ function formatPrivateReservationArrival(dateValue) {
   if (!value) {
     return '—';
   }
-  const parsed = new Date(value + 'T00:00:00');
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleDateString([], { dateStyle: 'medium' });
+  return formatDisplayDateOnly(value) || value;
 }
 
 function formatPrivateReservationAmount(amount) {
@@ -5360,7 +5388,7 @@ function formatGuestDateTime(value) {
   if (Number.isNaN(parsed.getTime())) {
     return raw;
   }
-  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return formatDisplayDateTime(parsed.toISOString()) || raw;
 }
 
 function formatGuestAmount(amount) {
@@ -6455,10 +6483,10 @@ async function loadAllReservations() {
       guestCell.textContent = ((row.first_name || '') + ' ' + (row.family_name || '')).trim() || row.email_address || '—';
 
       const startCell = document.createElement('td');
-      startCell.textContent = row.requested_start_at ? new Date(row.requested_start_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—';
+      startCell.textContent = row.requested_start_at ? (formatDisplayDateTime(row.requested_start_at) || '—') : '—';
 
       const endCell = document.createElement('td');
-      endCell.textContent = row.requested_end_at ? new Date(row.requested_end_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '—';
+      endCell.textContent = row.requested_end_at ? (formatDisplayDateTime(row.requested_end_at) || '—') : '—';
 
       const statusCell = document.createElement('td');
       statusCell.textContent = row.status || '—';
@@ -6626,9 +6654,7 @@ function setEventLogMessage(text, isError) {
 
 function formatEventLogTime(isoString) {
   if (!isoString) return '—';
-  const d = new Date(isoString);
-  if (Number.isNaN(d.getTime())) return isoString;
-  return d.toLocaleDateString([], { dateStyle: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatDisplayDateTime(isoString) || isoString;
 }
 
 function formatEventLogType(entryType) {
