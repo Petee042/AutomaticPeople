@@ -8,6 +8,7 @@
  */
 
 const { createWorkflowHarness, parseOptions } = require('../helpers/workflow-test-harness');
+const { captureTurnstileToken } = require('../helpers/browser-assisted-turnstile');
 
 const TEST_META = {
   id: 'workflow-02-live-onboarding-client-staff-guest',
@@ -39,7 +40,8 @@ function parseFlowArgs(argv) {
   const args = Array.isArray(argv) ? argv.slice() : [];
   const flow = {
     turnstileHelperMode: '',
-    skipReset: false
+    skipReset: false,
+    browserAssistedTurnstile: false
   };
 
   for (let idx = 0; idx < args.length; idx += 1) {
@@ -53,6 +55,10 @@ function parseFlowArgs(argv) {
     }
     if (token === '--skip-reset') {
       flow.skipReset = true;
+      continue;
+    }
+    if (token === '--browser-assisted-turnstile') {
+      flow.browserAssistedTurnstile = true;
       continue;
     }
   }
@@ -236,9 +242,11 @@ async function run(argv) {
   const turnstileHelperMode = flowArgs.turnstileHelperMode || configuredHelperMode || 'require-token';
   const helperUsesExistingClient = turnstileHelperMode === 'existing-client';
 
-  const turnstileToken = helperUsesExistingClient
+  let turnstileToken = helperUsesExistingClient
     ? String(process.env.TEST_TURNSTILE_TOKEN || '').trim()
-    : requiredEnv('TEST_TURNSTILE_TOKEN');
+    : options.dryRun
+      ? String(process.env.TEST_TURNSTILE_TOKEN || '').trim()
+      : requiredEnv('TEST_TURNSTILE_TOKEN');
 
   const clientEmail = optionalEnv('TEST_FLOW_CLIENT_EMAIL', 'client1@alphainbound.automaticpeople.com').toLowerCase();
   const staffEmail = optionalEnv('TEST_FLOW_STAFF_EMAIL', 'staff1@alphainbound.automaticpeople.com').toLowerCase();
@@ -253,6 +261,14 @@ async function run(argv) {
   const skipReset = flowArgs.skipReset
     || toBool(process.env.TEST_FLOW_SKIP_RESET, false)
     || helperUsesExistingClient;
+  const browserAssistEnabled = flowArgs.browserAssistedTurnstile || toBool(process.env.TEST_BROWSER_ASSISTED_TURNSTILE, false);
+
+  if (!helperUsesExistingClient && !options.dryRun && browserAssistEnabled && !turnstileToken) {
+    turnstileToken = await captureTurnstileToken({
+      baseUrl,
+      timeoutMs: Math.max(Number(options.timeoutMs || 0), 5 * 60 * 1000)
+    });
+  }
 
   if (helperUsesExistingClient && !options.dryRun) {
     harness.assert(existingClientEmail, 'TEST_FLOW_EXISTING_CLIENT_EMAIL is required for turnstile helper mode existing-client.');

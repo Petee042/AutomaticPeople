@@ -20,6 +20,7 @@ This folder contains workflow-level test scripts that can be run on demand.
    - `npm run test:workflow:auth -- --dry-run`
    - `npm run test:workflow:all -- --base-url http://localhost:3000`
    - `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
+   - `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`
 
 ## Environment Variables
 
@@ -39,6 +40,12 @@ Live onboarding flow additionally requires:
 - `TEST_ADMIN_PASSWORD`
 - `TEST_TURNSTILE_TOKEN`
 - Optional: `TEST_FLOW_CLIENT_PASSWORD`, `TEST_FLOW_STAFF_PASSWORD`, `TEST_FLOW_GUEST_PASSWORD`
+
+Browser-assisted Turnstile helper:
+
+- If you do not have a fresh `TEST_TURNSTILE_TOKEN`, use `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`
+- This opens a visible browser with the sign-up page, waits for you to solve the Turnstile check manually, captures the response token, closes the helper browser, and then continues the workflow run.
+- The helper captures the token for the current run only. It does not persist the token because Turnstile tokens are short-lived.
 
 Turnstile helper mode for reruns:
 
