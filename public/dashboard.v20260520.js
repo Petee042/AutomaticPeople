@@ -4606,6 +4606,7 @@ async function sendScheduleEmailToRecipient(toEmail) {
     setConsolidatedIcsUrl(meData.consolidated_ics_token || '');
     currentUserEmail = String(meData.email || '').toLowerCase();
     loadDashboardState();
+    renderSiteUserId(meData);
     renderStripeConnectStatus(meData.stripeConnect || null);
 
     await fetchAccessContext();
@@ -5045,6 +5046,30 @@ function setBankDetailsMessage(text, isError) {
   if (!el) return;
   el.textContent = text || '';
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setSiteUserIdMessage(text, isError) {
+  const el = document.getElementById('siteUserIdMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'hint' + (isError ? ' error' : '');
+}
+
+function renderSiteUserId(profile) {
+  const input = document.getElementById('siteUserIdDisplay');
+  const copyBtn = document.getElementById('copySiteUserIdBtn');
+  const siteUserId = String(profile && profile.siteUserId || '').trim();
+  if (input) {
+    input.value = siteUserId;
+  }
+  if (copyBtn) {
+    copyBtn.disabled = !siteUserId;
+  }
+  if (siteUserId) {
+    setSiteUserIdMessage('This ID helps support and routing identify your account.', false);
+  } else {
+    setSiteUserIdMessage('Site User ID is not available yet.', true);
+  }
 }
 
 function setDashboardSettingsMessage(text, isError) {
@@ -6352,6 +6377,29 @@ if (_copyConsolidatedIcsUrlBtn) _copyConsolidatedIcsUrlBtn.addEventListener('cli
     }, 1800);
   } catch {
     setMessage('Could not copy consolidated calendar URL.', true);
+  }
+});
+
+const _copySiteUserIdBtn = document.getElementById('copySiteUserIdBtn');
+if (_copySiteUserIdBtn) _copySiteUserIdBtn.addEventListener('click', async () => {
+  const input = document.getElementById('siteUserIdDisplay');
+  const value = String(input && input.value || '').trim();
+  if (!value) {
+    setSiteUserIdMessage('No Site User ID available to copy.', true);
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(value);
+    const btn = document.getElementById('copySiteUserIdBtn');
+    const originalText = btn.textContent;
+    btn.textContent = 'Copied!';
+    setSiteUserIdMessage('Site User ID copied.', false);
+    setTimeout(() => {
+      btn.textContent = originalText;
+    }, 1800);
+  } catch {
+    setSiteUserIdMessage('Could not copy Site User ID.', true);
   }
 });
 

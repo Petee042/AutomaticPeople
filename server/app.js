@@ -11,7 +11,7 @@ const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
 const { AsyncLocalStorage } = require('async_hooks');
-const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
+const { randomUUID, randomBytes, createHmac, timingSafeEqual } = require('crypto');
 const { Pool } = require('pg');
 const { registerWorkflow2PrivateReservationRoutes } = require('./routes/workflow2.private.routes');
 const { registerWorkflow3FacilityBookingRoutes } = require('./routes/workflow3.facility-booking.routes');
@@ -62,6 +62,9 @@ const LANDING_PAGE_WORKFLOW_4 = 'workflow4_reservation_enquiry_public';
 const LANDING_PAGE_WORKFLOW_5 = 'workflow5_facility_enquiry_public';
 const stripeClient = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 const requestContextStore = new AsyncLocalStorage();
+const SITE_USER_ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+const SITE_USER_ID_CORE_LENGTH = 12;
+const SITE_USER_ID_CHECK_LENGTH = 2;
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is required. Legacy local JSON storage mode has been removed.');
@@ -494,6 +497,18 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS dashboard_highlight_empty_nights_days INTEGER NOT NULL DEFAULT 7
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS site_user_code TEXT
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_site_user_code_unique
+    ON users (site_user_code)
+    WHERE site_user_code IS NOT NULL
+      AND site_user_code <> ''
   `);
 
   await pool.query(`
@@ -1831,6 +1846,8 @@ async function initializeUserStore() {
         updated_at = CURRENT_TIMESTAMP
   `);
 
+  await ensureAllUsersHaveSiteUserCodes();
+
   if (IS_ALPHA) {
     await runOneTimeSiteDataResetIfNeeded();
   }
@@ -1855,20 +1872,22 @@ async function createUser(username, email, passwordHash, profile = {}) {
   const familyName = String(profile.familyName || '').trim();
   const countryOfResidence = normaliseCountryOfResidence(profile.country) || '';
   const isValidated = profile.isValidated === true;
+  const siteUserCode = await generateUniqueSiteUserCode();
 
   
 
   const result = await pool.query(
     `
-      INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated, site_user_code)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id, username, email, password_hash,
                 first_name, family_name, country_of_residence, is_validated,
+                site_user_code,
                 stripe_account_id, stripe_onboarding_complete,
                 stripe_charges_enabled, stripe_payouts_enabled,
                 created_at
     `,
-    [username, email, passwordHash, firstName, familyName, countryOfResidence, isValidated]
+    [username, email, passwordHash, firstName, familyName, countryOfResidence, isValidated, siteUserCode]
   );
 
   await ensureDefaultPropertyForUser(result.rows[0].id);
@@ -1882,6 +1901,146 @@ function normaliseCountryOfResidence(value) {
     return null;
   }
   return country.slice(0, 120);
+}
+
+function normaliseSiteUserCode(value) {
+  const text = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return text || null;
+}
+
+function computeSiteUserCodeCheck(corePart) {
+  const core = normaliseSiteUserCode(corePart) || '';
+  const digest = createHmac('sha256', SESSION_SECRET)
+    .update('site-user-code:' + core)
+    .digest();
+  let out = '';
+  for (let idx = 0; idx < SITE_USER_ID_CHECK_LENGTH; idx += 1) {
+    out += SITE_USER_ID_ALPHABET[digest[idx] & 31];
+  }
+  return out;
+}
+
+function formatSiteUserCode(rawValue) {
+  const normalized = normaliseSiteUserCode(rawValue) || '';
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.length <= 4) {
+    return normalized;
+  }
+  if (normalized.length <= 8) {
+    return normalized.slice(0, 4) + '-' + normalized.slice(4);
+  }
+  if (normalized.length <= 12) {
+    return normalized.slice(0, 4) + '-' + normalized.slice(4, 8) + '-' + normalized.slice(8);
+  }
+  return normalized.slice(0, 4)
+    + '-' + normalized.slice(4, 8)
+    + '-' + normalized.slice(8, 12)
+    + '-' + normalized.slice(12);
+}
+
+function generateSiteUserCodeCandidate() {
+  let core = '';
+  while (core.length < SITE_USER_ID_CORE_LENGTH) {
+    const chunk = randomBytes(16);
+    for (const byte of chunk) {
+      core += SITE_USER_ID_ALPHABET[byte & 31];
+      if (core.length >= SITE_USER_ID_CORE_LENGTH) {
+        break;
+      }
+    }
+  }
+  const check = computeSiteUserCodeCheck(core);
+  return formatSiteUserCode(core + check);
+}
+
+async function generateUniqueSiteUserCode() {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = generateSiteUserCodeCandidate();
+    const exists = await pool.query(
+      'SELECT id FROM users WHERE site_user_code = $1 LIMIT 1',
+      [candidate]
+    );
+    if (!exists.rows[0]) {
+      return candidate;
+    }
+  }
+  throw new Error('Failed to generate unique site user code.');
+}
+
+async function assignSiteUserCodeToUser(userId) {
+  const id = Number(userId || 0);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+
+  const existing = await pool.query(
+    'SELECT site_user_code FROM users WHERE id = $1 LIMIT 1',
+    [id]
+  );
+  const currentCode = existing.rows[0] ? String(existing.rows[0].site_user_code || '').trim() : '';
+  if (currentCode) {
+    return currentCode;
+  }
+
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = await generateUniqueSiteUserCode();
+    try {
+      const updated = await pool.query(
+        `
+          UPDATE users
+          SET site_user_code = $1
+          WHERE id = $2
+            AND COALESCE(TRIM(site_user_code), '') = ''
+          RETURNING site_user_code
+        `,
+        [candidate, id]
+      );
+
+      if (updated.rows[0] && updated.rows[0].site_user_code) {
+        return String(updated.rows[0].site_user_code);
+      }
+
+      const verify = await pool.query(
+        'SELECT site_user_code FROM users WHERE id = $1 LIMIT 1',
+        [id]
+      );
+      const value = verify.rows[0] ? String(verify.rows[0].site_user_code || '').trim() : '';
+      if (value) {
+        return value;
+      }
+    } catch (err) {
+      if (String(err && err.code || '') !== '23505') {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error('Failed to assign site user code.');
+}
+
+async function ensureAllUsersHaveSiteUserCodes() {
+  while (true) {
+    const result = await pool.query(
+      `
+        SELECT id
+        FROM users
+        WHERE COALESCE(TRIM(site_user_code), '') = ''
+        ORDER BY id ASC
+        LIMIT 200
+      `
+    );
+
+    const pendingRows = Array.isArray(result.rows) ? result.rows : [];
+    if (!pendingRows.length) {
+      break;
+    }
+
+    for (const row of pendingRows) {
+      await assignSiteUserCodeToUser(row.id);
+    }
+  }
 }
 
 function validateStrongPassword(password) {
@@ -4313,6 +4472,7 @@ async function getUserById(userId) {
         SELECT id, username, email, password_hash,
           first_name, family_name, country_of_residence, telephone, is_validated,
              postal_address,
+             site_user_code,
              stripe_account_id, stripe_onboarding_complete,
              stripe_charges_enabled, stripe_payouts_enabled,
              dashboard_activity_outlook_days,
@@ -4646,12 +4806,18 @@ async function createUnvalidatedSiteUserForInvite(input) {
     `
       INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
-      RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, created_at
+      RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, site_user_code, created_at
     `,
     [username, email, '', firstName, familyName, country]
   );
 
-  const createdUser = result.rows[0] || null;
+  let createdUser = result.rows[0] || null;
+  const createdId = Number(createdUser && createdUser.id || 0);
+  if (Number.isInteger(createdId) && createdId > 0) {
+    await assignSiteUserCodeToUser(createdId);
+    createdUser = await getUserById(createdId);
+  }
+
   if (createdUser && Number.isInteger(Number(createdUser.id)) && Number(createdUser.id) > 0) {
     await writeUserEventLog({
       actorUserId: Number(input && input.invitedByUserId || 0),
@@ -5157,12 +5323,17 @@ async function ensureGuestSiteUserForClientAccount(input) {
       `
         INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
         VALUES ($1, $2, $3, $4, $5, '', FALSE)
-        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, site_user_code, created_at
       `,
       [username, email, temporaryPasswordHash, firstName, familyName]
     );
     user = created.rows[0] || null;
     spawnedNewUser = true;
+
+    if (user && Number.isInteger(Number(user.id)) && Number(user.id) > 0) {
+      await assignSiteUserCodeToUser(Number(user.id));
+      user = await getUserById(Number(user.id));
+    }
   }
 
   if (!user || !Number.isInteger(Number(user.id)) || Number(user.id) <= 0) {
@@ -7633,6 +7804,7 @@ async function getAllSiteUsersWithMemberships() {
     `
       SELECT u.id,
              u.email,
+              u.site_user_code,
              u.first_name,
              u.family_name,
              u.country_of_residence,
@@ -7656,7 +7828,7 @@ async function getAllSiteUsersWithMemberships() {
        AND cm.status IN ('active', 'invited')
       LEFT JOIN client_accounts ca
         ON ca.id = cm.client_account_id
-      GROUP BY u.id, u.email, u.first_name, u.family_name, u.country_of_residence, u.is_validated, u.created_at
+      GROUP BY u.id, u.email, u.site_user_code, u.first_name, u.family_name, u.country_of_residence, u.is_validated, u.created_at
       ORDER BY u.email ASC
     `
   );
@@ -8019,11 +8191,16 @@ async function ensureDeletedSiteUserForClientAccount(clientAccountId) {
       `
         INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
         VALUES ($1, $2, $3, 'Deleted', $4, '', TRUE)
-        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, site_user_code, created_at
       `,
       [username, email, passwordHash, familyName]
     );
     deletedUser = created.rows[0] || null;
+
+    if (deletedUser && Number.isInteger(Number(deletedUser.id)) && Number(deletedUser.id) > 0) {
+      await assignSiteUserCodeToUser(Number(deletedUser.id));
+      deletedUser = await getUserById(Number(deletedUser.id));
+    }
   } else {
     await pool.query(
       `
@@ -12628,6 +12805,7 @@ app.get('/api/me', requireAuth, async (req, res) => {
       firstName: user.first_name || '',
       familyName: user.family_name || '',
       email: user.email || req.session.email,
+      siteUserId: user.site_user_code || '',
       telephone: user.telephone || '',
       postalAddress: user.postal_address || '',
       dashboardActivityOutlookDays: Number(user.dashboard_activity_outlook_days || 7) || 7,
