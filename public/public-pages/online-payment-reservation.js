@@ -10,6 +10,7 @@ const priceParam = params.get('price') || '';
 const checkinDateParam = params.get('checkinDate') || '';
 const checkoutDateParam = params.get('checkoutDate') || '';
 const spacesRequiredParam = params.get('spacesRequired') || '';
+const hostPaymentRequestFlow = String(params.get('hostPaymentRequest') || '').trim() === '1';
 
 let currentResource = null;
 let stripeClient = null;
@@ -17,6 +18,13 @@ let stripeElements = null;
 let stripePaymentElement = null;
 let preparedPayment = null;
 let facilityLandingPage = null;
+
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
 
 function isParkingResource(resource) {
   if (!resource) {
@@ -47,7 +55,11 @@ function formatReservationDateTime(isoStr) {
   if (!isoStr) return '-';
   const d = new Date(isoStr);
   if (isNaN(d.getTime())) return isoStr;
-  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return DISPLAY_WEEKDAY_SHORT[d.getDay()] + ' '
+    + padDisplayNumber(d.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[d.getMonth()] + ' '
+    + String(d.getFullYear()) + ' '
+    + padDisplayNumber(d.getHours()) + ':' + padDisplayNumber(d.getMinutes());
 }
 
 function renderReservationDetails() {
@@ -233,6 +245,36 @@ async function prepareOnlinePayment(guestPayload) {
   };
 }
 
+async function submitOnlinePaymentRequestOnly(guestPayload) {
+  const endpoint = facilityLandingSlug
+    ? ('/api/public/facility-enquiry-landing-pages/' + encodeURIComponent(facilityLandingSlug) + '/online-payment-submit')
+    : ('/api/public/shared-resources/' + resourceId + '/reservations');
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      paymentOption,
+      checkinDate: checkinDateParam,
+      checkoutDate: checkoutDateParam,
+      requestedStartAt: startDateTimeParam,
+      requestedEndAt: endDateTimeParam,
+      spacesRequired: spacesRequiredParam,
+      reservationAmount: priceParam,
+      firstName: guestPayload.firstName,
+      familyName: guestPayload.familyName,
+      emailAddress: guestPayload.emailAddress,
+      telephone: guestPayload.telephone,
+      vehicleRegistration: guestPayload.vehicleRegistration
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to request payment.');
+  }
+}
+
 async function confirmPreparedPayment() {
   if (!stripeClient || !stripeElements || !preparedPayment) {
     throw new Error('Payment form is not ready yet.');
@@ -261,6 +303,10 @@ async function confirmPreparedPayment() {
   try {
     await loadPublicResource();
     renderReservationDetails();
+    if (hostPaymentRequestFlow) {
+      showStripePaymentSection(false);
+      setSubmitButtonState('Request Payment', false);
+    }
   } catch (err) {
     setReservationMessage(err.message || 'Failed to initialize reservation page.', true);
   }
@@ -285,6 +331,14 @@ document.getElementById('submitReservationBtn').addEventListener('click', async 
   setSubmitButtonState(null, true);
 
   try {
+    if (hostPaymentRequestFlow) {
+      setReservationMessage('Submitting payment request...', false);
+      await submitOnlinePaymentRequestOnly(guest.payload);
+      setReservationMessage('Payment request sent.', false);
+      window.location.href = '/dashboard-facility-reservations.html';
+      return;
+    }
+
     if (!preparedPayment) {
       setReservationMessage('Preparing secure payment form...', false);
       await prepareOnlinePayment(guest.payload);
@@ -321,6 +375,9 @@ document.getElementById('submitReservationBtn').addEventListener('click', async 
   } finally {
     if (!preparedPayment) {
       setSubmitButtonState('Load Payment Form', false);
+    }
+    if (hostPaymentRequestFlow) {
+      setSubmitButtonState('Request Payment', false);
     }
   }
 });

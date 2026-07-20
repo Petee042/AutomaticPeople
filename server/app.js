@@ -34,6 +34,7 @@ const STAY_API_BASE_URL = 'https://api.stayapi.com';
 const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').trim();
 const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
 const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
+const INBOUND_MAIL = String(process.env.INBOUND_MAIL || '').trim().toLowerCase();
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || '').trim().toLowerCase());
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE || '').trim().toLowerCase());
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
@@ -731,6 +732,33 @@ async function initializeUserStore() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_user_event_log_client_created
     ON user_event_log (client_account_id, created_at DESC)
+  `);
+
+  // ── Inbound email log: Postmark inbound webhook records
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inbound_email_log (
+      id BIGSERIAL PRIMARY KEY,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      postmark_message_id TEXT,
+      from_address TEXT NOT NULL DEFAULT '',
+      to_address TEXT NOT NULL DEFAULT '',
+      recipient_username TEXT NOT NULL DEFAULT '',
+      subject TEXT NOT NULL DEFAULT '',
+      body_text TEXT NOT NULL DEFAULT '',
+      raw_payload TEXT NOT NULL DEFAULT '{}'
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_inbound_email_log_received_at
+    ON inbound_email_log (received_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_email_log_message_to
+    ON inbound_email_log (postmark_message_id, to_address)
+    WHERE postmark_message_id IS NOT NULL
+      AND postmark_message_id <> ''
   `);
 
   // ── ICS transaction log: records every ICS fetch attempt for admin diagnostics
@@ -2816,6 +2844,50 @@ async function getGuestDashboardReservationByIdForUser(reservationId, userId, no
   return result.rows[0] || null;
 }
 
+async function getGuestDashboardFacilityReservationByIdForUser(reservationId, userId, normalizedEmail) {
+  const id = Number(reservationId || 0);
+  const uid = Number(userId || 0);
+  const guestEmail = String(normalizedEmail || '').trim().toLowerCase();
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(uid) || uid <= 0) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT srr.id,
+             srr.user_id AS host_user_id,
+             srr.client_account_id,
+             srr.shared_resource_id,
+             sr.short_description AS resource_name,
+             srr.reservation_identifier,
+             srr.requested_start_at,
+             srr.requested_end_at,
+             srr.first_name,
+             srr.family_name,
+             srr.email_address,
+             srr.telephone,
+             srr.reservation_amount,
+             srr.status,
+             srr.payment_status,
+             srr.payment_intent_id,
+             srr.payment_currency,
+             srr.payment_amount_minor,
+             srr.created_at
+      FROM shared_resource_reservations srr
+      LEFT JOIN shared_resources sr ON sr.id = srr.shared_resource_id
+      WHERE srr.id = $1
+        AND (
+          srr.user_id = $2
+          OR ($3 <> '' AND LOWER(TRIM(COALESCE(srr.email_address, ''))) = $3)
+        )
+      LIMIT 1
+    `,
+    [id, uid, guestEmail]
+  );
+
+  return result.rows[0] || null;
+}
+
 function normaliseSharedResourceReservationEmail(value) {
   const email = String(value || '').trim().toLowerCase();
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
@@ -2958,16 +3030,31 @@ function formatDateTimeForMessage(value) {
   if (Number.isNaN(date.getTime())) {
     return String(value || '');
   }
-  return date.toLocaleString('en-GB', {
-    weekday: 'long',
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'UTC'
-  }).replace(',', '');
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getMonth()];
+  const year = String(date.getFullYear());
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return weekday + ' ' + day + ' ' + month + ' ' + year + ' ' + hour + ':' + minute;
+}
+
+function formatDateForMessage(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(raw + 'T00:00:00')
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getMonth()];
+  const year = String(date.getFullYear());
+  return weekday + ' ' + day + ' ' + month + ' ' + year;
 }
 
 function htmlToPlainText(value) {
@@ -3360,6 +3447,131 @@ function getPostmarkErrorMessage(errorPayload, statusCode) {
   return text;
 }
 
+function normaliseInboundMailSubdomain(value) {
+  let text = String(value || '').trim().toLowerCase();
+  if (!text) {
+    return '';
+  }
+  if (text.startsWith('@')) {
+    text = text.slice(1);
+  }
+  if (text.endsWith('.automaticpeople.com')) {
+    text = text.slice(0, -('.automaticpeople.com'.length));
+  }
+  text = text.replace(/[^a-z0-9.-]/g, '').replace(/\.+/g, '.').replace(/^\.+|\.+$/g, '');
+  return text;
+}
+
+const INBOUND_MAIL_SUBDOMAIN = normaliseInboundMailSubdomain(INBOUND_MAIL);
+const INBOUND_MAIL_DOMAIN = INBOUND_MAIL_SUBDOMAIN ? (INBOUND_MAIL_SUBDOMAIN + '.automaticpeople.com') : '';
+
+function getInboundEmailWebhookPath() {
+  return '/api/inbound-mail/postmark';
+}
+
+function buildInboundEmailWebhookUrl(req) {
+  const baseUrl = getPreferredAppBaseUrl(req) || getRequestBaseUrl(req) || '';
+  if (!baseUrl) {
+    return getInboundEmailWebhookPath();
+  }
+  return baseUrl.replace(/\/+$/g, '') + getInboundEmailWebhookPath();
+}
+
+function extractEmailAddressesFromText(value) {
+  const text = String(value || '');
+  const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
+  const seen = new Set();
+  const out = [];
+  matches.forEach((entry) => {
+    const normalized = String(entry || '').trim().toLowerCase();
+    if (!normalized || !isValidEmailAddress(normalized) || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  });
+  return out;
+}
+
+function getInboundRecipientAddresses(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const candidates = [];
+
+  [body.To, body.OriginalRecipient, body.DeliveredTo].forEach((value) => {
+    candidates.push(...extractEmailAddressesFromText(value));
+  });
+
+  [body.ToFull, body.CcFull].forEach((group) => {
+    if (!Array.isArray(group)) {
+      return;
+    }
+    group.forEach((item) => {
+      candidates.push(...extractEmailAddressesFromText(item && (item.Email || item.EmailAddress || item.Name || '')));
+    });
+  });
+
+  return Array.from(new Set(candidates));
+}
+
+function getMatchingInboundRecipientAddress(addresses) {
+  const list = Array.isArray(addresses) ? addresses : [];
+  if (!INBOUND_MAIL_DOMAIN) {
+    return null;
+  }
+  const suffix = '@' + INBOUND_MAIL_DOMAIN;
+  for (const address of list) {
+    const email = String(address || '').trim().toLowerCase();
+    if (email.endsWith(suffix)) {
+      return email;
+    }
+  }
+  return null;
+}
+
+function getInboundSenderAddress(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const candidates = [
+    body.From,
+    body.FromFull && body.FromFull.Email,
+    body.Headers && Array.isArray(body.Headers)
+      ? (body.Headers.find((header) => String(header && header.Name || '').toLowerCase() === 'from') || {}).Value
+      : ''
+  ];
+
+  for (const candidate of candidates) {
+    const extracted = extractEmailAddressesFromText(candidate);
+    if (extracted[0]) {
+      return extracted[0];
+    }
+  }
+  return '';
+}
+
+function getInboundBodyText(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const strippedReply = String(body.StrippedTextReply || '').trim();
+  if (strippedReply) {
+    return strippedReply.slice(0, 20000);
+  }
+
+  const textBody = String(body.TextBody || '').trim();
+  if (textBody) {
+    return textBody.slice(0, 20000);
+  }
+
+  const strippedHtmlBody = String(body.StrippedHtmlBody || '').trim();
+  if (strippedHtmlBody) {
+    return htmlToPlainText(strippedHtmlBody).slice(0, 20000);
+  }
+
+  const htmlBody = String(body.HtmlBody || '').trim();
+  if (htmlBody) {
+    return htmlToPlainText(htmlBody).slice(0, 20000);
+  }
+
+  return '';
+}
+
 function getPreferredAppBaseUrl(req) {
   if (APP_BASE_URL) {
     return APP_BASE_URL;
@@ -3732,18 +3944,34 @@ async function sendSiteUserValidationEmail(req, user) {
   });
 }
 
-async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource) {
+function buildLoginUrlWithPrefilledEmail(req, emailAddress) {
+  const normalizedEmail = normaliseOptionalEmail(emailAddress);
+  const baseUrl = getPreferredAppBaseUrl(req);
+  if (!baseUrl) {
+    return '';
+  }
+
+  const root = baseUrl.replace(/\/$/, '');
+  if (!normalizedEmail) {
+    return root + '/index.html';
+  }
+  return root + '/index.html?email=' + encodeURIComponent(normalizedEmail);
+}
+
+async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource, options) {
+  const opts = options && typeof options === 'object' ? options : {};
   const emailAddress = normaliseOptionalEmail(reservation && reservation.email_address);
   if (!emailAddress) {
     return { ok: false, error: 'No guest email address found for reservation notification.' };
   }
 
-  const baseUrl = getPreferredAppBaseUrl(req);
-  if (!baseUrl) {
+  const loginUrl = String(opts.loginUrl || buildLoginUrlWithPrefilledEmail(req, emailAddress) || '').trim();
+  if (!loginUrl) {
     return { ok: false, error: 'Cannot build login URL because APP_BASE_URL is not configured.' };
   }
 
-  const loginUrl = baseUrl.replace(/\/$/, '') + '/index.html';
+  const passwordSetupExpected = opts.passwordSetupExpected === true;
+  const passwordSetupUrl = String(opts.passwordSetupUrl || '').trim();
   const guestName = [String(reservation.first_name || '').trim(), String(reservation.family_name || '').trim()]
     .filter(Boolean)
     .join(' ')
@@ -3766,11 +3994,12 @@ async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation,
     '',
     'Please log in to your AutomaticPeople account to make payment: ',
     loginUrl,
-    '',
-    'If you are new to the site, please follow the link in the separate email you receive to set up your password before you can complete payment.',
+    passwordSetupExpected ? '' : null,
+    passwordSetupExpected ? 'If you are new to the site, please follow the separate password setup email first, then return here to make payment.' : null,
+    (passwordSetupExpected && passwordSetupUrl) ? 'Password setup link: ' + passwordSetupUrl : null,
     '',
     'If you did not expect this email, you can ignore it.'
-  ];
+  ].filter((line) => line !== null);
 
   const subject = 'Reservation created - online payment required';
   return sendAppEmail({
@@ -3813,6 +4042,21 @@ async function sendPasswordResetEmail(req, user) {
     subject,
     textBody
   });
+}
+
+function buildPasswordResetUrl(req, user) {
+  if (!user || !user.email) {
+    return '';
+  }
+  const baseUrl = getPreferredAppBaseUrl(req);
+  if (!baseUrl) {
+    return '';
+  }
+  const token = buildPasswordResetToken(user);
+  if (!token) {
+    return '';
+  }
+  return baseUrl + '/reset-password.html?token=' + encodeURIComponent(token);
 }
 
 async function getCleanersForUser(userId) {
@@ -5387,7 +5631,7 @@ async function getSharedResourceByIdPublic(resourceId) {
               free_of_charge_message_html, cash_on_site_message_html, bank_transfer_message_html, online_payment_message_html,
               charge_basis, daily_charge_mode, daily_rate, hourly_charge_mode, hourly_rate, hourly_rates_json,
                     created_at, updated_at,
-              property_id, listing_id
+              property_id, listing_id, client_account_id
       FROM shared_resources
       WHERE id = $1
       LIMIT 1
@@ -5423,7 +5667,8 @@ async function getSharedResourceByIdPublic(resourceId) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     property_id: row.property_id,
-    listing_id: row.listing_id
+    listing_id: row.listing_id,
+    client_account_id: row.client_account_id
   };
 }
 
@@ -11760,6 +12005,101 @@ app.post('/api/admin/email/test/send', requireAdminAuth, async (req, res) => {
   }
 });
 
+// GET /api/admin/inbound-mail/config
+app.get('/api/admin/inbound-mail/config', requireAdminAuth, (req, res) => {
+  return res.json({
+    configured: Boolean(INBOUND_MAIL_DOMAIN),
+    inboundMailSubdomain: INBOUND_MAIL_SUBDOMAIN,
+    inboundMailDomain: INBOUND_MAIL_DOMAIN,
+    inboundAddressPattern: INBOUND_MAIL_DOMAIN ? ('<username>@' + INBOUND_MAIL_DOMAIN) : '',
+    webhookPath: getInboundEmailWebhookPath(),
+    webhookUrl: buildInboundEmailWebhookUrl(req)
+  });
+});
+
+// GET /api/admin/inbound-mail
+app.get('/api/admin/inbound-mail', requireAdminAuth, async (req, res) => {
+  const search = String(req.query.search || '').trim();
+  const limitRaw = Number(req.query.limit);
+  const offsetRaw = Number(req.query.offset);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 500;
+  const offset = Number.isInteger(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+
+  try {
+    let queryText = `
+      SELECT id,
+             received_at,
+             from_address,
+             to_address,
+             subject,
+             body_text
+      FROM inbound_email_log
+    `;
+    const params = [];
+    if (search) {
+      params.push('%' + search.toLowerCase() + '%');
+      queryText += `
+        WHERE LOWER(
+          COALESCE(from_address, '') || ' ' ||
+          COALESCE(to_address, '') || ' ' ||
+          COALESCE(subject, '') || ' ' ||
+          COALESCE(body_text, '')
+        ) LIKE $1
+      `;
+    }
+    params.push(limit);
+    params.push(offset);
+    queryText += `
+      ORDER BY received_at DESC, id DESC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+    `;
+
+    const countResult = search
+      ? await pool.query(
+          `
+            SELECT COUNT(*)::int AS total
+            FROM inbound_email_log
+            WHERE LOWER(
+              COALESCE(from_address, '') || ' ' ||
+              COALESCE(to_address, '') || ' ' ||
+              COALESCE(subject, '') || ' ' ||
+              COALESCE(body_text, '')
+            ) LIKE $1
+          `,
+          ['%' + search.toLowerCase() + '%']
+        )
+      : await pool.query('SELECT COUNT(*)::int AS total FROM inbound_email_log');
+
+    const rowsResult = await pool.query(queryText, params);
+
+    return res.json({
+      entries: rowsResult.rows || [],
+      total: Number(countResult.rows[0] && countResult.rows[0].total || 0),
+      limit,
+      offset,
+      search
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load inbound email log.' });
+  }
+});
+
+// DELETE /api/admin/inbound-mail
+app.delete('/api/admin/inbound-mail', requireAdminAuth, async (_req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM inbound_email_log');
+    return res.json({
+      ok: true,
+      deletedCount: Number(result.rowCount || 0)
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to clear inbound email log.' });
+  }
+});
+
 // GET /api/admin/stripe/payment-intents/:paymentIntentId — diagnostic view for Stripe payment intent linkage
 app.get('/api/admin/stripe/payment-intents/:paymentIntentId', requireAdminAuth, async (req, res) => {
   const paymentIntentId = String(req.params.paymentIntentId || '').trim();
@@ -12664,10 +13004,10 @@ app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requ
         'Guest email: ' + String(reservation.email_address || ''),
         'Property: ' + String(reservation.property_name || ''),
         'Listing: ' + String(reservation.listing_name || ''),
-        'Arrival date: ' + String(reservation.reservation_checkin_date || ''),
-        'Departure date: ' + String(reservation.reservation_checkout_date || ''),
+        'Arrival date: ' + formatDateForMessage(reservation.reservation_checkin_date),
+        'Departure date: ' + formatDateForMessage(reservation.reservation_checkout_date),
         'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
-        'Notified at: ' + new Date().toISOString(),
+        'Notified at: ' + formatDateTimeForMessage(new Date().toISOString()),
         '',
         'Please verify bank receipt and confirm payment in the dashboard.'
       ].join('\n')
@@ -12684,6 +13024,308 @@ app.post('/api/guest/dashboard/reservations/:reservationId/notify-payment', requ
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to send payment notification.' });
+  }
+});
+
+// POST /api/guest/dashboard/facility-reservations/:reservationId/pay-now — start Stripe checkout for guest facility online payment
+app.post('/api/guest/dashboard/facility-reservations/:reservationId/pay-now', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    const statusValue = String(reservation.status || '').trim().toLowerCase();
+    if (statusValue !== 'awaiting online confirmation' && statusValue !== 'awaiting_online_confirmation') {
+      return res.status(409).json({ error: 'This facility reservation is not awaiting online payment.' });
+    }
+
+    const amount = Number(reservation.reservation_amount || 0);
+    const amountMinor = toMinorUnits(amount);
+    if (!Number.isInteger(amountMinor) || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Reservation amount is invalid for online payment.' });
+    }
+
+    const hostUser = await getUserById(Number(reservation.host_user_id || 0));
+    if (!hostUser || !hostUser.stripe_account_id) {
+      return res.status(400).json({ error: 'Host Stripe account is not connected yet.' });
+    }
+    if (!isOnlinePaymentAvailableForHostUser(hostUser)) {
+      return res.status(400).json({ error: 'Host online payment is currently unavailable.' });
+    }
+
+    const stripeAccount = await stripeClient.accounts.retrieve(String(hostUser.stripe_account_id));
+    await setUserStripeConnectState(hostUser.id, {
+      stripe_account_id: stripeAccount.id,
+      stripe_onboarding_complete: stripeAccount.details_submitted === true,
+      stripe_charges_enabled: stripeAccount.charges_enabled === true,
+      stripe_payouts_enabled: stripeAccount.payouts_enabled === true
+    });
+    if (stripeAccount.charges_enabled !== true || stripeAccount.payouts_enabled !== true) {
+      return res.status(400).json({ error: 'Host Stripe account onboarding is incomplete.' });
+    }
+
+    const baseUrl = getPreferredAppBaseUrl(req);
+    if (!baseUrl) {
+      return res.status(400).json({ error: 'Unable to determine application URL for payment redirect.' });
+    }
+
+    const successUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=success&reservationType=facility&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const cancelUrl = baseUrl + '/dashboard.html?tab=panel-guest-reservations&payment=cancelled&reservationType=facility&reservationId=' + encodeURIComponent(String(reservation.id)) + '&session_id={CHECKOUT_SESSION_ID}';
+    const resourceName = String(reservation.resource_name || '').trim() || ('Facility #' + String(reservation.shared_resource_id || ''));
+
+    const checkoutSession = await stripeClient.checkout.sessions.create({
+      mode: 'payment',
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      customer_email: normaliseOptionalEmail(guestUser.email) || normaliseOptionalEmail(reservation.email_address) || undefined,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'gbp',
+            unit_amount: amountMinor,
+            product_data: {
+              name: 'Facility Reservation ' + String(reservation.reservation_identifier || '').trim(),
+              description: resourceName
+            }
+          }
+        }
+      ],
+      payment_intent_data: {
+        transfer_data: {
+          destination: String(stripeAccount.id)
+        },
+        metadata: {
+          reservation_type: 'guest_dashboard_shared_resource_reservation',
+          shared_resource_reservation_id: String(reservation.id),
+          reservation_identifier: String(reservation.reservation_identifier || ''),
+          client_account_id: String(reservation.client_account_id || ''),
+          host_user_id: String(reservation.host_user_id || '')
+        }
+      },
+      metadata: {
+        reservation_type: 'guest_dashboard_shared_resource_reservation',
+        shared_resource_reservation_id: String(reservation.id),
+        reservation_identifier: String(reservation.reservation_identifier || '')
+      }
+    });
+
+    const checkoutPaymentIntentId = checkoutSession && checkoutSession.payment_intent
+      ? String(checkoutSession.payment_intent)
+      : '';
+    if (checkoutPaymentIntentId) {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        paymentProvider: 'stripe',
+        paymentIntentId: checkoutPaymentIntentId,
+        paymentStatus: 'requires_action',
+        paymentCurrency: 'gbp',
+        paymentAmountMinor: amountMinor,
+        paymentLastError: '',
+        status: 'Awaiting Online Confirmation'
+      });
+    }
+
+    if (!checkoutSession || !checkoutSession.url) {
+      return res.status(500).json({ error: 'Failed to start Stripe checkout session.' });
+    }
+
+    return res.json({
+      checkoutUrl: String(checkoutSession.url),
+      reservationId: Number(reservation.id),
+      reservationIdentifier: String(reservation.reservation_identifier || ''),
+      checkoutSessionId: String(checkoutSession.id || '')
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to start facility reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/facility-reservations/:reservationId/sync-payment — reconcile facility payment after returning from Stripe
+app.post('/api/guest/dashboard/facility-reservations/:reservationId/sync-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+  if (!stripeClient || !STRIPE_PUBLISHABLE_KEY) {
+    return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    let reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    const providedSessionId = String(req.body && req.body.sessionId || req.query && req.query.sessionId || req.query && req.query.session_id || '').trim();
+    let paymentIntentId = String(reservation.payment_intent_id || '').trim();
+    if (!paymentIntentId && providedSessionId) {
+      const checkoutSession = await stripeClient.checkout.sessions.retrieve(providedSessionId);
+      if (checkoutSession && String(checkoutSession.payment_intent || '').trim()) {
+        paymentIntentId = String(checkoutSession.payment_intent).trim();
+        await updateSharedResourceReservationPaymentById(reservation.id, {
+          paymentProvider: 'stripe',
+          paymentIntentId,
+          paymentStatus: String(checkoutSession.payment_status || '').toLowerCase() || 'requires_action',
+          paymentCurrency: 'gbp',
+          paymentAmountMinor: toMinorUnits(reservation.reservation_amount),
+          paymentLastError: '',
+          status: 'Awaiting Online Confirmation'
+        });
+      }
+    }
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: 'No payment intent is linked to this reservation yet. Please wait a moment and try again.' });
+    }
+
+    const paymentIntent = await stripeClient.paymentIntents.retrieve(paymentIntentId);
+    const commonUpdate = {
+      paymentProvider: 'stripe',
+      paymentIntentId,
+      paymentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
+      paymentCurrency: String(paymentIntent && paymentIntent.currency || 'gbp').toLowerCase(),
+      paymentAmountMinor: Number.isInteger(paymentIntent && paymentIntent.amount_received)
+        ? paymentIntent.amount_received
+        : (Number.isInteger(paymentIntent && paymentIntent.amount) ? paymentIntent.amount : null),
+      paymentLastError: paymentIntent && paymentIntent.last_payment_error && paymentIntent.last_payment_error.message
+        ? String(paymentIntent.last_payment_error.message)
+        : ''
+    };
+
+    const paymentStatus = String(commonUpdate.paymentStatus || '').trim();
+    if (paymentStatus === 'succeeded') {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        ...commonUpdate,
+        paidAt: new Date().toISOString(),
+        status: 'Confirmed'
+      });
+    } else if (paymentStatus === 'requires_payment_method' || paymentStatus === 'requires_action' || paymentStatus === 'processing') {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        ...commonUpdate,
+        status: 'Awaiting Online Confirmation'
+      });
+    } else if (paymentStatus === 'canceled') {
+      await updateSharedResourceReservationPaymentById(reservation.id, {
+        ...commonUpdate,
+        status: 'Declined'
+      });
+    } else {
+      await updateSharedResourceReservationPaymentById(reservation.id, commonUpdate);
+    }
+
+    reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    return res.json({
+      reconciled: true,
+      paymentIntentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
+      reservation: reservation || null
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to reconcile facility reservation payment.' });
+  }
+});
+
+// POST /api/guest/dashboard/facility-reservations/:reservationId/notify-payment — guest confirms bank transfer payment for facility reservation
+app.post('/api/guest/dashboard/facility-reservations/:reservationId/notify-payment', requireAuth, async (req, res) => {
+  const reservationId = Number(req.params.reservationId || 0);
+  if (!Number.isInteger(reservationId) || reservationId <= 0) {
+    return res.status(400).json({ error: 'Valid reservation id is required.' });
+  }
+
+  try {
+    const guestUser = await getUserById(req.session.userId);
+    if (!guestUser) {
+      return res.status(401).json({ error: 'Unauthorised' });
+    }
+
+    const normalizedEmail = normaliseOptionalEmail(guestUser.email) || '';
+    const reservation = await getGuestDashboardFacilityReservationByIdForUser(
+      reservationId,
+      req.session.userId,
+      normalizedEmail
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ error: 'Reservation not found.' });
+    }
+
+    const statusValue = String(reservation.status || '').trim().toLowerCase();
+    if (statusValue !== 'awaiting bank transfer' && statusValue !== 'awaiting_bank_transfer') {
+      return res.status(409).json({ error: 'This facility reservation is not awaiting bank transfer.' });
+    }
+
+    const ownerUser = await getUserById(Number(reservation.host_user_id || 0));
+    const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
+    if (!ownerEmail) {
+      return res.status(400).json({ error: 'Host contact email is not available for this reservation.' });
+    }
+
+    const notifyEmailResult = await sendAppEmail({
+      to: ownerEmail,
+      subject: 'Guest Bank Transfer Payment Notification',
+      textBody: [
+        'A guest has notified that bank transfer payment has been made for a facility reservation.',
+        '',
+        'Reservation ID: ' + String(reservation.reservation_identifier || ''),
+        'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+        'Guest email: ' + String(reservation.email_address || ''),
+        'Facility: ' + String(reservation.resource_name || ''),
+        'Start: ' + formatDateTimeForMessage(reservation.requested_start_at),
+        'End: ' + formatDateTimeForMessage(reservation.requested_end_at),
+        'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+        'Notified at: ' + formatDateTimeForMessage(new Date().toISOString()),
+        '',
+        'Please verify bank receipt and confirm payment in the dashboard.'
+      ].join('\n')
+    });
+
+    if (!notifyEmailResult.ok) {
+      return res.status(502).json({ error: notifyEmailResult.error || 'Failed to send payment notification email.' });
+    }
+
+    return res.json({
+      notified: true,
+      message: 'Transfer confirmation sent to host.'
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to send transfer confirmation.' });
   }
 });
 
@@ -13271,6 +13913,60 @@ app.post('/api/stripe/webhook', async (req, res) => {
   } catch (err) {
     console.error('Stripe webhook handling failed:', err);
     return res.status(500).json({ error: 'Failed to process webhook event.' });
+  }
+});
+
+// POST /api/inbound-mail/postmark — Postmark inbound webhook endpoint
+app.post('/api/inbound-mail/postmark', async (req, res) => {
+  if (!INBOUND_MAIL_DOMAIN) {
+    return res.status(503).json({ error: 'INBOUND_MAIL is not configured on the server.' });
+  }
+
+  const payload = req.body && typeof req.body === 'object' ? req.body : null;
+  if (!payload) {
+    return res.status(400).json({ error: 'Invalid webhook payload.' });
+  }
+
+  try {
+    const recipients = getInboundRecipientAddresses(payload);
+    const toAddress = getMatchingInboundRecipientAddress(recipients);
+    if (!toAddress) {
+      return res.status(202).json({ received: true, stored: false, reason: 'Recipient does not match configured inbound domain.' });
+    }
+
+    const atIndex = toAddress.indexOf('@');
+    const recipientUsername = atIndex > 0 ? toAddress.slice(0, atIndex) : '';
+    const fromAddress = getInboundSenderAddress(payload);
+    const subject = String(payload.Subject || '').trim().slice(0, 500);
+    const bodyText = getInboundBodyText(payload);
+    const messageId = String(payload.MessageID || payload.MessageId || '').trim().slice(0, 250);
+    const rawPayload = JSON.stringify(payload).slice(0, 500000);
+
+    const insertResult = await pool.query(
+      `
+        INSERT INTO inbound_email_log (
+          postmark_message_id,
+          from_address,
+          to_address,
+          recipient_username,
+          subject,
+          body_text,
+          raw_payload
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (postmark_message_id, to_address) DO NOTHING
+        RETURNING id
+      `,
+      [messageId || null, fromAddress, toAddress, recipientUsername, subject, bodyText, rawPayload]
+    );
+
+    return res.status(200).json({
+      received: true,
+      stored: Boolean(insertResult.rows[0]),
+      duplicate: !insertResult.rows[0]
+    });
+  } catch (err) {
+    console.error('Inbound email webhook failed:', err);
+    return res.status(500).json({ error: 'Failed to process inbound email webhook.' });
   }
 });
 
@@ -14060,6 +14756,40 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
       status: selectedOption.status
     });
 
+    let guestLoginUrl = '';
+    let passwordSetupExpected = false;
+    let passwordSetupUrl = '';
+    if (paymentOption === 'bank_transfer' || paymentOption === 'online_payment') {
+      const existingGuestSiteUser = await findUserByEmail(emailAddress);
+      const guestSiteUser = await ensureGuestSiteUserForClientAccount({
+        clientAccountId: Number(resource.client_account_id || 0),
+        ownerUserId: Number(resource.user_id || 0),
+        firstName,
+        familyName,
+        email: emailAddress,
+        sourceType: 'shared_resource_reservation',
+        sourceId: String(reservation.id)
+      });
+
+      guestLoginUrl = buildLoginUrlWithPrefilledEmail(req, emailAddress);
+
+      if (!existingGuestSiteUser && guestSiteUser) {
+        passwordSetupExpected = true;
+        let passwordSetupUser = guestSiteUser;
+        if (!passwordSetupUser.password_hash) {
+          passwordSetupUser = await findUserByEmail(emailAddress);
+        }
+
+        passwordSetupUrl = buildPasswordResetUrl(req, passwordSetupUser);
+
+        const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
+        if (!setupEmailResult.ok) {
+          emailDeliveryWarning = true;
+          emailDeliveryReason = String(setupEmailResult.error || '').trim();
+        }
+      }
+    }
+
     if (paymentOption === 'cash_on_site' || paymentOption === 'bank_transfer') {
       const subject = String(resource.short_description || '').trim() || 'Facility Reservation';
       const fullDescriptionText = htmlToPlainText(resource.full_description_html);
@@ -14109,6 +14839,21 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         lines.push('IBAN: ' + bankIban);
         lines.push('BIC: ' + bankBic);
         lines.push('Account type: ' + bankType);
+
+        if (guestLoginUrl) {
+          lines.push('');
+          lines.push('Sign in to AutomaticPeople using your email address to view this reservation and confirm transfer:');
+          lines.push(guestLoginUrl);
+          if (passwordSetupExpected) {
+            lines.push('');
+            lines.push('If you are new to AutomaticPeople, please set your password first:');
+            if (passwordSetupUrl) {
+              lines.push(passwordSetupUrl);
+            } else {
+              lines.push('Use the separate password setup email, then return to sign in.');
+            }
+          }
+        }
       }
 
       const emailResult = await sendAppEmail({
@@ -14122,7 +14867,11 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         emailDeliveryReason = String(emailResult.error || '').trim();
       }
     } else if (paymentOption === 'online_payment') {
-      const onlineEmailResult = await sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource);
+      const onlineEmailResult = await sendSharedResourceOnlinePaymentReservationEmail(req, reservation, resource, {
+        loginUrl: guestLoginUrl,
+        passwordSetupExpected,
+        passwordSetupUrl
+      });
       if (!onlineEmailResult.ok) {
         emailDeliveryWarning = true;
         emailDeliveryReason = String(onlineEmailResult.error || '').trim();

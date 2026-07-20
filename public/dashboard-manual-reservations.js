@@ -20,6 +20,30 @@ function setManualReservationsMessage(text, isError) {
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
 }
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
+function formatDateOnlyForMessage(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(raw + 'T00:00:00')
+    : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear());
+}
+
 function formatDateTimeForMessage(value) {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -29,7 +53,11 @@ function formatDateTimeForMessage(value) {
   if (Number.isNaN(parsed.getTime())) {
     return raw;
   }
-  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear()) + ' '
+    + padDisplayNumber(parsed.getHours()) + ':' + padDisplayNumber(parsed.getMinutes());
 }
 
 function renderManualReservationListingOptions(listings) {
@@ -117,10 +145,10 @@ function renderManualReservations(reservations) {
     listingCell.textContent = String(reservation.listingName || ('Listing #' + reservation.listingId));
 
     const startCell = document.createElement('td');
-    startCell.textContent = String(reservation.checkinDate || '');
+    startCell.textContent = formatDateOnlyForMessage(reservation.checkinDate);
 
     const endCell = document.createElement('td');
-    endCell.textContent = String(reservation.checkoutDate || '');
+    endCell.textContent = formatDateOnlyForMessage(reservation.checkoutDate);
 
     const notesCell = document.createElement('td');
     notesCell.textContent = String(reservation.notes || '');

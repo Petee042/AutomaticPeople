@@ -35,6 +35,45 @@ const sourcePalette = ['#ff5a5f', '#003580', '#2a9d8f', '#e76f51', '#264653', '#
 const cleanerBadgePalette = ['#0f766e', '#1d4ed8', '#b45309', '#be123c', '#4338ca', '#166534', '#92400e', '#0369a1'];
 const weekdayValueSet = new Set(['0', '1', '2', '3', '4', '5', '6']);
 const FEED_SAVE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
+function formatDisplayDateOnly(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return 'Unknown';
+  }
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(raw + 'T00:00:00')
+    : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear());
+}
+
+function formatDisplayDateTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '—';
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear()) + ' '
+    + padDisplayNumber(parsed.getHours()) + ':' + padDisplayNumber(parsed.getMinutes());
+}
 
 function getListingFormState() {
   return JSON.stringify({
@@ -459,9 +498,7 @@ function formatMonthLabel(date) {
 
 function formatDateKeyForTooltip(key) {
   if (!key) return 'Unknown';
-  const date = utcDateFromKey(key);
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return date.getUTCDate() + ' ' + monthNames[date.getUTCMonth()] + ' ' + date.getUTCFullYear();
+  return formatDisplayDateOnly(key);
 }
 
 function getEventSummary(event) {
@@ -570,7 +607,7 @@ function buildBarTooltip(events) {
     if (event.lastSyncedAt) {
       const syncDate = new Date(event.lastSyncedAt);
       if (!Number.isNaN(syncDate.getTime())) {
-        lines.push('Last synced: ' + syncDate.toLocaleString());
+        lines.push('Last synced: ' + formatDisplayDateTime(syncDate.toISOString()));
       }
     }
 
@@ -1302,8 +1339,7 @@ function setFetchedAt(isoString) {
     el.textContent = '';
     return;
   }
-  const d = new Date(isoString);
-  el.textContent = 'Last updated: ' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  el.textContent = 'Last updated: ' + formatDisplayDateTime(isoString);
 }
 
 function applyEventsData(data) {

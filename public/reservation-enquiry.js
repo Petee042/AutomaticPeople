@@ -12,6 +12,30 @@ let reservationEnquiryOptions = [];
 let reservationEnquirySelectedOptionKey = '';
 let reservationEnquiryLastSearch = null;
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
+function formatReservationEnquiryDate(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '-';
+  }
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? new Date(text + 'T00:00:00')
+    : new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    return text;
+  }
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear());
+}
+
 function updateReservationEnquiryContinueButtonState() {
   const button = document.getElementById('reservationEnquiryContinueBtn');
   if (!button) {
@@ -65,7 +89,7 @@ function renderReservationEnquiryCalendars() {
     return;
   }
 
-  label.textContent = reservationEnquiryCurrentMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  label.textContent = DISPLAY_MONTH_SHORT[reservationEnquiryCurrentMonth.getUTCMonth()] + ' ' + String(reservationEnquiryCurrentMonth.getUTCFullYear());
 
   const monthStart = new Date(reservationEnquiryCurrentMonth.getTime());
   const monthEnd = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0));
@@ -130,7 +154,9 @@ function renderReservationEnquiryResults() {
 
   body.innerHTML = reservationEnquiryOptions.map((option, index) => {
     const optionLines = (option.segments || []).map((segment) => {
-      const text = String(segment.propertyName || '') + ' / ' + String(segment.listingName || '') + ' (' + String(segment.arrivalDate || '') + ' to ' + String(segment.departureDate || '') + ')';
+      const text = String(segment.propertyName || '') + ' / ' + String(segment.listingName || '') + ' ('
+        + formatReservationEnquiryDate(segment.arrivalDate) + ' to '
+        + formatReservationEnquiryDate(segment.departureDate) + ')';
       return '<span class="reservation-enquiry-option-line">' + text + '</span>';
     }).join('');
     const discountCell = showDiscountColumn

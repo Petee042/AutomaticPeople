@@ -11,6 +11,13 @@ function setViewLoggingMessage(text, isError) {
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
 }
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
 function formatViewLoggingDateTime(value) {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -20,7 +27,11 @@ function formatViewLoggingDateTime(value) {
   if (Number.isNaN(parsed.getTime())) {
     return raw;
   }
-  return parsed.toLocaleDateString([], { dateStyle: 'short' }) + ' ' + parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear()) + ' '
+    + padDisplayNumber(parsed.getHours()) + ':' + padDisplayNumber(parsed.getMinutes());
 }
 
 function escapeHtml(value) {
@@ -44,7 +55,7 @@ function buildInlineDetailHtml(entry) {
   const row = entry && typeof entry === 'object' ? entry : {};
   const detail = row.detail && typeof row.detail === 'object' ? row.detail : {};
 
-  const dtg = String(detail.dtg || row.dtg || '').trim();
+  const dtg = formatViewLoggingDateTime(detail.dtg || row.dtg || '');
   const fromAddress = String(detail.fromAddress || '').trim();
   const toAddress = String(detail.toAddress || '').trim();
   const subject = String(detail.subject || '').trim();

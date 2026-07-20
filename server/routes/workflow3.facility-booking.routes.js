@@ -439,6 +439,15 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
         return res.status(404).json({ error: 'Shared resource not found.' });
       }
 
+      const existingReservation = await getSharedResourceReservationByIdForUser(
+        reservationId,
+        resourceId,
+        req.accessContext.effectiveOwnerUserId
+      );
+      if (!existingReservation) {
+        return res.status(404).json({ error: 'Reservation not found.' });
+      }
+
       const result = await deleteSharedResourceReservationForUser(
         reservationId,
         resourceId,

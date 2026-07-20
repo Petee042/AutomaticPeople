@@ -35,6 +35,22 @@ function rememberLoginEmail(email) {
 }
 
 function prefillRememberedLoginEmail() {
+  let urlEmail = '';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    urlEmail = String(params.get('email') || '').trim();
+  } catch {
+    urlEmail = '';
+  }
+
+  if (urlEmail) {
+    const emailInput = document.getElementById('li-email');
+    emailInput.value = urlEmail;
+    rememberLoginEmail(urlEmail);
+    document.querySelector('[data-tab="login"]').click();
+    return;
+  }
+
   try {
     const remembered = localStorage.getItem(LAST_LOGIN_EMAIL_KEY);
     if (!remembered) return;

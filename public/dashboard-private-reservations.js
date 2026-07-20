@@ -18,6 +18,13 @@ function setPrivateReservationsMessage(text, isError) {
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
 }
 
+const DISPLAY_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DISPLAY_MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function padDisplayNumber(value) {
+  return String(Number(value || 0)).padStart(2, '0');
+}
+
 function formatPrivateReservationArrival(dateValue) {
   const value = String(dateValue || '').trim();
   if (!value) {
@@ -27,7 +34,10 @@ function formatPrivateReservationArrival(dateValue) {
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-  return parsed.toLocaleDateString([], { dateStyle: 'medium' });
+  return DISPLAY_WEEKDAY_SHORT[parsed.getDay()] + ' '
+    + padDisplayNumber(parsed.getDate()) + ' '
+    + DISPLAY_MONTH_SHORT[parsed.getMonth()] + ' '
+    + String(parsed.getFullYear());
 }
 
 function formatPrivateReservationAmount(amount) {
