@@ -13990,6 +13990,19 @@ app.post('/api/inbound-mail/postmark', async (req, res) => {
   }
 });
 
+app.use('/api/inbound-mail/postmark', (err, req, res, next) => {
+  if (!err) {
+    return next();
+  }
+
+  console.error('Inbound email webhook middleware error:', err);
+  return res.status(200).json({
+    received: true,
+    stored: false,
+    error: 'Inbound email accepted but request could not be parsed.'
+  });
+});
+
 // GET /api/cleaners — all cleaners for current user
 app.get('/api/cleaners', requireScopedRole('Manager'), async (req, res) => {
   try {
