@@ -16,6 +16,7 @@ This folder contains workflow-level test scripts that can be run on demand.
 2. Set environment values (see `.env.example`).
 3. Run one of:
    - `npm run test:workflow:list`
+   - `npm run test:workflow:precheck-existing-client -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:auth -- --dry-run`
    - `npm run test:workflow:all -- --base-url http://localhost:3000`
    - `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
@@ -47,6 +48,11 @@ Turnstile helper mode for reruns:
    - `TEST_FLOW_EXISTING_CLIENT_EMAIL` required
    - `TEST_FLOW_EXISTING_CLIENT_PASSWORD` required
    - `TEST_FLOW_SKIP_RESET=true` recommended (and automatically applied by script)
+
+Recommended sequence for helper-mode reruns:
+
+1. Run precheck: `npm run test:workflow:precheck-existing-client -- --live --base-url https://automaticpeople-alpha.onrender.com`
+2. If precheck passes, run full flow: `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
 
 ## Script Authoring Rules
 

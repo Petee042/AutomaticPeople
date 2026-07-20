@@ -6,6 +6,11 @@ const { toBool } = require('./helpers/workflow-test-harness');
 
 const TESTS = [
   {
+    id: 'workflow-00-live-existing-client-precheck',
+    title: 'Workflow 00 - Existing client precheck',
+    modulePath: './workflows/workflow-00-live-existing-client-precheck.test.js'
+  },
+  {
     id: 'workflow-01-auth-smoke',
     title: 'Workflow 01 - Auth smoke checks',
     modulePath: './workflows/workflow-01-auth-smoke.test.js'
