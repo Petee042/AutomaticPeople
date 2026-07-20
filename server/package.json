@@ -5,7 +5,11 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "test:auth-validation": "node auth-validation-regression-test.js"
+    "test:auth-validation": "node auth-validation-regression-test.js",
+    "test:workflow": "node tests/run-workflows.js",
+    "test:workflow:all": "node tests/run-workflows.js --all",
+    "test:workflow:auth": "node tests/run-workflows.js --only workflow-01-auth-smoke",
+    "test:workflow:list": "node tests/run-workflows.js --list"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
