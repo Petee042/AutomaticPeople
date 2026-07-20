@@ -29,6 +29,37 @@ function optionalEnv(name, fallback) {
   return value || fallback;
 }
 
+function toBool(value, fallback) {
+  if (value === undefined || value === null || value === '') return Boolean(fallback);
+  const text = String(value).trim().toLowerCase();
+  return text === '1' || text === 'true' || text === 'yes' || text === 'on';
+}
+
+function parseFlowArgs(argv) {
+  const args = Array.isArray(argv) ? argv.slice() : [];
+  const flow = {
+    turnstileHelperMode: '',
+    skipReset: false
+  };
+
+  for (let idx = 0; idx < args.length; idx += 1) {
+    const token = String(args[idx] || '').trim();
+    if (!token) continue;
+
+    if (token === '--turnstile-helper') {
+      flow.turnstileHelperMode = String(args[idx + 1] || '').trim().toLowerCase();
+      idx += 1;
+      continue;
+    }
+    if (token === '--skip-reset') {
+      flow.skipReset = true;
+      continue;
+    }
+  }
+
+  return flow;
+}
+
 function normalizeUrl(value) {
   return String(value || '').trim().replace(/\/$/, '');
 }
@@ -195,11 +226,19 @@ async function waitForInboundEmail(adminClient, toAddress, expectedSubjectPart, 
 async function run(argv) {
   const options = parseOptions(argv);
   const harness = createWorkflowHarness(TEST_META, options);
+  const flowArgs = parseFlowArgs(argv);
 
   const baseUrl = normalizeUrl(options.baseUrl || process.env.TEST_BASE_URL || 'https://automaticpeople-alpha.onrender.com');
   const adminUsername = requiredEnv('TEST_ADMIN_USERNAME');
   const adminPassword = requiredEnv('TEST_ADMIN_PASSWORD');
-  const turnstileToken = requiredEnv('TEST_TURNSTILE_TOKEN');
+
+  const configuredHelperMode = String(process.env.TEST_TURNSTILE_HELPER_MODE || '').trim().toLowerCase();
+  const turnstileHelperMode = flowArgs.turnstileHelperMode || configuredHelperMode || 'require-token';
+  const helperUsesExistingClient = turnstileHelperMode === 'existing-client';
+
+  const turnstileToken = helperUsesExistingClient
+    ? String(process.env.TEST_TURNSTILE_TOKEN || '').trim()
+    : requiredEnv('TEST_TURNSTILE_TOKEN');
 
   const clientEmail = optionalEnv('TEST_FLOW_CLIENT_EMAIL', 'client1@alphainbound.automaticpeople.com').toLowerCase();
   const staffEmail = optionalEnv('TEST_FLOW_STAFF_EMAIL', 'staff1@alphainbound.automaticpeople.com').toLowerCase();
@@ -209,6 +248,17 @@ async function run(argv) {
   const staffPassword = optionalEnv('TEST_FLOW_STAFF_PASSWORD', 'Quiblick!5');
   const guestPassword = optionalEnv('TEST_FLOW_GUEST_PASSWORD', 'Quiblick!6');
 
+  const existingClientEmail = String(process.env.TEST_FLOW_EXISTING_CLIENT_EMAIL || '').trim().toLowerCase();
+  const existingClientPassword = String(process.env.TEST_FLOW_EXISTING_CLIENT_PASSWORD || '').trim();
+  const skipReset = flowArgs.skipReset
+    || toBool(process.env.TEST_FLOW_SKIP_RESET, false)
+    || helperUsesExistingClient;
+
+  if (helperUsesExistingClient && !options.dryRun) {
+    harness.assert(existingClientEmail, 'TEST_FLOW_EXISTING_CLIENT_EMAIL is required for turnstile helper mode existing-client.');
+    harness.assert(existingClientPassword, 'TEST_FLOW_EXISTING_CLIENT_PASSWORD is required for turnstile helper mode existing-client.');
+  }
+
   const adminClient = new SessionClient(baseUrl, options.timeoutMs);
   const client1 = new SessionClient(baseUrl, options.timeoutMs);
   const staff1 = new SessionClient(baseUrl, options.timeoutMs);
@@ -217,6 +267,8 @@ async function run(argv) {
   const step1 = harness.step('1. Clean site user data via admin schema reset');
   if (options.dryRun) {
     step1.skip('Dry run enabled.');
+  } else if (skipReset) {
+    step1.skip('Schema reset skipped by helper mode/config.');
   } else {
     const login = await adminClient.post('/api/admin/login', {
       username: adminUsername,
@@ -263,6 +315,8 @@ async function run(argv) {
   const step3 = harness.step('3. Sign up client1 account');
   if (options.dryRun) {
     step3.skip('Dry run enabled.');
+  } else if (helperUsesExistingClient) {
+    step3.skip('Turnstile helper mode existing-client selected; signup skipped.');
   } else {
     const signup = await client1.post('/api/signup', {
       firstName: 'Andy',
@@ -287,6 +341,8 @@ async function run(argv) {
   let clientValidationUrl = '';
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
+  } else if (helperUsesExistingClient) {
+    step4.skip('Turnstile helper mode existing-client selected; validation email check skipped.');
   } else {
     const emailRow = await waitForInboundEmail(adminClient, clientEmail, 'validate', 120000, 5000);
     if (!emailRow) {
@@ -316,6 +372,20 @@ async function run(argv) {
   const step5 = harness.step('5. Validate client account and login');
   if (options.dryRun) {
     step5.skip('Dry run enabled.');
+  } else if (helperUsesExistingClient) {
+    const login = await client1.post('/api/login', {
+      email: existingClientEmail,
+      password: existingClientPassword
+    });
+    harness.assert(login.ok, 'Existing client login failed. status=' + login.status);
+
+    const me = await client1.get('/api/me');
+    harness.assert(me.ok, '/api/me failed for existing client. status=' + me.status);
+
+    step5.pass('Existing client login confirmed (helper mode).', {
+      email: existingClientEmail,
+      activeRole: String(me.bodyJson && me.bodyJson.accessContext && me.bodyJson.accessContext.activeRole || '')
+    });
   } else {
     const validationPath = clientValidationUrl.replace(baseUrl, '');
     const validateRes = await client1.get(validationPath);

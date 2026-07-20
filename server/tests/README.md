@@ -27,12 +27,26 @@ This folder contains workflow-level test scripts that can be run on demand.
 - `TEST_KEEP_ARTIFACTS`: `true|false` to write JSON output files
 - `TEST_ALLOW_UNAUTHENTICATED`: if `true`, smoke auth test accepts `401` for `/api/me`
 
+Runner convenience:
+
+- `tests/run-workflows.js` auto-loads `tests/.env.local` then `tests/.env` if present.
+- Existing shell environment values still take precedence.
+
 Live onboarding flow additionally requires:
 
 - `TEST_ADMIN_USERNAME`
 - `TEST_ADMIN_PASSWORD`
 - `TEST_TURNSTILE_TOKEN`
 - Optional: `TEST_FLOW_CLIENT_PASSWORD`, `TEST_FLOW_STAFF_PASSWORD`, `TEST_FLOW_GUEST_PASSWORD`
+
+Turnstile helper mode for reruns:
+
+- `TEST_TURNSTILE_HELPER_MODE=require-token` (default): normal signup path, requires `TEST_TURNSTILE_TOKEN`.
+- `TEST_TURNSTILE_HELPER_MODE=existing-client`: skips signup/validation checks and logs in with existing client credentials.
+- With `existing-client` mode set:
+   - `TEST_FLOW_EXISTING_CLIENT_EMAIL` required
+   - `TEST_FLOW_EXISTING_CLIENT_PASSWORD` required
+   - `TEST_FLOW_SKIP_RESET=true` recommended (and automatically applied by script)
 
 ## Script Authoring Rules
 
