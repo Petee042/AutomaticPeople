@@ -18,6 +18,7 @@ This folder contains workflow-level test scripts that can be run on demand.
    - `npm run test:workflow:list`
    - `npm run test:workflow:auth -- --dry-run`
    - `npm run test:workflow:all -- --base-url http://localhost:3000`
+   - `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
 
 ## Environment Variables
 
@@ -25,6 +26,13 @@ This folder contains workflow-level test scripts that can be run on demand.
 - `TEST_TIMEOUT_MS`: request timeout for test HTTP calls
 - `TEST_KEEP_ARTIFACTS`: `true|false` to write JSON output files
 - `TEST_ALLOW_UNAUTHENTICATED`: if `true`, smoke auth test accepts `401` for `/api/me`
+
+Live onboarding flow additionally requires:
+
+- `TEST_ADMIN_USERNAME`
+- `TEST_ADMIN_PASSWORD`
+- `TEST_TURNSTILE_TOKEN`
+- Optional: `TEST_FLOW_CLIENT_PASSWORD`, `TEST_FLOW_STAFF_PASSWORD`, `TEST_FLOW_GUEST_PASSWORD`
 
 ## Script Authoring Rules
 
@@ -45,3 +53,7 @@ Each run writes JSON artifacts to `tests/output/` unless disabled. Review:
 - each step's `status`, `message`, and `details`
 
 These artifacts are designed so future automation can parse and summarize outcomes reliably.
+
+## Descriptive Flow Source
+
+The normalized repeatable flow definition is stored in `tests/Tests.md`.

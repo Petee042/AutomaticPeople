@@ -8,6 +8,11 @@ const TESTS = [
     id: 'workflow-01-auth-smoke',
     title: 'Workflow 01 - Auth smoke checks',
     modulePath: './workflows/workflow-01-auth-smoke.test.js'
+  },
+  {
+    id: 'workflow-02-live-onboarding-client-staff-guest',
+    title: 'Workflow 02 - Live onboarding: client, staff, guest',
+    modulePath: './workflows/workflow-02-live-onboarding-client-staff-guest.test.js'
   }
 ];
 
