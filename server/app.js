@@ -10747,7 +10747,7 @@ if (TRUST_PROXY_ENABLED) {
 }
 
 app.use(express.json({
-  limit: '5mb',
+  limit: '20mb',
   verify: (req, _res, buf) => {
     if (String(req.originalUrl || '').startsWith('/api/stripe/webhook')) {
       req.rawBody = buf.toString('utf8');
@@ -13931,7 +13931,7 @@ app.post('/api/inbound-mail/postmark', async (req, res) => {
     const recipients = getInboundRecipientAddresses(payload);
     const toAddress = getMatchingInboundRecipientAddress(recipients);
     if (!toAddress) {
-      return res.status(202).json({ received: true, stored: false, reason: 'Recipient does not match configured inbound domain.' });
+      return res.status(200).json({ received: true, stored: false, reason: 'Recipient does not match configured inbound domain.' });
     }
 
     const atIndex = toAddress.indexOf('@');
