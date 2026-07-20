@@ -13924,7 +13924,7 @@ app.post('/api/inbound-mail/postmark', async (req, res) => {
 
   const payload = req.body && typeof req.body === 'object' ? req.body : null;
   if (!payload) {
-    return res.status(400).json({ error: 'Invalid webhook payload.' });
+    return res.status(200).json({ received: true, stored: false, reason: 'Invalid webhook payload.' });
   }
 
   try {
@@ -13942,31 +13942,51 @@ app.post('/api/inbound-mail/postmark', async (req, res) => {
     const messageId = String(payload.MessageID || payload.MessageId || '').trim().slice(0, 250);
     const rawPayload = JSON.stringify(payload).slice(0, 500000);
 
-    const insertResult = await pool.query(
-      `
-        INSERT INTO inbound_email_log (
-          postmark_message_id,
-          from_address,
-          to_address,
-          recipient_username,
-          subject,
-          body_text,
-          raw_payload
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (postmark_message_id, to_address) DO NOTHING
-        RETURNING id
-      `,
-      [messageId || null, fromAddress, toAddress, recipientUsername, subject, bodyText, rawPayload]
-    );
+    let stored = false;
+    let duplicate = false;
+
+    if (messageId) {
+      const existing = await pool.query(
+        `
+          SELECT id
+          FROM inbound_email_log
+          WHERE postmark_message_id = $1
+            AND to_address = $2
+          LIMIT 1
+        `,
+        [messageId, toAddress]
+      );
+      if (existing.rows[0]) {
+        duplicate = true;
+      }
+    }
+
+    if (!duplicate) {
+      await pool.query(
+        `
+          INSERT INTO inbound_email_log (
+            postmark_message_id,
+            from_address,
+            to_address,
+            recipient_username,
+            subject,
+            body_text,
+            raw_payload
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [messageId || null, fromAddress, toAddress, recipientUsername, subject, bodyText, rawPayload]
+      );
+      stored = true;
+    }
 
     return res.status(200).json({
       received: true,
-      stored: Boolean(insertResult.rows[0]),
-      duplicate: !insertResult.rows[0]
+      stored,
+      duplicate
     });
   } catch (err) {
     console.error('Inbound email webhook failed:', err);
-    return res.status(500).json({ error: 'Failed to process inbound email webhook.' });
+    return res.status(200).json({ received: true, stored: false, error: 'Inbound email accepted but could not be persisted.' });
   }
 });
 
