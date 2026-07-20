@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inbound Email Inbox - AutomaticPeople</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .inbound-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .inbound-toolbar input[type="search"] {
+      flex: 1 1 260px;
+      min-width: 180px;
+    }
+    .inbound-toolbar .btn {
+      flex: 0 0 auto;
+    }
+    .inbound-webhook-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: center;
+      margin-bottom: 0.4rem;
+    }
+    .inbound-webhook-row input {
+      flex: 1 1 420px;
+      min-width: 220px;
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .inbound-table-wrap {
+      overflow-x: auto;
+    }
+    .inbound-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .inbound-table th,
+    .inbound-table td {
+      border: 1px solid var(--border-color, #ddd);
+      padding: 0.45rem 0.6rem;
+      vertical-align: top;
+      text-align: left;
+    }
+    .inbound-table th {
+      background: var(--table-header-bg, #f5f5f5);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .inbound-table td {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .inbound-col-dtg {
+      min-width: 156px;
+      white-space: nowrap;
+    }
+    .inbound-col-address {
+      min-width: 180px;
+    }
+    .inbound-col-subject {
+      min-width: 220px;
+    }
+    .inbound-col-body {
+      min-width: 360px;
+    }
+  </style>
+</head>
+<body>
+  <header class="top-bar">
+    <div class="header-left">
+      <a href="/Admin/index.html" class="back-arrow-control" aria-label="Back"></a>
+      <a class="top-brand-link" href="/Admin/index.html" aria-label="AutomaticPeople admin home">
+        <img class="top-brand-logo" src="/images/Icon.jpg" alt="AutomaticPeople logo" />
+      </a>
+    </div>
+    <button id="adminLogoutBtn" class="btn secondary">Log Out</button>
+  </header>
+
+  <main class="dashboard">
+    <div class="card-container wide admin-card">
+      <h2>Inbound Email Inbox</h2>
+      <p id="inboundMessage" class="message" aria-live="polite"></p>
+
+      <section class="listing-form-section">
+        <h3>Webhook Setup</h3>
+        <div class="inbound-webhook-row">
+          <label for="inboundWebhookUrl">Webhook URL</label>
+          <input id="inboundWebhookUrl" type="text" readonly />
+          <button id="copyWebhookUrlBtn" type="button" class="btn secondary">Copy URL</button>
+        </div>
+        <p id="inboundPatternHint" class="hint">Inbound email pattern: not configured</p>
+      </section>
+
+      <section class="listing-form-section">
+        <h3>Inbound Messages</h3>
+        <div class="inbound-toolbar">
+          <input id="inboundSearch" type="search" placeholder="Search from, to, subject, body" aria-label="Search inbound emails" />
+          <button id="inboundSearchBtn" type="button" class="btn secondary">Search</button>
+          <button id="inboundClearSearchBtn" type="button" class="btn secondary">Clear</button>
+          <button id="inboundRefreshBtn" type="button" class="btn secondary">Refresh</button>
+          <button id="inboundDeleteAllBtn" type="button" class="btn secondary">Delete All</button>
+        </div>
+
+        <p id="inboundCount" class="hint">Loading...</p>
+
+        <div class="inbound-table-wrap">
+          <table class="inbound-table" aria-label="Inbound email log">
+            <thead>
+              <tr>
+                <th class="inbound-col-dtg">Received</th>
+                <th class="inbound-col-address">From</th>
+                <th class="inbound-col-address">To</th>
+                <th class="inbound-col-subject">Subject</th>
+                <th class="inbound-col-body">Body</th>
+              </tr>
+            </thead>
+            <tbody id="inboundTableBody">
+              <tr><td colspan="5">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/Admin/inbound-mail.js"></script>
+<script src="/navigation-guard.js"></script>
+</body>
+</html>

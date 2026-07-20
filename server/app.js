@@ -34,6 +34,7 @@ const STAY_API_BASE_URL = 'https://api.stayapi.com';
 const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').trim();
 const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
 const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
+const INBOUND_MAIL = String(process.env.INBOUND_MAIL || '').trim().toLowerCase();
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || '').trim().toLowerCase());
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE || '').trim().toLowerCase());
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
@@ -731,6 +732,33 @@ async function initializeUserStore() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_user_event_log_client_created
     ON user_event_log (client_account_id, created_at DESC)
+  `);
+
+  // ── Inbound email log: Postmark inbound webhook records
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inbound_email_log (
+      id BIGSERIAL PRIMARY KEY,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      postmark_message_id TEXT,
+      from_address TEXT NOT NULL DEFAULT '',
+      to_address TEXT NOT NULL DEFAULT '',
+      recipient_username TEXT NOT NULL DEFAULT '',
+      subject TEXT NOT NULL DEFAULT '',
+      body_text TEXT NOT NULL DEFAULT '',
+      raw_payload TEXT NOT NULL DEFAULT '{}'
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_inbound_email_log_received_at
+    ON inbound_email_log (received_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_email_log_message_to
+    ON inbound_email_log (postmark_message_id, to_address)
+    WHERE postmark_message_id IS NOT NULL
+      AND postmark_message_id <> ''
   `);
 
   // ── ICS transaction log: records every ICS fetch attempt for admin diagnostics
@@ -3417,6 +3445,131 @@ function getPostmarkErrorMessage(errorPayload, statusCode) {
     text += ' [Postmark code ' + code + ']';
   }
   return text;
+}
+
+function normaliseInboundMailSubdomain(value) {
+  let text = String(value || '').trim().toLowerCase();
+  if (!text) {
+    return '';
+  }
+  if (text.startsWith('@')) {
+    text = text.slice(1);
+  }
+  if (text.endsWith('.automaticpeople.com')) {
+    text = text.slice(0, -('.automaticpeople.com'.length));
+  }
+  text = text.replace(/[^a-z0-9.-]/g, '').replace(/\.+/g, '.').replace(/^\.+|\.+$/g, '');
+  return text;
+}
+
+const INBOUND_MAIL_SUBDOMAIN = normaliseInboundMailSubdomain(INBOUND_MAIL);
+const INBOUND_MAIL_DOMAIN = INBOUND_MAIL_SUBDOMAIN ? (INBOUND_MAIL_SUBDOMAIN + '.automaticpeople.com') : '';
+
+function getInboundEmailWebhookPath() {
+  return '/api/inbound-mail/postmark';
+}
+
+function buildInboundEmailWebhookUrl(req) {
+  const baseUrl = getPreferredAppBaseUrl(req) || getRequestBaseUrl(req) || '';
+  if (!baseUrl) {
+    return getInboundEmailWebhookPath();
+  }
+  return baseUrl.replace(/\/+$/g, '') + getInboundEmailWebhookPath();
+}
+
+function extractEmailAddressesFromText(value) {
+  const text = String(value || '');
+  const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
+  const seen = new Set();
+  const out = [];
+  matches.forEach((entry) => {
+    const normalized = String(entry || '').trim().toLowerCase();
+    if (!normalized || !isValidEmailAddress(normalized) || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  });
+  return out;
+}
+
+function getInboundRecipientAddresses(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const candidates = [];
+
+  [body.To, body.OriginalRecipient, body.DeliveredTo].forEach((value) => {
+    candidates.push(...extractEmailAddressesFromText(value));
+  });
+
+  [body.ToFull, body.CcFull].forEach((group) => {
+    if (!Array.isArray(group)) {
+      return;
+    }
+    group.forEach((item) => {
+      candidates.push(...extractEmailAddressesFromText(item && (item.Email || item.EmailAddress || item.Name || '')));
+    });
+  });
+
+  return Array.from(new Set(candidates));
+}
+
+function getMatchingInboundRecipientAddress(addresses) {
+  const list = Array.isArray(addresses) ? addresses : [];
+  if (!INBOUND_MAIL_DOMAIN) {
+    return null;
+  }
+  const suffix = '@' + INBOUND_MAIL_DOMAIN;
+  for (const address of list) {
+    const email = String(address || '').trim().toLowerCase();
+    if (email.endsWith(suffix)) {
+      return email;
+    }
+  }
+  return null;
+}
+
+function getInboundSenderAddress(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const candidates = [
+    body.From,
+    body.FromFull && body.FromFull.Email,
+    body.Headers && Array.isArray(body.Headers)
+      ? (body.Headers.find((header) => String(header && header.Name || '').toLowerCase() === 'from') || {}).Value
+      : ''
+  ];
+
+  for (const candidate of candidates) {
+    const extracted = extractEmailAddressesFromText(candidate);
+    if (extracted[0]) {
+      return extracted[0];
+    }
+  }
+  return '';
+}
+
+function getInboundBodyText(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const strippedReply = String(body.StrippedTextReply || '').trim();
+  if (strippedReply) {
+    return strippedReply.slice(0, 20000);
+  }
+
+  const textBody = String(body.TextBody || '').trim();
+  if (textBody) {
+    return textBody.slice(0, 20000);
+  }
+
+  const strippedHtmlBody = String(body.StrippedHtmlBody || '').trim();
+  if (strippedHtmlBody) {
+    return htmlToPlainText(strippedHtmlBody).slice(0, 20000);
+  }
+
+  const htmlBody = String(body.HtmlBody || '').trim();
+  if (htmlBody) {
+    return htmlToPlainText(htmlBody).slice(0, 20000);
+  }
+
+  return '';
 }
 
 function getPreferredAppBaseUrl(req) {
@@ -11852,6 +12005,101 @@ app.post('/api/admin/email/test/send', requireAdminAuth, async (req, res) => {
   }
 });
 
+// GET /api/admin/inbound-mail/config
+app.get('/api/admin/inbound-mail/config', requireAdminAuth, (req, res) => {
+  return res.json({
+    configured: Boolean(INBOUND_MAIL_DOMAIN),
+    inboundMailSubdomain: INBOUND_MAIL_SUBDOMAIN,
+    inboundMailDomain: INBOUND_MAIL_DOMAIN,
+    inboundAddressPattern: INBOUND_MAIL_DOMAIN ? ('<username>@' + INBOUND_MAIL_DOMAIN) : '',
+    webhookPath: getInboundEmailWebhookPath(),
+    webhookUrl: buildInboundEmailWebhookUrl(req)
+  });
+});
+
+// GET /api/admin/inbound-mail
+app.get('/api/admin/inbound-mail', requireAdminAuth, async (req, res) => {
+  const search = String(req.query.search || '').trim();
+  const limitRaw = Number(req.query.limit);
+  const offsetRaw = Number(req.query.offset);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 500;
+  const offset = Number.isInteger(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+
+  try {
+    let queryText = `
+      SELECT id,
+             received_at,
+             from_address,
+             to_address,
+             subject,
+             body_text
+      FROM inbound_email_log
+    `;
+    const params = [];
+    if (search) {
+      params.push('%' + search.toLowerCase() + '%');
+      queryText += `
+        WHERE LOWER(
+          COALESCE(from_address, '') || ' ' ||
+          COALESCE(to_address, '') || ' ' ||
+          COALESCE(subject, '') || ' ' ||
+          COALESCE(body_text, '')
+        ) LIKE $1
+      `;
+    }
+    params.push(limit);
+    params.push(offset);
+    queryText += `
+      ORDER BY received_at DESC, id DESC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+    `;
+
+    const countResult = search
+      ? await pool.query(
+          `
+            SELECT COUNT(*)::int AS total
+            FROM inbound_email_log
+            WHERE LOWER(
+              COALESCE(from_address, '') || ' ' ||
+              COALESCE(to_address, '') || ' ' ||
+              COALESCE(subject, '') || ' ' ||
+              COALESCE(body_text, '')
+            ) LIKE $1
+          `,
+          ['%' + search.toLowerCase() + '%']
+        )
+      : await pool.query('SELECT COUNT(*)::int AS total FROM inbound_email_log');
+
+    const rowsResult = await pool.query(queryText, params);
+
+    return res.json({
+      entries: rowsResult.rows || [],
+      total: Number(countResult.rows[0] && countResult.rows[0].total || 0),
+      limit,
+      offset,
+      search
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to load inbound email log.' });
+  }
+});
+
+// DELETE /api/admin/inbound-mail
+app.delete('/api/admin/inbound-mail', requireAdminAuth, async (_req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM inbound_email_log');
+    return res.json({
+      ok: true,
+      deletedCount: Number(result.rowCount || 0)
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to clear inbound email log.' });
+  }
+});
+
 // GET /api/admin/stripe/payment-intents/:paymentIntentId — diagnostic view for Stripe payment intent linkage
 app.get('/api/admin/stripe/payment-intents/:paymentIntentId', requireAdminAuth, async (req, res) => {
   const paymentIntentId = String(req.params.paymentIntentId || '').trim();
@@ -13665,6 +13913,60 @@ app.post('/api/stripe/webhook', async (req, res) => {
   } catch (err) {
     console.error('Stripe webhook handling failed:', err);
     return res.status(500).json({ error: 'Failed to process webhook event.' });
+  }
+});
+
+// POST /api/inbound-mail/postmark — Postmark inbound webhook endpoint
+app.post('/api/inbound-mail/postmark', async (req, res) => {
+  if (!INBOUND_MAIL_DOMAIN) {
+    return res.status(503).json({ error: 'INBOUND_MAIL is not configured on the server.' });
+  }
+
+  const payload = req.body && typeof req.body === 'object' ? req.body : null;
+  if (!payload) {
+    return res.status(400).json({ error: 'Invalid webhook payload.' });
+  }
+
+  try {
+    const recipients = getInboundRecipientAddresses(payload);
+    const toAddress = getMatchingInboundRecipientAddress(recipients);
+    if (!toAddress) {
+      return res.status(202).json({ received: true, stored: false, reason: 'Recipient does not match configured inbound domain.' });
+    }
+
+    const atIndex = toAddress.indexOf('@');
+    const recipientUsername = atIndex > 0 ? toAddress.slice(0, atIndex) : '';
+    const fromAddress = getInboundSenderAddress(payload);
+    const subject = String(payload.Subject || '').trim().slice(0, 500);
+    const bodyText = getInboundBodyText(payload);
+    const messageId = String(payload.MessageID || payload.MessageId || '').trim().slice(0, 250);
+    const rawPayload = JSON.stringify(payload).slice(0, 500000);
+
+    const insertResult = await pool.query(
+      `
+        INSERT INTO inbound_email_log (
+          postmark_message_id,
+          from_address,
+          to_address,
+          recipient_username,
+          subject,
+          body_text,
+          raw_payload
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (postmark_message_id, to_address) DO NOTHING
+        RETURNING id
+      `,
+      [messageId || null, fromAddress, toAddress, recipientUsername, subject, bodyText, rawPayload]
+    );
+
+    return res.status(200).json({
+      received: true,
+      stored: Boolean(insertResult.rows[0]),
+      duplicate: !insertResult.rows[0]
+    });
+  } catch (err) {
+    console.error('Inbound email webhook failed:', err);
+    return res.status(500).json({ error: 'Failed to process inbound email webhook.' });
   }
 });
 
