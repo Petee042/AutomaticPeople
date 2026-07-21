@@ -194,12 +194,15 @@ async function run(argv) {
   const adminPassword = requiredEnv('TEST_ADMIN_PASSWORD');
 
   const clientEmail = optionalEnv('TEST_FLOW_CLIENT_EMAIL', 'client1@alphainbound.automaticpeople.com').toLowerCase();
+  const staffEmail = optionalEnv('TEST_FLOW_STAFF_EMAIL', 'staff1@alphainbound.automaticpeople.com').toLowerCase();
   const guestEmail = optionalEnv('TEST_FLOW_GUEST_EMAIL', 'guest1@alphainbound.automaticpeople.com').toLowerCase();
   const clientPassword = optionalEnv('TEST_FLOW_CLIENT_PASSWORD', 'Quiblick!4');
+  const staffPassword = optionalEnv('TEST_FLOW_STAFF_PASSWORD', 'Quiblick!5');
   const guestPassword = optionalEnv('TEST_FLOW_GUEST_PASSWORD', 'Quiblick!6');
 
   const adminClient = new SessionClient(baseUrl, options.timeoutMs);
   const client = new SessionClient(baseUrl, options.timeoutMs);
+  const staffClient = new SessionClient(baseUrl, options.timeoutMs);
   const guestClient = new SessionClient(baseUrl, options.timeoutMs);
 
   const step1 = harness.step('1. Clean site user data via admin schema reset');
@@ -266,10 +269,54 @@ async function run(argv) {
     step3.pass('Client account created, validated, and logged in.', null);
   }
 
-  const step4 = harness.step('4. Create property and listing for private reservation');
-  let listingId = 0;
+  const step4 = harness.step('4. Invite staff1, set password, and verify staff login');
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
+  } else {
+    const inviteStaff = await client.post('/api/access/team', {
+      firstName: 'Sonya',
+      familyName: 'Clean',
+      country: 'GB',
+      email: staffEmail,
+      roles: ['Staff']
+    });
+    harness.assert(inviteStaff.ok, 'Staff invite failed. status=' + inviteStaff.status);
+
+    const staffSetupEmail = await waitForInboundEmail(adminClient, staffEmail, 'password', 120000, 5000);
+    harness.assert(staffSetupEmail, 'No staff password setup email found in inbound log.');
+    const staffResetUrl = findFirstUrl(String(staffSetupEmail.body_text || ''), 'reset-password');
+    harness.assert(staffResetUrl, 'Staff reset-password URL was not found in email body.');
+
+    const staffResetUrlObj = new URL(staffResetUrl);
+    const staffResetToken = String(staffResetUrlObj.searchParams.get('token') || '').trim();
+    harness.assert(staffResetToken, 'Staff reset token missing from URL.');
+
+    const staffResetConfirm = await staffClient.post('/api/account/password-reset/confirm', {
+      token: staffResetToken,
+      password: staffPassword
+    });
+    harness.assert(staffResetConfirm.ok, 'Staff password reset failed. status=' + staffResetConfirm.status);
+
+    const staffLogin = await staffClient.post('/api/login', {
+      email: staffEmail,
+      password: staffPassword
+    });
+    harness.assert(staffLogin.ok, 'Staff login failed. status=' + staffLogin.status);
+
+    const staffMe = await staffClient.get('/api/me');
+    harness.assert(staffMe.ok, 'Staff /api/me failed. status=' + staffMe.status);
+    harness.assert(staffMe.bodyJson && staffMe.bodyJson.isValidated === true, 'Staff account should be validated after password setup.');
+
+    step4.pass('Staff invited, password set, and login confirmed.', {
+      email: staffEmail,
+      isValidated: Boolean(staffMe.bodyJson && staffMe.bodyJson.isValidated)
+    });
+  }
+
+  const step5 = harness.step('5. Create property and listing for private reservation');
+  let listingId = 0;
+  if (options.dryRun) {
+    step5.skip('Dry run enabled.');
   } else {
     const propertyRes = await client.post('/api/properties', {
       name: 'Workflow 03 Property'
@@ -287,12 +334,12 @@ async function run(argv) {
     listingId = Number(listingRes.bodyJson && listingRes.bodyJson.listing && listingRes.bodyJson.listing.id || 0);
     harness.assert(Number.isInteger(listingId) && listingId > 0, 'Listing id missing from create response.');
 
-    step4.pass('Property and listing created.', { propertyId, listingId });
+    step5.pass('Property and listing created.', { propertyId, listingId });
   }
 
-  const step5 = harness.step('5. Create private reservation to provision guest site user');
+  const step6 = harness.step('6. Create private reservation to provision guest site user');
   if (options.dryRun) {
-    step5.skip('Dry run enabled.');
+    step6.skip('Dry run enabled.');
   } else {
     const arrivalDate = formatDateKey(20);
     const departureDate = formatDateKey(23);
@@ -310,15 +357,15 @@ async function run(argv) {
     });
     harness.assert(reservationRes.ok, 'Private reservation create failed. status=' + reservationRes.status);
 
-    step5.pass('Private reservation created and guest site user provisioning path executed.', {
+    step6.pass('Private reservation created and guest site user provisioning path executed.', {
       reservationId: Number(reservationRes.bodyJson && reservationRes.bodyJson.reservation && reservationRes.bodyJson.reservation.id || 0)
     });
   }
 
-  const step6 = harness.step('6. Request guest password setup email and capture reset link');
+  const step7 = harness.step('7. Request guest password setup email and capture reset link');
   let guestResetToken = '';
   if (options.dryRun) {
-    step6.skip('Dry run enabled.');
+    step7.skip('Dry run enabled.');
   } else {
     const resetReq = await client.post('/api/account/password-reset/request', { email: guestEmail });
     harness.assert(resetReq.ok, 'Guest password reset request failed. status=' + resetReq.status);
@@ -332,12 +379,12 @@ async function run(argv) {
     guestResetToken = String(resetUrlObj.searchParams.get('token') || '').trim();
     harness.assert(guestResetToken, 'Guest reset token missing from URL.');
 
-    step6.pass('Guest reset email captured.', { to: resetEmail.to_address, subject: resetEmail.subject });
+    step7.pass('Guest reset email captured.', { to: resetEmail.to_address, subject: resetEmail.subject });
   }
 
-  const step7 = harness.step('7. Set guest password and verify guest login');
+  const step8 = harness.step('8. Set guest password and verify guest login');
   if (options.dryRun) {
-    step7.skip('Dry run enabled.');
+    step8.skip('Dry run enabled.');
   } else {
     const resetConfirm = await guestClient.post('/api/account/password-reset/confirm', {
       token: guestResetToken,
@@ -357,12 +404,12 @@ async function run(argv) {
     const activeRole = String(access.activeRole || '').trim();
     harness.assert(activeRole === 'Guest', 'Expected active role Guest, got ' + activeRole);
 
-    step7.pass('Guest login successful with guest-scoped role.', { activeRole });
+    step8.pass('Guest login successful with guest-scoped role.', { activeRole });
   }
 
-  const step8 = harness.step('8. Verify guest dashboard reservations endpoint');
+  const step9 = harness.step('9. Verify guest dashboard reservations endpoint');
   if (options.dryRun) {
-    step8.skip('Dry run enabled.');
+    step9.skip('Dry run enabled.');
   } else {
     const reservationsRes = await guestClient.get('/api/guest/dashboard/reservations');
     harness.assert(reservationsRes.ok, 'Guest reservations endpoint failed. status=' + reservationsRes.status);
@@ -374,7 +421,7 @@ async function run(argv) {
       ? reservationsRes.bodyJson.facilityReservations
       : [];
 
-    step8.pass('Guest dashboard data is accessible and populated.', {
+    step9.pass('Guest dashboard data is accessible and populated.', {
       reservations: reservations.length,
       facilityReservations: facilityReservations.length
     });
