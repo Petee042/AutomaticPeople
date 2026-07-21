@@ -35,6 +35,8 @@ const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').tr
 const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
 const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
 const INBOUND_MAIL = String(process.env.INBOUND_MAIL || '').trim().toLowerCase();
+const NODE_ENV_NAME = String(process.env.NODE_ENV || '').trim().toLowerCase();
+const IS_ALPHA = NODE_ENV_NAME === 'development';
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || '').trim().toLowerCase());
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE || '').trim().toLowerCase());
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
@@ -42,15 +44,14 @@ const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
 const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
-const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY);
+const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY) && !IS_ALPHA;
 const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT_COUNTRY || 'GB').trim().toUpperCase();
 const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
   || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
-  || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+  || NODE_ENV_NAME === 'production';
 const ENABLE_LEGACY_FEED_CRON = ['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_LEGACY_FEED_CRON || '').trim().toLowerCase());
 const CALENDAR_CRON_DB_LOCK_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CALENDAR_CRON_DB_LOCK_ENABLED || 'true').trim().toLowerCase());
 const DATA_RESET_FLAG_KEY = 'minimal-profile-reset-v1';
-const IS_ALPHA = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'development';
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim();
 const ACCOUNT_VALIDATION_TOKEN_VERSION = 'v1';
 const ACCOUNT_VALIDATION_TOKEN_TTL_MS = Number(process.env.ACCOUNT_VALIDATION_TOKEN_TTL_MS || (1000 * 60 * 60 * 24 * 7));
