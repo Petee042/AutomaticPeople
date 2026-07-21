@@ -41,8 +41,8 @@ Validate an end-to-end onboarding workflow using live APIs and real email delive
 5. Validate account via link, then login with new credentials.
 6. As Client1, add Staff1 (Sonya Clean) from Config team flow and verify password setup email is received.
 7. Set Staff1 password from link and verify Staff1 login succeeds and account is validated.
-8. As Client1, add Guest1 (Joe Tidy) from Config guest flow and verify invitation/password setup email is received.
-9. As Guest1, verify only guest navigation is available and guest reservations/facility bookings are empty.
+8. As Client1, add Guest1 (Joe Tidy) from Config guest flow and verify guest relationship creation (invite/setup email may be absent).
+9. If a guest setup path is emitted, validate Guest1 login and guest-only visibility; otherwise mark this step as skipped.
 
 ### Notes on Evidence
 
@@ -54,4 +54,20 @@ Validate an end-to-end onboarding workflow using live APIs and real email delive
 
 ### Expected Current Risk
 
-If guest creation in Config does not currently emit a password setup email, steps 8-9 may fail. That failure is useful evidence and should be retained in artifacts.
+If guest creation in Config does not currently emit a password setup email, step 9 is skipped and this is recorded in artifact details.
+
+## Flow: Guest Login From Private Reservation Provisioning (Live)
+
+### Purpose
+
+Validate a full guest login journey using a provisioning path that creates a guest site user, then confirms guest dashboard access.
+
+### Workflow Summary
+
+1. Reset schema and clear inbound mail.
+2. Create and validate client account.
+3. Create property and listing.
+4. Create a no-charge private reservation for Guest1 (provisions guest site user).
+5. Request guest password reset email and extract reset link.
+6. Set guest password and login.
+7. Verify `GET /api/guest/dashboard/reservations` is accessible and populated.

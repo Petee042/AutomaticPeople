@@ -21,6 +21,7 @@ This folder contains workflow-level test scripts that can be run on demand.
    - `npm run test:workflow:all -- --base-url http://localhost:3000`
    - `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`
+   - `npm run test:workflow:guest-login -- --live --base-url https://automaticpeople-alpha.onrender.com`
 
 ## Environment Variables
 
@@ -40,6 +41,13 @@ Live onboarding flow additionally requires:
 - `TEST_ADMIN_PASSWORD`
 - `TEST_TURNSTILE_TOKEN`
 - Optional: `TEST_FLOW_CLIENT_PASSWORD`, `TEST_FLOW_STAFF_PASSWORD`, `TEST_FLOW_GUEST_PASSWORD`
+
+Guest-login provisioning flow additionally requires:
+
+- `TEST_ADMIN_USERNAME`
+- `TEST_ADMIN_PASSWORD`
+- Optional: `TEST_FLOW_CLIENT_EMAIL`, `TEST_FLOW_GUEST_EMAIL`
+- Optional: `TEST_FLOW_CLIENT_PASSWORD`, `TEST_FLOW_GUEST_PASSWORD`
 
 Browser-assisted Turnstile helper:
 

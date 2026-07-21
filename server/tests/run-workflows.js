@@ -19,6 +19,11 @@ const TESTS = [
     id: 'workflow-02-live-onboarding-client-staff-guest',
     title: 'Workflow 02 - Live onboarding: client, staff, guest',
     modulePath: './workflows/workflow-02-live-onboarding-client-staff-guest.test.js'
+  },
+  {
+    id: 'workflow-03-live-guest-login-from-private-reservation',
+    title: 'Workflow 03 - Live guest login from private reservation provisioning',
+    modulePath: './workflows/workflow-03-live-guest-login-from-private-reservation.test.js'
   }
 ];
 

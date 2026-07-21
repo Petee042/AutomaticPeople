@@ -12,6 +12,7 @@
     "test:workflow:auth": "node tests/run-workflows.js --only workflow-01-auth-smoke",
     "test:workflow:live-onboarding": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest",
     "test:workflow:live-onboarding:assist": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest --browser-assisted-turnstile",
+    "test:workflow:guest-login": "node tests/run-workflows.js --only workflow-03-live-guest-login-from-private-reservation",
     "test:workflow:list": "node tests/run-workflows.js --list"
   },
   "dependencies": {
