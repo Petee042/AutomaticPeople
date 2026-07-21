@@ -963,16 +963,19 @@ function closeTeamMemberEditor() {
 function renderGuests(guests) {
   currentGuests = Array.isArray(guests) ? guests : [];
   const tbody = document.getElementById('guestsTableBody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
+  if (tbody) {
+    tbody.innerHTML = '';
+  }
 
   if (!currentGuests.length) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = 4;
-    cell.textContent = 'No guest contacts found.';
-    row.appendChild(cell);
-    tbody.appendChild(row);
+    if (tbody) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 4;
+      cell.textContent = 'No guest contacts found.';
+      row.appendChild(cell);
+      tbody.appendChild(row);
+    }
     renderConfigRows('configGuestsList', [], 'No guests yet.');
     return;
   }
@@ -989,28 +992,30 @@ function renderGuests(guests) {
     'No guests yet.'
   );
 
-  currentGuests.forEach((guest) => {
-    const row = document.createElement('tr');
+  if (tbody) {
+    currentGuests.forEach((guest) => {
+      const row = document.createElement('tr');
 
-    const nameCell = document.createElement('td');
-    const guestName = [guest.guest_first_name, guest.guest_family_name].filter(Boolean).join(' ').trim();
-    nameCell.textContent = guestName || 'Guest';
+      const nameCell = document.createElement('td');
+      const guestName = [guest.guest_first_name, guest.guest_family_name].filter(Boolean).join(' ').trim();
+      nameCell.textContent = guestName || 'Guest';
 
-    const emailCell = document.createElement('td');
-    emailCell.textContent = guest.guest_email || '';
+      const emailCell = document.createElement('td');
+      emailCell.textContent = guest.guest_email || '';
 
-    const phoneCell = document.createElement('td');
-    phoneCell.textContent = guest.guest_phone || '';
+      const phoneCell = document.createElement('td');
+      phoneCell.textContent = guest.guest_phone || '';
 
-    const sourceCell = document.createElement('td');
-    sourceCell.textContent = guest.source_type || '';
+      const sourceCell = document.createElement('td');
+      sourceCell.textContent = guest.source_type || '';
 
-    row.appendChild(nameCell);
-    row.appendChild(emailCell);
-    row.appendChild(phoneCell);
-    row.appendChild(sourceCell);
-    tbody.appendChild(row);
-  });
+      row.appendChild(nameCell);
+      row.appendChild(emailCell);
+      row.appendChild(phoneCell);
+      row.appendChild(sourceCell);
+      tbody.appendChild(row);
+    });
+  }
 }
 
 function renderManagerAssignmentSelectors(snapshot) {
