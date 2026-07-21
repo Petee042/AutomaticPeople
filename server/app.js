@@ -5409,9 +5409,9 @@ async function syncGuestRelationshipsForClientAccount(clientAccountIdInput) {
       FROM users u
       JOIN client_memberships cm
         ON cm.user_id = u.id
-       AND cm.client_account_id = gr.client_account_id
        AND cm.role = 'Guest'
       WHERE gr.client_account_id = $1
+        AND cm.client_account_id = gr.client_account_id
         AND gr.guest_user_id IS NULL
         AND LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(COALESCE(gr.guest_email, '')))
     `,
