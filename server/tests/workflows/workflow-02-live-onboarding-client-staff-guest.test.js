@@ -242,11 +242,24 @@ async function run(argv) {
   const turnstileHelperMode = flowArgs.turnstileHelperMode || configuredHelperMode || 'require-token';
   const helperUsesExistingClient = turnstileHelperMode === 'existing-client';
 
+  const browserAssistEnabled = flowArgs.browserAssistedTurnstile || toBool(process.env.TEST_BROWSER_ASSISTED_TURNSTILE, false);
+
+  const publicClient = new SessionClient(baseUrl, options.timeoutMs);
+  let signupTurnstileEnabled = true;
+  const turnstileConfigResponse = await publicClient.get('/api/signup/turnstile-config');
+  if (turnstileConfigResponse.ok && turnstileConfigResponse.bodyJson && typeof turnstileConfigResponse.bodyJson.enabled === 'boolean') {
+    signupTurnstileEnabled = Boolean(turnstileConfigResponse.bodyJson.enabled);
+  }
+
   let turnstileToken = helperUsesExistingClient
     ? String(process.env.TEST_TURNSTILE_TOKEN || '').trim()
+    : !signupTurnstileEnabled
+      ? ''
     : options.dryRun
       ? String(process.env.TEST_TURNSTILE_TOKEN || '').trim()
-      : requiredEnv('TEST_TURNSTILE_TOKEN');
+      : browserAssistEnabled
+        ? String(process.env.TEST_TURNSTILE_TOKEN || '').trim()
+        : requiredEnv('TEST_TURNSTILE_TOKEN');
 
   const clientEmail = optionalEnv('TEST_FLOW_CLIENT_EMAIL', 'client1@alphainbound.automaticpeople.com').toLowerCase();
   const staffEmail = optionalEnv('TEST_FLOW_STAFF_EMAIL', 'staff1@alphainbound.automaticpeople.com').toLowerCase();
@@ -261,9 +274,7 @@ async function run(argv) {
   const skipReset = flowArgs.skipReset
     || toBool(process.env.TEST_FLOW_SKIP_RESET, false)
     || helperUsesExistingClient;
-  const browserAssistEnabled = flowArgs.browserAssistedTurnstile || toBool(process.env.TEST_BROWSER_ASSISTED_TURNSTILE, false);
-
-  if (!helperUsesExistingClient && !options.dryRun && browserAssistEnabled && !turnstileToken) {
+  if (signupTurnstileEnabled && !helperUsesExistingClient && !options.dryRun && browserAssistEnabled && !turnstileToken) {
     turnstileToken = await captureTurnstileToken({
       baseUrl,
       timeoutMs: Math.max(Number(options.timeoutMs || 0), 5 * 60 * 1000)
