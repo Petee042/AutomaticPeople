@@ -5272,7 +5272,7 @@ async function replaceManagerAssignments(clientAccountId, managerMembershipId, p
 }
 
 async function getGuestsForClientAccount(clientAccountId) {
-  
+  await syncGuestRelationshipsForClientAccount(clientAccountId);
 
   const result = await pool.query(
     `
@@ -5297,6 +5297,126 @@ async function getGuestsForClientAccount(clientAccountId) {
   );
 
   return result.rows;
+}
+
+async function syncGuestRelationshipsForClientAccount(clientAccountIdInput) {
+  const clientAccountId = Number(clientAccountIdInput || 0);
+  if (!Number.isInteger(clientAccountId) || clientAccountId <= 0) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO guest_relationships (
+        client_account_id,
+        guest_email,
+        guest_phone,
+        guest_first_name,
+        guest_family_name,
+        source_type,
+        source_id,
+        first_seen_at,
+        last_seen_at
+      )
+      SELECT
+        ra.client_account_id,
+        LOWER(TRIM(ra.email_address)) AS guest_email,
+        '' AS guest_phone,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(ra.first_name, '')), '')), '') AS guest_first_name,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(ra.family_name, '')), '')), '') AS guest_family_name,
+        'private_reservation' AS source_type,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(ra.reservation_identifier, '')), '')), MAX(ra.id)::text) AS source_id,
+        MIN(ra.created_at) AS first_seen_at,
+        MAX(COALESCE(ra.updated_at, ra.created_at)) AS last_seen_at
+      FROM reservation_activity ra
+      WHERE ra.client_account_id = $1
+        AND NULLIF(TRIM(ra.email_address), '') IS NOT NULL
+      GROUP BY ra.client_account_id, LOWER(TRIM(ra.email_address))
+      ON CONFLICT (client_account_id, guest_email, guest_phone)
+      DO UPDATE
+      SET guest_first_name = COALESCE(NULLIF(EXCLUDED.guest_first_name, ''), guest_relationships.guest_first_name),
+          guest_family_name = COALESCE(NULLIF(EXCLUDED.guest_family_name, ''), guest_relationships.guest_family_name),
+          source_type = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_type, '')), '') IS NULL
+              THEN EXCLUDED.source_type
+            ELSE guest_relationships.source_type
+          END,
+          source_id = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_id, '')), '') IS NULL
+              THEN EXCLUDED.source_id
+            ELSE guest_relationships.source_id
+          END,
+          first_seen_at = LEAST(guest_relationships.first_seen_at, EXCLUDED.first_seen_at),
+          last_seen_at = GREATEST(guest_relationships.last_seen_at, EXCLUDED.last_seen_at),
+          updated_at = CURRENT_TIMESTAMP
+    `,
+    [clientAccountId]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO guest_relationships (
+        client_account_id,
+        guest_email,
+        guest_phone,
+        guest_first_name,
+        guest_family_name,
+        source_type,
+        source_id,
+        first_seen_at,
+        last_seen_at
+      )
+      SELECT
+        rr.client_account_id,
+        LOWER(TRIM(rr.email_address)) AS guest_email,
+        TRIM(COALESCE(rr.telephone, '')) AS guest_phone,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(rr.first_name, '')), '')), '') AS guest_first_name,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(rr.family_name, '')), '')), '') AS guest_family_name,
+        'shared_resource_reservation' AS source_type,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(rr.reservation_identifier, '')), '')), MAX(rr.id)::text) AS source_id,
+        MIN(rr.created_at) AS first_seen_at,
+        MAX(COALESCE(rr.updated_at, rr.created_at)) AS last_seen_at
+      FROM shared_resource_reservations rr
+      WHERE rr.client_account_id = $1
+        AND NULLIF(TRIM(rr.email_address), '') IS NOT NULL
+      GROUP BY rr.client_account_id, LOWER(TRIM(rr.email_address)), TRIM(COALESCE(rr.telephone, ''))
+      ON CONFLICT (client_account_id, guest_email, guest_phone)
+      DO UPDATE
+      SET guest_first_name = COALESCE(NULLIF(EXCLUDED.guest_first_name, ''), guest_relationships.guest_first_name),
+          guest_family_name = COALESCE(NULLIF(EXCLUDED.guest_family_name, ''), guest_relationships.guest_family_name),
+          source_type = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_type, '')), '') IS NULL
+              THEN EXCLUDED.source_type
+            ELSE guest_relationships.source_type
+          END,
+          source_id = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_id, '')), '') IS NULL
+              THEN EXCLUDED.source_id
+            ELSE guest_relationships.source_id
+          END,
+          first_seen_at = LEAST(guest_relationships.first_seen_at, EXCLUDED.first_seen_at),
+          last_seen_at = GREATEST(guest_relationships.last_seen_at, EXCLUDED.last_seen_at),
+          updated_at = CURRENT_TIMESTAMP
+    `,
+    [clientAccountId]
+  );
+
+  await pool.query(
+    `
+      UPDATE guest_relationships gr
+      SET guest_user_id = u.id,
+          updated_at = CURRENT_TIMESTAMP
+      FROM users u
+      JOIN client_memberships cm
+        ON cm.user_id = u.id
+       AND cm.client_account_id = gr.client_account_id
+       AND cm.role = 'Guest'
+      WHERE gr.client_account_id = $1
+        AND gr.guest_user_id IS NULL
+        AND LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(COALESCE(gr.guest_email, '')))
+    `,
+    [clientAccountId]
+  );
 }
 
 async function ensureGuestSiteUserForClientAccount(input) {
