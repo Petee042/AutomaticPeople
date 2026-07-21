@@ -414,8 +414,22 @@ async function run(argv) {
       activeRole: String(me.bodyJson && me.bodyJson.accessContext && me.bodyJson.accessContext.activeRole || '')
     });
   } else {
-    const validationPath = clientValidationUrl.replace(baseUrl, '');
-    const validateRes = await client1.get(validationPath);
+    let validateRes = null;
+    try {
+      const validationUrlObj = new URL(clientValidationUrl);
+      const token = String(validationUrlObj.searchParams.get('token') || '').trim();
+      if (token) {
+        validateRes = await client1.get('/api/account/validate?token=' + encodeURIComponent(token));
+      } else if (validationUrlObj.pathname.startsWith('/api/account/validate')) {
+        validateRes = await client1.get(validationUrlObj.pathname + validationUrlObj.search);
+      }
+    } catch {
+      validateRes = null;
+    }
+    if (!validateRes) {
+      const validationPath = clientValidationUrl.replace(baseUrl, '');
+      validateRes = await client1.get(validationPath);
+    }
     harness.assert(validateRes.ok, 'Client validation failed. status=' + validateRes.status);
 
     const login = await client1.post('/api/login', {
