@@ -24,6 +24,16 @@ const TESTS = [
     id: 'workflow-03-live-guest-login-from-private-reservation',
     title: 'Workflow 03 - Live guest login from private reservation provisioning',
     modulePath: './workflows/workflow-03-live-guest-login-from-private-reservation.test.js'
+  },
+  {
+    id: 'workflow-04-live-facility-bank-transfer',
+    title: 'Workflow 04 - Live facility reservation (bank transfer)',
+    modulePath: './workflows/workflow-04-live-facility-bank-transfer.test.js'
+  },
+  {
+    id: 'workflow-05-live-facility-online-payment',
+    title: 'Workflow 05 - Live facility reservation (online payment)',
+    modulePath: './workflows/workflow-05-live-facility-online-payment.test.js'
   }
 ];
 

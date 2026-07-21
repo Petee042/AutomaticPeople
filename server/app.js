@@ -13529,6 +13529,31 @@ app.post('/api/guest/dashboard/facility-reservations/:reservationId/sync-payment
         paidAt: new Date().toISOString(),
         status: 'Confirmed'
       });
+
+      const ownerUser = await getUserById(Number(reservation.host_user_id || 0));
+      const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
+      if (ownerEmail) {
+        const notifyOwnerResult = await sendAppEmail({
+          to: ownerEmail,
+          subject: 'Guest Online Payment Notification',
+          textBody: [
+            'A guest online payment has been completed for a facility reservation.',
+            '',
+            'Reservation ID: ' + String(reservation.reservation_identifier || ''),
+            'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+            'Guest email: ' + String(reservation.email_address || ''),
+            'Facility: ' + String(reservation.resource_name || ''),
+            'Start: ' + formatDateTimeForMessage(reservation.requested_start_at),
+            'End: ' + formatDateTimeForMessage(reservation.requested_end_at),
+            'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+            'Confirmed at: ' + formatDateTimeForMessage(new Date().toISOString())
+          ].join('\n')
+        });
+
+        if (!notifyOwnerResult.ok) {
+          console.warn('Failed to send host online-payment notification email.', notifyOwnerResult.error || 'unknown email error');
+        }
+      }
     } else if (paymentStatus === 'requires_payment_method' || paymentStatus === 'requires_action' || paymentStatus === 'processing') {
       await updateSharedResourceReservationPaymentById(reservation.id, {
         ...commonUpdate,
@@ -14630,7 +14655,9 @@ registerWorkflow3FacilityBookingRoutes(app, {
   deleteSharedResourceReservationForUser,
   deleteSharedResourceForUser,
   getReservationGuestOptionsForClientAccount,
-  writeUserEventLog
+  writeUserEventLog,
+  sendAppEmail,
+  formatDateTimeForMessage
 });
 
 

@@ -22,6 +22,8 @@ This folder contains workflow-level test scripts that can be run on demand.
    - `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:guest-login -- --live --base-url https://automaticpeople-alpha.onrender.com`
+   - `npm run test:workflow:facility-bank-transfer -- --live --base-url https://automaticpeople-alpha.onrender.com`
+   - `npm run test:workflow:facility-online-payment -- --live --base-url https://automaticpeople-alpha.onrender.com`
 
 ## Environment Variables
 
@@ -48,6 +50,19 @@ Guest-login provisioning flow additionally requires:
 - `TEST_ADMIN_PASSWORD`
 - Optional: `TEST_FLOW_CLIENT_EMAIL`, `TEST_FLOW_GUEST_EMAIL`
 - Optional: `TEST_FLOW_CLIENT_PASSWORD`, `TEST_FLOW_GUEST_PASSWORD`
+
+Facility bank-transfer flow additionally requires:
+
+- `TEST_ADMIN_USERNAME`
+- `TEST_ADMIN_PASSWORD`
+- Optional: `TEST_FLOW_FACILITY_GUEST1_EMAIL`, `TEST_FLOW_FACILITY_GUEST1_PASSWORD`
+
+Facility online-payment flow additionally requires:
+
+- `TEST_ADMIN_USERNAME`
+- `TEST_ADMIN_PASSWORD`
+- `STRIPE_SECRET_KEY`
+- Optional: `TEST_FLOW_FACILITY_GUEST2_EMAIL`, `TEST_FLOW_FACILITY_GUEST2_PASSWORD`
 
 Browser-assisted Turnstile helper:
 
