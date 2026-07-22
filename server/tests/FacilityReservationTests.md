@@ -32,12 +32,17 @@ Validate full client to guest bank-transfer facility reservation flow, including
 2. Create a future facility reservation for `Parking1` using bank transfer for John Parker (`parker1@alphainbound.automaticpeople.com`).
 3. Verify invitation/setup email is sent to parker1; set password `Quiblick!4`; log in as parker1.
 4. Confirm parker1 account shows the facility reservation.
-5. Return to Client1 account; verify the reservation is visible in facility reservations with status awaiting payment.
-6. Return to parker1 account; select payment confirmation option for the facility reservation.
-7. Verify an email is sent to Client1 notifying payment has been made.
-8. Return to Client1 account; mark payment confirmed against the facility reservation.
-9. Return to parker1 account; verify facility reservation shows payment confirmed.
-10. Verify parker1 email contains message stating payment has been received for the facility reservation.
+5. Return to Client1 account and enter host account bank details:
+  - account name: current logged-in user name
+  - sort code: `20-20-21`
+  - account number: `12345678`
+  - IBAN: `GB33BUKB20201555555555`
+6. Return to Client1 account; verify the reservation is visible in facility reservations with status awaiting payment.
+7. Return to parker1 account; select payment confirmation option for the facility reservation.
+8. Verify an email is sent to Client1 notifying payment has been made.
+9. Return to Client1 account; mark payment confirmed against the facility reservation.
+10. Return to parker1 account; verify facility reservation shows payment confirmed.
+11. Verify parker1 email contains message stating payment has been received for the facility reservation.
 
 ## Flow: Client Initiated Facility Reservation (Online Payment)
 
@@ -63,8 +68,13 @@ Validate full client to guest online-payment facility reservation flow through S
 2. Create a future facility reservation for `Parking2` using online payment for Dave Parker (`parker2@alphainbound.automaticpeople.com`).
 3. Verify invitation/setup email is sent to parker2; set password `Quiblick!4`; log in as parker2.
 4. Confirm parker2 account shows facility reservation awaiting payment.
-5. Follow Pay Now link to Stripe payment flow and pay using Stripe sandbox credentials.
-6. Verify Client1 email includes payment-made notification.
-7. Return to Client1 account; verify facility reservation status is paid/confirmed.
-8. Return to parker2 account; verify facility reservation shows payment confirmed.
-9. Verify parker2 email contains message confirming payment has been received for the facility reservation.
+5. Return to Client1 account and enter host account bank details:
+  - account name: current logged-in user name
+  - sort code: `20-20-21`
+  - account number: `12345678`
+  - IBAN: `GB33BUKB20201555555555`
+6. Follow Pay Now link to Stripe payment flow and pay using Stripe sandbox credentials.
+7. Verify Client1 email includes payment-made notification.
+8. Return to Client1 account; verify facility reservation status is paid/confirmed.
+9. Return to parker2 account; verify facility reservation shows payment confirmed.
+10. Verify parker2 email contains message confirming payment has been received for the facility reservation.

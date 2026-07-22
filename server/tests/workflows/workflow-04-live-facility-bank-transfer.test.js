@@ -303,15 +303,6 @@ async function run(argv) {
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
   } else {
-    const bankSave = await client.put('/api/account/bank-details', {
-      accountName: 'Client One Business',
-      sortCode: '12-34-56',
-      accountNumber: '12345678',
-      isBusiness: true,
-      iban: 'GB29NWBK60161331926819'
-    });
-    harness.assert(bankSave.ok, 'Saving bank details failed. status=' + bankSave.status + ' body=' + bankSave.bodyText);
-
     const createResource = await client.post('/api/shared-resources', {
       shortDescription: 'Parking1',
       fullDescriptionHtml: '<p>Parking1 test facility description.</p>',
@@ -338,9 +329,33 @@ async function run(argv) {
     step4.pass('Parking1 created.', { resourceId });
   }
 
-  const step5 = harness.step('5. Create future facility reservation using bank transfer');
+  const step5 = harness.step('5. Enter host bank account details from host account details page');
   if (options.dryRun) {
     step5.skip('Dry run enabled.');
+  } else {
+    const meRes = await client.get('/api/me');
+    harness.assert(meRes.ok, 'Host profile lookup failed. status=' + meRes.status + ' body=' + meRes.bodyText);
+
+    const hostAccountName = [
+      String(meRes.bodyJson && meRes.bodyJson.firstName || '').trim(),
+      String(meRes.bodyJson && meRes.bodyJson.familyName || '').trim()
+    ].filter(Boolean).join(' ').trim() || clientEmail;
+
+    const bankSave = await client.put('/api/account/bank-details', {
+      accountName: hostAccountName,
+      sortCode: '20-20-21',
+      accountNumber: '12345678',
+      isBusiness: true,
+      iban: 'GB33BUKB20201555555555'
+    });
+    harness.assert(bankSave.ok, 'Saving bank details failed. status=' + bankSave.status + ' body=' + bankSave.bodyText);
+
+    step5.pass('Host bank details saved.', { accountName: hostAccountName, sortCode: '20-20-21' });
+  }
+
+  const step6 = harness.step('6. Create future facility reservation using bank transfer');
+  if (options.dryRun) {
+    step6.skip('Dry run enabled.');
   } else {
     const requestedStartAt = buildUtcIsoAtHour(2, 10);
     const requestedEndAt = buildUtcIsoAtHour(3, 10);
@@ -370,12 +385,12 @@ async function run(argv) {
     const status = String(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.status || '').trim().toLowerCase();
     harness.assert(status === 'awaiting bank transfer', 'Expected reservation status Awaiting Bank Transfer, got: ' + status);
 
-    step5.pass('Bank-transfer reservation created.', { reservationId, status });
+    step6.pass('Bank-transfer reservation created.', { reservationId, status });
   }
 
-  const step6 = harness.step('6. Set parker1 password from invite email and log in');
+  const step7 = harness.step('7. Set parker1 password from invite email and log in');
   if (options.dryRun) {
-    step6.skip('Dry run enabled.');
+    step7.skip('Dry run enabled.');
   } else {
     const setupEmail = await waitForInboundEntry(
       adminClient,
@@ -407,12 +422,12 @@ async function run(argv) {
     });
     harness.assert(guestLogin.ok, 'Guest login failed. status=' + guestLogin.status + ' body=' + guestLogin.bodyText);
 
-    step6.pass('Guest setup and login succeeded.', { email: guestEmail });
+    step7.pass('Guest setup and login succeeded.', { email: guestEmail });
   }
 
-  const step7 = harness.step('7. Confirm parker1 sees facility reservation awaiting payment');
+  const step8 = harness.step('8. Confirm parker1 sees facility reservation awaiting payment');
   if (options.dryRun) {
-    step7.skip('Dry run enabled.');
+    step8.skip('Dry run enabled.');
   } else {
     const guestReservations = await guest.get('/api/guest/dashboard/reservations');
     harness.assert(guestReservations.ok, 'Guest dashboard reservations failed. status=' + guestReservations.status + ' body=' + guestReservations.bodyText);
@@ -426,12 +441,12 @@ async function run(argv) {
     const status = String(row && row.status || '').trim().toLowerCase();
     harness.assert(status === 'awaiting bank transfer', 'Expected guest status Awaiting Bank Transfer, got: ' + status);
 
-    step7.pass('Guest facility reservation visible and awaiting payment.', { reservationId, status });
+    step8.pass('Guest facility reservation visible and awaiting payment.', { reservationId, status });
   }
 
-  const step8 = harness.step('8. Confirm client sees reservation awaiting payment');
+  const step9 = harness.step('9. Confirm client sees reservation awaiting payment');
   if (options.dryRun) {
-    step8.skip('Dry run enabled.');
+    step9.skip('Dry run enabled.');
   } else {
     const hostReservations = await client.get('/api/shared-resources/' + resourceId + '/reservations');
     harness.assert(hostReservations.ok, 'Host facility reservations failed. status=' + hostReservations.status + ' body=' + hostReservations.bodyText);
@@ -445,12 +460,12 @@ async function run(argv) {
     const status = String(row && row.status || '').trim().toLowerCase();
     harness.assert(status === 'awaiting bank transfer', 'Expected host status Awaiting Bank Transfer, got: ' + status);
 
-    step8.pass('Client reservation visible and awaiting payment.', { reservationId, status });
+    step9.pass('Client reservation visible and awaiting payment.', { reservationId, status });
   }
 
-  const step9 = harness.step('9. Guest confirms transfer and client notification email is sent');
+  const step10 = harness.step('10. Guest confirms transfer and client notification email is sent');
   if (options.dryRun) {
-    step9.skip('Dry run enabled.');
+    step10.skip('Dry run enabled.');
   } else {
     const notify = await guest.post('/api/guest/dashboard/facility-reservations/' + reservationId + '/notify-payment', {});
     harness.assert(notify.ok, 'Guest notify-payment failed. status=' + notify.status + ' body=' + notify.bodyText);
@@ -467,12 +482,12 @@ async function run(argv) {
     );
     harness.assert(hostNotifyEmail, 'Host payment-notification email not found for client email.');
 
-    step9.pass('Guest transfer notification sent and host email verified.', null);
+    step10.pass('Guest transfer notification sent and host email verified.', null);
   }
 
-  const step10 = harness.step('10. Client confirms payment, guest sees confirmed, and receipt email is sent');
+  const step11 = harness.step('11. Client confirms payment, guest sees confirmed, and receipt email is sent');
   if (options.dryRun) {
-    step10.skip('Dry run enabled.');
+    step11.skip('Dry run enabled.');
   } else {
     const confirm = await client.put('/api/shared-resources/' + resourceId + '/reservations/' + reservationId + '/status', {
       status: 'Confirmed'
@@ -506,9 +521,9 @@ async function run(argv) {
     );
 
     if (!guestReceiptEmail) {
-      step10.skip('Guest payment receipt email was not observed in this environment after host confirmation.');
+      step11.skip('Guest payment receipt email was not observed in this environment after host confirmation.');
     } else {
-      step10.pass('Payment confirmed and guest receipt email verified.', { reservationId });
+      step11.pass('Payment confirmed and guest receipt email verified.', { reservationId });
     }
   }
 
