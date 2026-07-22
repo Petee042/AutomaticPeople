@@ -64,6 +64,12 @@ Facility online-payment flow additionally requires:
 - `STRIPE_SECRET_KEY`
 - Optional: `TEST_FLOW_FACILITY_GUEST2_EMAIL`, `TEST_FLOW_FACILITY_GUEST2_PASSWORD`
 
+Stripe Connect onboarding helper for workflow-05:
+
+- If the host account does not already have Stripe Connect fully enabled, `workflow-05` now calls `/api/stripe/connect/start` and opens a browser-driven onboarding helper.
+- The helper uses Stripe test data when available and fills required defaults including date of birth `01/01/1901` and address `4 Spicer Road`, `Exeter`, `EX11SX`, `United Kingdom`.
+- `STRIPE_SECRET_KEY` is still only needed for the later automated payment-confirmation stage.
+
 Browser-assisted Turnstile helper:
 
 - If you do not have a fresh `TEST_TURNSTILE_TOKEN`, use `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`
@@ -106,4 +112,9 @@ These artifacts are designed so future automation can parse and summarize outcom
 
 ## Descriptive Flow Source
 
-The normalized repeatable flow definition is stored in `tests/Tests.md`.
+The normalized repeatable flow definitions are stored in:
+
+- `tests/InitialTests.md`
+- `tests/FacilityReservationTests.md`
+
+`tests/Tests.md` now acts as the split index and execution-order guide.
