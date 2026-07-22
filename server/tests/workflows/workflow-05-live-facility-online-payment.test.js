@@ -2,6 +2,7 @@
 
 const Stripe = require('stripe');
 const { createWorkflowHarness, parseOptions } = require('../helpers/workflow-test-harness');
+const { completeStripeConnectOnboarding } = require('../helpers/browser-assisted-stripe-connect');
 
 const TEST_META = {
   id: 'workflow-05-live-facility-online-payment',
@@ -236,8 +237,6 @@ async function run(argv) {
   let reservationId = 0;
   let checkoutSessionId = '';
   let paymentIntentId = '';
-  let onlinePaymentUnavailable = false;
-
   const step1 = harness.step('1. Clean site user data via admin schema reset');
   if (options.dryRun) {
     step1.skip('Dry run enabled.');
@@ -313,17 +312,77 @@ async function run(argv) {
     step3.pass('Client account created, validated, and logged in.', { email: clientEmail });
   }
 
-  const step4 = harness.step('4. Create Parking2 facility with online+bank payment options');
+  const step4 = harness.step('4. Ensure host Stripe Connect account is ready for online payments');
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
+  } else {
+    const statusBefore = await client.get('/api/stripe/connect/status');
+    harness.assert(statusBefore.ok, 'Stripe connect status failed. status=' + statusBefore.status + ' body=' + statusBefore.bodyText);
+
+    const stripeConnectBefore = statusBefore.bodyJson && statusBefore.bodyJson.stripeConnect ? statusBefore.bodyJson.stripeConnect : null;
+    const alreadyReady = Boolean(
+      stripeConnectBefore
+      && stripeConnectBefore.onboardingComplete === true
+      && stripeConnectBefore.chargesEnabled === true
+      && stripeConnectBefore.payoutsEnabled === true
+    );
+
+    if (!alreadyReady) {
+      const startOnboarding = await client.post('/api/stripe/connect/start', {});
+      harness.assert(startOnboarding.ok, 'Stripe connect start failed. status=' + startOnboarding.status + ' body=' + startOnboarding.bodyText);
+
+      const onboardingUrl = String(startOnboarding.bodyJson && startOnboarding.bodyJson.onboardingUrl || '').trim();
+      harness.assert(onboardingUrl, 'Stripe onboarding URL missing from connect/start response.');
+
+      await completeStripeConnectOnboarding({
+        onboardingUrl,
+        returnUrlPrefix: baseUrl + '/dashboard.html?stripeConnect=return',
+        appBaseUrl: baseUrl,
+        sessionCookieHeader: toCookieHeader(client.cookieJar),
+        timeoutMs: Math.max(options.timeoutMs, 12 * 60 * 1000),
+        manualCaptchaTimeoutMs: 10 * 60 * 1000
+      });
+    }
+
+    let stripeConnectAfter = null;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const statusAfter = await client.get('/api/stripe/connect/status');
+      harness.assert(statusAfter.ok, 'Stripe connect status refresh failed. status=' + statusAfter.status + ' body=' + statusAfter.bodyText);
+      stripeConnectAfter = statusAfter.bodyJson && statusAfter.bodyJson.stripeConnect ? statusAfter.bodyJson.stripeConnect : null;
+      if (
+        stripeConnectAfter
+        && stripeConnectAfter.onboardingComplete === true
+        && stripeConnectAfter.chargesEnabled === true
+        && stripeConnectAfter.payoutsEnabled === true
+      ) {
+        break;
+      }
+      await sleep(5000);
+    }
+
+    harness.assert(
+      Boolean(
+        stripeConnectAfter
+        && stripeConnectAfter.onboardingComplete === true
+        && stripeConnectAfter.chargesEnabled === true
+        && stripeConnectAfter.payoutsEnabled === true
+      ),
+      'Stripe Connect onboarding did not become fully enabled for the host account.'
+    );
+
+    step4.pass('Host Stripe Connect account is ready.', stripeConnectAfter);
+  }
+
+  const step5 = harness.step('5. Create Parking2 facility with online+bank payment options');
+  if (options.dryRun) {
+    step5.skip('Dry run enabled.');
   } else {
     const bankSave = await client.put('/api/account/bank-details', {
       accountName: 'Client One Business',
       sortCode: '12-34-56',
       accountNumber: '12345678',
       isBusiness: true,
-      iban: 'GB29NWBK60161331926819',
-      bic: 'NWBKGB2L'
+      iban: 'GB29NWBK60161331926819'
     });
     harness.assert(bankSave.ok, 'Saving bank details failed. status=' + bankSave.status + ' body=' + bankSave.bodyText);
 
@@ -350,12 +409,12 @@ async function run(argv) {
     resourceId = Number(createResource.bodyJson && createResource.bodyJson.resource && createResource.bodyJson.resource.id || 0);
     harness.assert(Number.isInteger(resourceId) && resourceId > 0, 'Facility resource id missing from create response.');
 
-    step4.pass('Parking2 created.', { resourceId });
+    step5.pass('Parking2 created.', { resourceId });
   }
 
-  const step5 = harness.step('5. Create future facility reservation using online payment');
+  const step6 = harness.step('6. Create future facility reservation using online payment');
   if (options.dryRun) {
-    step5.skip('Dry run enabled.');
+    step6.skip('Dry run enabled.');
   } else {
     const requestedStartAt = buildUtcIsoAtHour(2, 11);
     const requestedEndAt = buildUtcIsoAtHour(3, 11);
@@ -378,32 +437,20 @@ async function run(argv) {
       paymentOption: 'online_payment'
     });
 
-    if (!reserve.ok) {
-      const reserveError = String(reserve.bodyJson && reserve.bodyJson.error || reserve.bodyText || '').toLowerCase();
-      if (reserve.status === 400 && reserveError.includes('online payment is not currently available')) {
-        onlinePaymentUnavailable = true;
-        step5.skip('Online payment is not available for this host in the target environment.');
-      } else {
-        harness.assert(reserve.ok, 'Online-payment reservation create failed. status=' + reserve.status + ' body=' + reserve.bodyText);
-      }
-    }
+    harness.assert(reserve.ok, 'Online-payment reservation create failed. status=' + reserve.status + ' body=' + reserve.bodyText);
 
-    if (!onlinePaymentUnavailable) {
-      reservationId = Number(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.id || 0);
-      harness.assert(Number.isInteger(reservationId) && reservationId > 0, 'Reservation id missing from create response.');
+    reservationId = Number(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.id || 0);
+    harness.assert(Number.isInteger(reservationId) && reservationId > 0, 'Reservation id missing from create response.');
 
-      const status = String(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.status || '').trim().toLowerCase();
-      harness.assert(status === 'awaiting online confirmation', 'Expected reservation status Awaiting Online Confirmation, got: ' + status);
+    const status = String(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.status || '').trim().toLowerCase();
+    harness.assert(status === 'awaiting online confirmation', 'Expected reservation status Awaiting Online Confirmation, got: ' + status);
 
-      step5.pass('Online-payment reservation created.', { reservationId, status });
-    }
+    step6.pass('Online-payment reservation created.', { reservationId, status });
   }
 
-  const step6 = harness.step('6. Set parker2 password from invite email and log in');
+  const step7 = harness.step('7. Set parker2 password from invite email and log in');
   if (options.dryRun) {
-    step6.skip('Dry run enabled.');
-  } else if (onlinePaymentUnavailable) {
-    step6.skip('Skipped because online-payment reservation could not be created in this environment.');
+    step7.skip('Dry run enabled.');
   } else {
     const setupEmail = await waitForInboundEntry(
       adminClient,
@@ -435,14 +482,12 @@ async function run(argv) {
     });
     harness.assert(guestLogin.ok, 'Guest login failed. status=' + guestLogin.status + ' body=' + guestLogin.bodyText);
 
-    step6.pass('Guest setup and login succeeded.', { email: guestEmail });
+    step7.pass('Guest setup and login succeeded.', { email: guestEmail });
   }
 
-  const step7 = harness.step('7. Confirm parker2 sees facility reservation awaiting online payment');
+  const step8 = harness.step('8. Confirm parker2 sees facility reservation awaiting online payment');
   if (options.dryRun) {
-    step7.skip('Dry run enabled.');
-  } else if (onlinePaymentUnavailable) {
-    step7.skip('Skipped because online-payment reservation could not be created in this environment.');
+    step8.skip('Dry run enabled.');
   } else {
     const guestReservations = await guest.get('/api/guest/dashboard/reservations');
     harness.assert(guestReservations.ok, 'Guest dashboard reservations failed. status=' + guestReservations.status + ' body=' + guestReservations.bodyText);
@@ -453,16 +498,14 @@ async function run(argv) {
     const status = String(row && row.status || '').trim().toLowerCase();
     harness.assert(status === 'awaiting online confirmation', 'Expected guest status Awaiting Online Confirmation, got: ' + status);
 
-    step7.pass('Guest facility reservation visible and awaiting online payment.', { reservationId, status });
+    step8.pass('Guest facility reservation visible and awaiting online payment.', { reservationId, status });
   }
 
-  const step8 = harness.step('8. Complete Stripe sandbox payment via Pay Now + sync');
+  const step9 = harness.step('9. Complete Stripe sandbox payment via Pay Now + sync');
   if (options.dryRun) {
-    step8.skip('Dry run enabled.');
-  } else if (onlinePaymentUnavailable) {
-    step8.skip('Skipped because online-payment reservation could not be created in this environment.');
+    step9.skip('Dry run enabled.');
   } else if (!stripe) {
-    step8.skip('STRIPE_SECRET_KEY is not set locally, so sandbox payment automation is skipped.');
+    step9.skip('STRIPE_SECRET_KEY is not set locally, so sandbox payment automation is skipped.');
   } else {
     const payNow = await guest.post('/api/guest/dashboard/facility-reservations/' + reservationId + '/pay-now', {});
     harness.assert(payNow.ok, 'Guest pay-now failed. status=' + payNow.status + ' body=' + payNow.bodyText);
@@ -508,20 +551,18 @@ async function run(argv) {
 
     harness.assert(reconciledStatus === 'confirmed', 'Facility reservation did not reconcile to confirmed after payment. status=' + reconciledStatus);
 
-    step8.pass('Stripe payment confirmed and reservation reconciled.', {
+    step9.pass('Stripe payment confirmed and reservation reconciled.', {
       checkoutSessionId,
       paymentIntentId,
       reconciledStatus
     });
   }
 
-  const step9 = harness.step('9. Verify client receives online-payment notification email');
+  const step10 = harness.step('10. Verify client receives online-payment notification email');
   if (options.dryRun) {
-    step9.skip('Dry run enabled.');
-  } else if (onlinePaymentUnavailable) {
-    step9.skip('Skipped because online-payment reservation could not be created in this environment.');
+    step10.skip('Dry run enabled.');
   } else if (!stripe) {
-    step9.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
+    step10.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
   } else {
     const hostNotifyEmail = await waitForInboundEntry(
       adminClient,
@@ -534,19 +575,17 @@ async function run(argv) {
       4000
     );
     if (!hostNotifyEmail) {
-      step9.skip('Client online-payment notification email was not observed in this environment.');
+      step10.skip('Client online-payment notification email was not observed in this environment.');
     } else {
-      step9.pass('Client online-payment notification email verified.', null);
+      step10.pass('Client online-payment notification email verified.', null);
     }
   }
 
-  const step10 = harness.step('10. Verify client and guest both see confirmed status');
+  const step11 = harness.step('11. Verify client and guest both see confirmed status');
   if (options.dryRun) {
-    step10.skip('Dry run enabled.');
-  } else if (onlinePaymentUnavailable) {
-    step10.skip('Skipped because online-payment reservation could not be created in this environment.');
+    step11.skip('Dry run enabled.');
   } else if (!stripe) {
-    step10.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
+    step11.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
   } else {
     const hostReservations = await client.get('/api/shared-resources/' + resourceId + '/reservations');
     harness.assert(hostReservations.ok, 'Host facility reservations failed. status=' + hostReservations.status + ' body=' + hostReservations.bodyText);
@@ -569,20 +608,18 @@ async function run(argv) {
     const guestStatus = String(guestRow && guestRow.status || '').trim().toLowerCase();
     harness.assert(guestStatus === 'confirmed', 'Expected guest status Confirmed, got: ' + guestStatus);
 
-    step10.pass('Client and guest confirmed statuses verified.', {
+    step11.pass('Client and guest confirmed statuses verified.', {
       reservationId,
       hostStatus,
       guestStatus
     });
   }
 
-  const step11 = harness.step('11. Verify guest receives payment-confirmed email');
+  const step12 = harness.step('12. Verify guest receives payment-confirmed email');
   if (options.dryRun) {
-    step11.skip('Dry run enabled.');
-  } else if (onlinePaymentUnavailable) {
-    step11.skip('Skipped because online-payment reservation could not be created in this environment.');
+    step12.skip('Dry run enabled.');
   } else if (!stripe) {
-    step11.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
+    step12.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
   } else {
     const guestReceiptEmail = await waitForInboundEntry(
       adminClient,
@@ -595,9 +632,9 @@ async function run(argv) {
       4000
     );
     if (!guestReceiptEmail) {
-      step11.skip('Guest payment-confirmed email was not observed in this environment.');
+      step12.skip('Guest payment-confirmed email was not observed in this environment.');
     } else {
-      step11.pass('Guest payment-confirmed email verified.', null);
+      step12.pass('Guest payment-confirmed email verified.', null);
     }
   }
 

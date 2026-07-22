@@ -1478,11 +1478,6 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
-    ALTER TABLE client_accounts
-    ADD COLUMN IF NOT EXISTS bank_bic TEXT NOT NULL DEFAULT ''
-  `);
-
-  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_cleaners_cleaner_user_id
     ON cleaners (cleaner_user_id)
   `);
@@ -3086,10 +3081,6 @@ function toMinorUnits(amount) {
 
 function normaliseBankIban(value) {
   return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 34);
-}
-
-function normaliseBankBic(value) {
-  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 11);
 }
 
 function isOnlinePaymentAvailableForHostUser(hostUser) {
@@ -13719,7 +13710,7 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
     }
 
     const result = await pool.query(
-      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban FROM client_accounts WHERE id = $1 LIMIT 1',
       [clientAccountId]
     );
     if (!result.rows[0]) {
@@ -13732,8 +13723,7 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
       sortCode: row.bank_sort_code || '',
       accountNumber: row.bank_account_number || '',
       isBusiness: row.bank_is_business === true,
-      iban: row.bank_iban || '',
-      bic: row.bank_bic || ''
+      iban: row.bank_iban || ''
     });
   } catch (err) {
     console.error('[BankDetails] Error loading bank details:', err);
@@ -13785,7 +13775,6 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   const sortCode = sanitizeHtml(String(req.body.sortCode || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
   const accountNumber = sanitizeHtml(String(req.body.accountNumber || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
   const iban = normaliseBankIban(sanitizeHtml(String(req.body.iban || '').trim(), { allowedTags: [], allowedAttributes: {} }));
-  const bic = normaliseBankBic(sanitizeHtml(String(req.body.bic || '').trim(), { allowedTags: [], allowedAttributes: {} }));
   const isBusiness = req.body.isBusiness === true || req.body.isBusiness === 'true';
 
   if (!accountName || !sortCode || !accountNumber) {
@@ -13793,9 +13782,6 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   }
   if (!iban) {
     return res.status(400).json({ error: 'IBAN is required.' });
-  }
-  if (!bic) {
-    return res.status(400).json({ error: 'BIC is required.' });
   }
 
   try {
@@ -13812,10 +13798,9 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
            bank_account_number = $3,
            bank_is_business = $4,
            bank_iban = $5,
-           bank_bic = $6,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7`,
-      [accountName, sortCode, accountNumber, isBusiness, iban, bic, clientAccountId]
+       WHERE id = $6`,
+      [accountName, sortCode, accountNumber, isBusiness, iban, clientAccountId]
     );
 
     if (result.rowCount === 0) {
@@ -13824,7 +13809,7 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
     }
 
     console.log('[BankDetails] Bank details updated successfully for clientAccountId:', clientAccountId);
-    return res.json({ accountName, sortCode, accountNumber, isBusiness, iban, bic });
+    return res.json({ accountName, sortCode, accountNumber, isBusiness, iban });
   } catch (err) {
     console.error('[BankDetails] Error saving bank details:', err);
     return res.status(500).json({ error: 'Failed to save bank details.' });
@@ -15175,7 +15160,7 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
 
       if (paymentOption === 'bank_transfer') {
         const bankResult = await pool.query(
-          'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+          'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban FROM client_accounts WHERE id = $1 LIMIT 1',
           [Number(resource.client_account_id || 0)]
         );
         const bankRow = bankResult.rows[0] || {};
@@ -15183,10 +15168,9 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         const bankSortCode = String(bankRow.bank_sort_code || '').trim();
         const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
         const bankIban = String(bankRow.bank_iban || '').trim();
-        const bankBic = String(bankRow.bank_bic || '').trim();
         const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
 
-        if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban || !bankBic) {
+        if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban) {
           return res.status(400).json({ error: 'Host bank transfer details are incomplete. Please contact the host.' });
         }
 
@@ -15196,7 +15180,6 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         lines.push('Sort code: ' + bankSortCode);
         lines.push('Account number: ' + bankAccountNumber);
         lines.push('IBAN: ' + bankIban);
-        lines.push('BIC: ' + bankBic);
         lines.push('Account type: ' + bankType);
 
         if (guestLoginUrl) {

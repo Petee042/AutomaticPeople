@@ -308,8 +308,7 @@ async function run(argv) {
       sortCode: '12-34-56',
       accountNumber: '12345678',
       isBusiness: true,
-      iban: 'GB29NWBK60161331926819',
-      bic: 'NWBKGB2L'
+      iban: 'GB29NWBK60161331926819'
     });
     harness.assert(bankSave.ok, 'Saving bank details failed. status=' + bankSave.status + ' body=' + bankSave.bodyText);
 
