@@ -22,8 +22,18 @@ This folder contains workflow-level test scripts that can be run on demand.
    - `npm run test:workflow:live-onboarding -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:guest-login -- --live --base-url https://automaticpeople-alpha.onrender.com`
+   - `npm run test:workflow:initial-set -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:facility-bank-transfer -- --live --base-url https://automaticpeople-alpha.onrender.com`
    - `npm run test:workflow:facility-online-payment -- --live --base-url https://automaticpeople-alpha.onrender.com`
+   - `npm run test:workflow:facility-set -- --live --base-url https://automaticpeople-alpha.onrender.com`
+
+## Recommended Two-Phase Run
+
+1. Run initial baseline set:
+   - `npm run test:workflow:initial-set -- --live --base-url https://automaticpeople-alpha.onrender.com`
+2. Manually sign in as Client1 and complete Stripe host onboarding.
+3. Run facility set:
+   - `npm run test:workflow:facility-set -- --live --base-url https://automaticpeople-alpha.onrender.com`
 
 ## Environment Variables
 

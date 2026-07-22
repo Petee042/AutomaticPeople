@@ -13,8 +13,10 @@
     "test:workflow:live-onboarding": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest",
     "test:workflow:live-onboarding:assist": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest --browser-assisted-turnstile",
     "test:workflow:guest-login": "node tests/run-workflows.js --only workflow-03-live-guest-login-from-private-reservation",
+    "test:workflow:initial-set": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest && node tests/run-workflows.js --only workflow-03-live-guest-login-from-private-reservation",
     "test:workflow:facility-bank-transfer": "node tests/run-workflows.js --only workflow-04-live-facility-bank-transfer",
     "test:workflow:facility-online-payment": "node tests/run-workflows.js --only workflow-05-live-facility-online-payment",
+    "test:workflow:facility-set": "node tests/run-workflows.js --only workflow-04-live-facility-bank-transfer && node tests/run-workflows.js --only workflow-05-live-facility-online-payment",
     "test:workflow:list": "node tests/run-workflows.js --list"
   },
   "dependencies": {
