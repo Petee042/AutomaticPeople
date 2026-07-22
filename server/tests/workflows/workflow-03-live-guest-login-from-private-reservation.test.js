@@ -130,6 +130,16 @@ class SessionClient {
     });
   }
 
+  put(pathName, payload) {
+    return this.request(pathName, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload || {})
+    });
+  }
+
   delete(pathName, payload) {
     const options = {
       method: 'DELETE'
@@ -269,9 +279,49 @@ async function run(argv) {
     step3.pass('Client account created, validated, and logged in.', null);
   }
 
-  const step4 = harness.step('4. Invite staff1, set password, and verify staff login');
+  const step4 = harness.step('4. Enter host account bank details for client1');
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
+  } else {
+    const me = await client.get('/api/me');
+    harness.assert(me.ok, 'Client /api/me failed before bank details save. status=' + me.status);
+
+    const hostAccountName = [
+      String(me.bodyJson && me.bodyJson.firstName || '').trim(),
+      String(me.bodyJson && me.bodyJson.familyName || '').trim()
+    ].filter(Boolean).join(' ').trim() || clientEmail;
+
+    const bankPayload = {
+      accountName: hostAccountName,
+      sortCode: '20-20-21',
+      accountNumber: '12345678',
+      isBusiness: true,
+      iban: 'GB33BUKB20201555555555'
+    };
+
+    const saveRes = await client.put('/api/account/bank-details', bankPayload);
+    harness.assert(saveRes.ok, 'Client bank details save failed. status=' + saveRes.status + ' body=' + saveRes.bodyText);
+
+    const verifyRes = await client.get('/api/account/bank-details');
+    harness.assert(verifyRes.ok, 'Client bank details fetch failed after save. status=' + verifyRes.status);
+
+    const saved = verifyRes.bodyJson || {};
+    harness.assert(String(saved.accountName || '').trim() === bankPayload.accountName, 'Saved account name mismatch.');
+    harness.assert(String(saved.sortCode || '').trim() === bankPayload.sortCode, 'Saved sort code mismatch.');
+    harness.assert(String(saved.accountNumber || '').trim() === bankPayload.accountNumber, 'Saved account number mismatch.');
+    harness.assert(String(saved.iban || '').trim() === bankPayload.iban, 'Saved IBAN mismatch.');
+
+    step4.pass('Client bank details saved.', {
+      accountName: bankPayload.accountName,
+      sortCode: bankPayload.sortCode,
+      accountNumber: bankPayload.accountNumber,
+      iban: bankPayload.iban
+    });
+  }
+
+  const step5 = harness.step('5. Invite staff1, set password, and verify staff login');
+  if (options.dryRun) {
+    step5.skip('Dry run enabled.');
   } else {
     const inviteStaff = await client.post('/api/access/team', {
       firstName: 'Sonya',
@@ -307,16 +357,16 @@ async function run(argv) {
     harness.assert(staffMe.ok, 'Staff /api/me failed. status=' + staffMe.status);
     harness.assert(staffMe.bodyJson && staffMe.bodyJson.isValidated === true, 'Staff account should be validated after password setup.');
 
-    step4.pass('Staff invited, password set, and login confirmed.', {
+    step5.pass('Staff invited, password set, and login confirmed.', {
       email: staffEmail,
       isValidated: Boolean(staffMe.bodyJson && staffMe.bodyJson.isValidated)
     });
   }
 
-  const step5 = harness.step('5. Create property and listing for private reservation');
+  const step6 = harness.step('6. Create property and listing for private reservation');
   let listingId = 0;
   if (options.dryRun) {
-    step5.skip('Dry run enabled.');
+    step6.skip('Dry run enabled.');
   } else {
     const propertyRes = await client.post('/api/properties', {
       name: 'Workflow 03 Property'
@@ -334,12 +384,12 @@ async function run(argv) {
     listingId = Number(listingRes.bodyJson && listingRes.bodyJson.listing && listingRes.bodyJson.listing.id || 0);
     harness.assert(Number.isInteger(listingId) && listingId > 0, 'Listing id missing from create response.');
 
-    step5.pass('Property and listing created.', { propertyId, listingId });
+    step6.pass('Property and listing created.', { propertyId, listingId });
   }
 
-  const step6 = harness.step('6. Create private reservation to provision guest site user');
+  const step7 = harness.step('7. Create private reservation to provision guest site user');
   if (options.dryRun) {
-    step6.skip('Dry run enabled.');
+    step7.skip('Dry run enabled.');
   } else {
     const arrivalDate = formatDateKey(20);
     const departureDate = formatDateKey(23);
@@ -357,15 +407,15 @@ async function run(argv) {
     });
     harness.assert(reservationRes.ok, 'Private reservation create failed. status=' + reservationRes.status);
 
-    step6.pass('Private reservation created and guest site user provisioning path executed.', {
+    step7.pass('Private reservation created and guest site user provisioning path executed.', {
       reservationId: Number(reservationRes.bodyJson && reservationRes.bodyJson.reservation && reservationRes.bodyJson.reservation.id || 0)
     });
   }
 
-  const step7 = harness.step('7. Request guest password setup email and capture reset link');
+  const step8 = harness.step('8. Request guest password setup email and capture reset link');
   let guestResetToken = '';
   if (options.dryRun) {
-    step7.skip('Dry run enabled.');
+    step8.skip('Dry run enabled.');
   } else {
     const resetReq = await client.post('/api/account/password-reset/request', { email: guestEmail });
     harness.assert(resetReq.ok, 'Guest password reset request failed. status=' + resetReq.status);
@@ -379,12 +429,12 @@ async function run(argv) {
     guestResetToken = String(resetUrlObj.searchParams.get('token') || '').trim();
     harness.assert(guestResetToken, 'Guest reset token missing from URL.');
 
-    step7.pass('Guest reset email captured.', { to: resetEmail.to_address, subject: resetEmail.subject });
+    step8.pass('Guest reset email captured.', { to: resetEmail.to_address, subject: resetEmail.subject });
   }
 
-  const step8 = harness.step('8. Set guest password and verify guest login');
+  const step9 = harness.step('9. Set guest password and verify guest login');
   if (options.dryRun) {
-    step8.skip('Dry run enabled.');
+    step9.skip('Dry run enabled.');
   } else {
     const resetConfirm = await guestClient.post('/api/account/password-reset/confirm', {
       token: guestResetToken,
@@ -404,12 +454,12 @@ async function run(argv) {
     const activeRole = String(access.activeRole || '').trim();
     harness.assert(activeRole === 'Guest', 'Expected active role Guest, got ' + activeRole);
 
-    step8.pass('Guest login successful with guest-scoped role.', { activeRole });
+    step9.pass('Guest login successful with guest-scoped role.', { activeRole });
   }
 
-  const step9 = harness.step('9. Verify guest dashboard reservations endpoint');
+  const step10 = harness.step('10. Verify guest dashboard reservations endpoint');
   if (options.dryRun) {
-    step9.skip('Dry run enabled.');
+    step10.skip('Dry run enabled.');
   } else {
     const reservationsRes = await guestClient.get('/api/guest/dashboard/reservations');
     harness.assert(reservationsRes.ok, 'Guest reservations endpoint failed. status=' + reservationsRes.status);
@@ -421,7 +471,7 @@ async function run(argv) {
       ? reservationsRes.bodyJson.facilityReservations
       : [];
 
-    step9.pass('Guest dashboard data is accessible and populated.', {
+    step10.pass('Guest dashboard data is accessible and populated.', {
       reservations: reservations.length,
       facilityReservations: facilityReservations.length
     });

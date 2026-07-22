@@ -43,10 +43,15 @@ Validate an end-to-end onboarding workflow using live APIs and real email delive
 3. Create account for Client1 (Andy Butler, `07812582241`, password `Quiblick!4`).
 4. Verify email is received for Client1 with validation link.
 5. Validate account via link, then login with new credentials.
-6. As Client1, add Staff1 (Sonya Clean) from Config team flow and verify password setup email is received.
-7. Set Staff1 password from link and verify Staff1 login succeeds and account is validated.
-8. As Client1, add Guest1 (Joe Tidy) from Config guest flow and verify guest relationship creation (invite/setup email may be absent).
-9. If a guest setup path is emitted, validate Guest1 login and guest-only visibility; otherwise mark this step as skipped.
+6. As Client1, enter host account bank details from Account page:
+  - account name: current logged-in user name
+  - sort code: `20-20-21`
+  - account number: `12345678`
+  - IBAN: `GB33BUKB20201555555555`
+7. As Client1, add Staff1 (Sonya Clean) from Config team flow and verify password setup email is received.
+8. Set Staff1 password from link and verify Staff1 login succeeds and account is validated.
+9. As Client1, add Guest1 (Joe Tidy) from Config guest flow and verify guest relationship creation and setup/reset email emission.
+10. Validate Guest1 login and guest-only visibility via emitted setup/reset URL.
 
 ### Notes on Evidence
 
@@ -58,7 +63,7 @@ Validate an end-to-end onboarding workflow using live APIs and real email delive
 
 ### Expected Current Risk
 
-If guest creation in Config does not currently emit a password setup email, step 9 is skipped and this is recorded in artifact details.
+Guest creation in Config must emit a setup/reset email URL so guest login can be validated in step 10.
 
 ## Flow: Guest Login From Private Reservation Provisioning (Live)
 
@@ -70,9 +75,14 @@ Validate a full guest login journey using a provisioning path that creates a gue
 
 1. Reset schema and clear inbound mail.
 2. Create and validate client account.
-3. Create property and listing.
+3. Enter client1 host account bank details:
+  - account name: current logged-in user name
+  - sort code: `20-20-21`
+  - account number: `12345678`
+  - IBAN: `GB33BUKB20201555555555`
 4. Create staff account from client config page and validate staff account.
-5. Create a no-charge private reservation for Guest1 (provisions guest site user).
-6. Request guest password reset email and extract reset link.
-7. Set guest password and login.
-8. Verify `GET /api/guest/dashboard/reservations` is accessible and populated.
+5. Create property and listing.
+6. Create a no-charge private reservation for Guest1 (provisions guest site user).
+7. Request guest password reset email and extract reset link.
+8. Set guest password and login.
+9. Verify `GET /api/guest/dashboard/reservations` is accessible and populated.
