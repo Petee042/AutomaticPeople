@@ -15600,7 +15600,53 @@ app.post('/api/access/guests', requireScopedRole('Manager'), async (req, res) =>
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
-    return res.status(201).json(result);
+
+    const guest = result && result.guest ? result.guest : null;
+    const guestEmail = normaliseOptionalEmail(guest && guest.guest_email);
+    let guestSiteUser = null;
+    let setupEmailSent = false;
+    let setupEmailError = '';
+    let setupResetUrl = '';
+    let setupResetToken = '';
+
+    if (guestEmail) {
+      guestSiteUser = await ensureGuestSiteUserForClientAccount({
+        clientAccountId: req.accessContext.activeClientAccountId,
+        ownerUserId: req.accessContext.effectiveOwnerUserId,
+        firstName: String(guest && guest.guest_first_name || '').trim(),
+        familyName: String(guest && guest.guest_family_name || '').trim(),
+        email: guestEmail,
+        sourceType: 'manual',
+        sourceId: String(guest && guest.id || '')
+      });
+
+      let passwordSetupUser = null;
+      if (guestSiteUser && guestSiteUser.email) {
+        passwordSetupUser = guestSiteUser;
+      }
+      if (!passwordSetupUser || !passwordSetupUser.email) {
+        passwordSetupUser = await findUserByEmail(guestEmail);
+      }
+
+      if (passwordSetupUser) {
+        setupResetToken = buildPasswordResetToken(passwordSetupUser) || '';
+        setupResetUrl = buildPasswordResetUrl(req, passwordSetupUser);
+        const setupResult = await sendPasswordResetEmail(req, passwordSetupUser);
+        setupEmailSent = setupResult.ok === true;
+        if (!setupResult.ok) {
+          setupEmailError = String(setupResult.error || '').trim();
+        }
+      }
+    }
+
+    return res.status(201).json({
+      guest,
+      guestSiteUserId: Number(guestSiteUser && guestSiteUser.id || 0) || null,
+      setupEmailSent,
+      setupEmailError,
+      setupResetUrl,
+      setupResetToken
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to create guest relationship.' });

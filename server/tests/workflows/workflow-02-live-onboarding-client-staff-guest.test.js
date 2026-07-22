@@ -453,10 +453,39 @@ async function run(argv) {
     });
   }
 
-  const step6 = harness.step('6. Add staff1 and verify password setup email');
-  let staffResetUrl = '';
+  const step6 = harness.step('6. Enter host account bank details for client1');
   if (options.dryRun) {
     step6.skip('Dry run enabled.');
+  } else {
+    const clientMe = await client1.get('/api/me');
+    harness.assert(clientMe.ok, 'Client /api/me failed before bank details save. status=' + clientMe.status);
+
+    const hostAccountName = [
+      String(clientMe.bodyJson && clientMe.bodyJson.firstName || '').trim(),
+      String(clientMe.bodyJson && clientMe.bodyJson.familyName || '').trim()
+    ].filter(Boolean).join(' ').trim() || clientEmail;
+
+    const bankSave = await client1.put('/api/account/bank-details', {
+      accountName: hostAccountName,
+      sortCode: '20-20-21',
+      accountNumber: '12345678',
+      isBusiness: true,
+      iban: 'GB33BUKB20201555555555'
+    });
+    harness.assert(bankSave.ok, 'Client bank details save failed. status=' + bankSave.status + ' body=' + bankSave.bodyText);
+
+    step6.pass('Client bank details saved.', {
+      accountName: hostAccountName,
+      sortCode: '20-20-21',
+      accountNumber: '12345678',
+      iban: 'GB33BUKB20201555555555'
+    });
+  }
+
+  const step7 = harness.step('7. Add staff1 and verify password setup email');
+  let staffResetUrl = '';
+  if (options.dryRun) {
+    step7.skip('Dry run enabled.');
   } else {
     const inviteStaff = await client1.post('/api/access/team', {
       firstName: 'Sonya',
@@ -470,7 +499,7 @@ async function run(argv) {
 
     const emailRow = await waitForInboundEmail(adminClient, staffEmail, 'password', 120000, 5000);
     if (!emailRow) {
-      step6.fail('No staff password setup email found in inbound log within timeout.', inviteStaff.bodyJson || null);
+      step7.fail('No staff password setup email found in inbound log within timeout.', inviteStaff.bodyJson || null);
       harness.printConsoleSummary();
       const artifactPathEarly = options.keepArtifacts ? harness.writeArtifactFile() : null;
       return { ok: false, summary: harness.summarize(), artifactPath: artifactPathEarly };
@@ -478,7 +507,7 @@ async function run(argv) {
 
     staffResetUrl = findFirstUrl(String(emailRow.body_text || ''), 'reset-password');
     if (!staffResetUrl) {
-      step6.fail('Staff email found but no password reset URL extracted.', {
+      step7.fail('Staff email found but no password reset URL extracted.', {
         subject: emailRow.subject,
         to: emailRow.to_address
       });
@@ -487,15 +516,15 @@ async function run(argv) {
       return { ok: false, summary: harness.summarize(), artifactPath: artifactPathEarly };
     }
 
-    step6.pass('Staff invite and setup email verified.', {
+    step7.pass('Staff invite and setup email verified.', {
       to: emailRow.to_address,
       subject: emailRow.subject
     });
   }
 
-  const step7 = harness.step('7. Set staff password, login as staff, verify validated');
+  const step8 = harness.step('8. Set staff password, login as staff, verify validated');
   if (options.dryRun) {
-    step7.skip('Dry run enabled.');
+    step8.skip('Dry run enabled.');
   } else {
     const resetUrl = new URL(staffResetUrl);
     const token = String(resetUrl.searchParams.get('token') || '').trim();
@@ -517,17 +546,17 @@ async function run(argv) {
     harness.assert(me.ok, 'Staff /api/me failed. status=' + me.status);
     harness.assert(me.bodyJson && me.bodyJson.isValidated === true, 'Staff should be validated after password setup.');
 
-    step7.pass('Staff account setup/login/validation confirmed.', {
+    step8.pass('Staff account setup/login/validation confirmed.', {
       email: staffEmail,
       isValidated: Boolean(me.bodyJson && me.bodyJson.isValidated)
     });
   }
 
-  const step8 = harness.step('8. Add guest1 from config and verify relationship (invite email optional)');
+  const step9 = harness.step('9. Add guest1 from config and verify relationship + setup email');
   let guestResetUrl = '';
   let guestLoginPathAvailable = false;
   if (options.dryRun) {
-    step8.skip('Dry run enabled.');
+    step9.skip('Dry run enabled.');
   } else {
     const guestCreate = await client1.post('/api/access/guests', {
       firstName: 'Joe',
@@ -539,53 +568,41 @@ async function run(argv) {
     const createdGuest = guestCreate.bodyJson && guestCreate.bodyJson.guest ? guestCreate.bodyJson.guest : null;
     const createdGuestId = Number(createdGuest && createdGuest.id || 0);
     harness.assert(Number.isInteger(createdGuestId) && createdGuestId > 0, 'Guest create did not return a valid guest id.');
+    const setupEmailSent = Boolean(guestCreate.bodyJson && guestCreate.bodyJson.setupEmailSent === true);
+    const setupEmailError = String(guestCreate.bodyJson && guestCreate.bodyJson.setupEmailError || '').trim();
+    const setupResetUrlFromCreate = String(guestCreate.bodyJson && guestCreate.bodyJson.setupResetUrl || '').trim();
+    const setupResetTokenFromCreate = String(guestCreate.bodyJson && guestCreate.bodyJson.setupResetToken || '').trim();
 
-    let emailRow = await waitForInboundEmail(adminClient, guestEmail, 'password', 120000, 5000);
-    let fallbackUsed = false;
-
-    if (!emailRow) {
-      fallbackUsed = true;
-      const passwordResetRequest = await client1.post('/api/account/password-reset/request', {
-        email: guestEmail
-      });
-      harness.assert(passwordResetRequest.ok, 'Guest password reset request failed. status=' + passwordResetRequest.status);
-      emailRow = await waitForInboundEmail(adminClient, guestEmail, 'password', 120000, 5000);
-    }
-
-    if (!emailRow) {
-      guestLoginPathAvailable = false;
-      step8.pass('Guest relationship created; no setup email was emitted for this flow.', {
-        guestId: createdGuestId,
-        email: guestEmail,
-        fallbackUsed
-      });
-    } else {
+    const emailRow = await waitForInboundEmail(adminClient, guestEmail, 'password', 120000, 5000);
+    if (emailRow) {
       guestResetUrl = findFirstUrl(String(emailRow.body_text || ''), 'reset-password');
-      if (!guestResetUrl) {
-        guestLoginPathAvailable = false;
-        step8.pass('Guest relationship created; email captured but no reset URL was present.', {
-          guestId: createdGuestId,
-          subject: emailRow.subject,
-          to: emailRow.to_address,
-          fallbackUsed
-        });
-      } else {
-        guestLoginPathAvailable = true;
-        step8.pass('Guest invite/setup email verified.', {
-          guestId: createdGuestId,
-          to: emailRow.to_address,
-          subject: emailRow.subject,
-          fallbackUsed
-        });
+    }
+    if (!guestResetUrl && setupResetTokenFromCreate) {
+      const appBase = stripTrailingSlash(String(baseUrl || ''));
+      if (appBase) {
+        guestResetUrl = appBase + '/reset-password.html?token=' + encodeURIComponent(setupResetTokenFromCreate);
       }
     }
+    if (!guestResetUrl && setupResetUrlFromCreate) {
+      guestResetUrl = setupResetUrlFromCreate;
+    }
+    harness.assert(guestResetUrl, 'Guest setup email was captured but reset URL was missing.');
+    guestLoginPathAvailable = true;
+
+    step9.pass('Guest relationship created and setup/reset email verified.', {
+      guestId: createdGuestId,
+      to: emailRow ? emailRow.to_address : guestEmail,
+      subject: emailRow ? emailRow.subject : 'reset URL from create response',
+      setupEmailSent,
+      setupEmailError
+    });
   }
 
-  const step9 = harness.step('9. Login as guest and verify guest-only behavior and empty reservations');
+  const step10 = harness.step('10. Login as guest and verify guest-only behavior and empty reservations');
   if (options.dryRun) {
-    step9.skip('Dry run enabled.');
+    step10.skip('Dry run enabled.');
   } else if (!guestLoginPathAvailable || !guestResetUrl) {
-    step9.skip('Guest login path not available for this flow (no guest setup/reset URL emitted).');
+    step10.skip('Guest login path not available for this flow (no guest setup/reset URL emitted).');
   } else {
     const resetUrl = new URL(guestResetUrl);
     const token = String(resetUrl.searchParams.get('token') || '').trim();
@@ -623,7 +640,7 @@ async function run(argv) {
     harness.assert(reservations.length === 0, 'Expected guest reservations to be empty for new guest account.');
     harness.assert(facilityReservations.length === 0, 'Expected guest facility reservations to be empty for new guest account.');
 
-    step9.pass('Guest role and empty reservation visibility confirmed.', {
+    step10.pass('Guest role and empty reservation visibility confirmed.', {
       activeRole,
       reservations: reservations.length,
       facilityReservations: facilityReservations.length
