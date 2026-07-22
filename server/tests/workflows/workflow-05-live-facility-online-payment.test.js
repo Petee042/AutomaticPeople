@@ -2,7 +2,6 @@
 
 const Stripe = require('stripe');
 const { createWorkflowHarness, parseOptions } = require('../helpers/workflow-test-harness');
-const { completeStripeConnectOnboarding } = require('../helpers/browser-assisted-stripe-connect');
 
 const TEST_META = {
   id: 'workflow-05-live-facility-online-payment',
@@ -237,27 +236,28 @@ async function run(argv) {
   let reservationId = 0;
   let checkoutSessionId = '';
   let paymentIntentId = '';
-  const step1 = harness.step('1. Clean site user data via admin schema reset');
+  const step1 = harness.step('1. Login as existing client1 account');
   if (options.dryRun) {
     step1.skip('Dry run enabled.');
   } else {
-    const login = await adminClient.post('/api/admin/login', {
-      username: adminUsername,
-      password: adminPassword
+    const login = await client.post('/api/login', {
+      email: clientEmail,
+      password: clientPassword
     });
-    harness.assert(login.ok, 'Admin login failed. status=' + login.status);
-
-    const reset = await adminClient.post('/api/admin/system/reset-schema', {
-      confirmText: 'DELETE ALL DATA'
-    });
-    harness.assert(reset.ok, 'Schema reset failed. status=' + reset.status);
-    step1.pass('Schema reset completed.', { mode: reset.bodyJson && reset.bodyJson.mode ? reset.bodyJson.mode : 'unknown' });
+    harness.assert(login.ok, 'Client login failed. status=' + login.status + ' body=' + login.bodyText);
+    step1.pass('Existing client1 logged in.', { email: clientEmail });
   }
 
   const step2 = harness.step('2. Prepare inbound mail listeners');
   if (options.dryRun) {
     step2.skip('Dry run enabled.');
   } else {
+    const adminLogin = await adminClient.post('/api/admin/login', {
+      username: adminUsername,
+      password: adminPassword
+    });
+    harness.assert(adminLogin.ok, 'Admin login failed. status=' + adminLogin.status + ' body=' + adminLogin.bodyText);
+
     const clearInbound = await adminClient.delete('/api/admin/inbound-mail');
     harness.assert(clearInbound.ok, 'Failed to clear inbound mail log. status=' + clearInbound.status);
 
@@ -268,97 +268,26 @@ async function run(argv) {
     step2.pass('Inbound listeners ready.', { watch: [clientEmail, guestEmail] });
   }
 
-  const step3 = harness.step('3. Create and validate client account');
+  const step3 = harness.step('3. Verify existing client account session');
   if (options.dryRun) {
     step3.skip('Dry run enabled.');
   } else {
-    const signup = await client.post('/api/signup', {
-      firstName: 'Client',
-      familyName: 'One',
-      country: 'GB',
-      email: clientEmail,
-      password: clientPassword,
-      turnstileToken: ''
+    const meRes = await client.get('/api/me');
+    harness.assert(meRes.ok, 'Client /api/me failed. status=' + meRes.status + ' body=' + meRes.bodyText);
+    harness.assert(meRes.bodyJson && meRes.bodyJson.isValidated === true, 'Existing client1 account is not validated.');
+    step3.pass('Existing client1 session verified.', {
+      email: String(meRes.bodyJson && meRes.bodyJson.email || '').trim().toLowerCase(),
+      isValidated: Boolean(meRes.bodyJson && meRes.bodyJson.isValidated)
     });
-    harness.assert(signup.ok, 'Client signup failed. status=' + signup.status + ' body=' + signup.bodyText);
-
-    const validationEmail = await waitForInboundEntry(
-      adminClient,
-      (entry) => {
-        const to = String(entry && entry.to_address || '').trim().toLowerCase();
-        const body = String(entry && entry.body_text || '');
-        return to === clientEmail && body.includes('validate-account');
-      },
-      120000,
-      4000
-    );
-    harness.assert(validationEmail, 'Client validation email not found.');
-
-    const validationUrl = findFirstUrl(String(validationEmail.body_text || ''), 'validate-account');
-    harness.assert(validationUrl, 'Client validation URL not found in email body.');
-
-    const token = String(new URL(validationUrl).searchParams.get('token') || '').trim();
-    harness.assert(token, 'Client validation token missing from URL.');
-
-    const validateRes = await client.get('/api/account/validate?token=' + encodeURIComponent(token));
-    harness.assert(validateRes.ok, 'Client validation failed. status=' + validateRes.status + ' body=' + validateRes.bodyText);
-
-    const login = await client.post('/api/login', {
-      email: clientEmail,
-      password: clientPassword
-    });
-    harness.assert(login.ok, 'Client login failed. status=' + login.status + ' body=' + login.bodyText);
-
-    step3.pass('Client account created, validated, and logged in.', { email: clientEmail });
   }
 
-  const step4 = harness.step('4. Ensure host Stripe Connect account is ready for online payments');
+  const step4 = harness.step('4. Verify host Stripe Connect account is already ready for online payments');
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
   } else {
-    const statusBefore = await client.get('/api/stripe/connect/status');
-    harness.assert(statusBefore.ok, 'Stripe connect status failed. status=' + statusBefore.status + ' body=' + statusBefore.bodyText);
-
-    const stripeConnectBefore = statusBefore.bodyJson && statusBefore.bodyJson.stripeConnect ? statusBefore.bodyJson.stripeConnect : null;
-    const alreadyReady = Boolean(
-      stripeConnectBefore
-      && stripeConnectBefore.onboardingComplete === true
-      && stripeConnectBefore.chargesEnabled === true
-      && stripeConnectBefore.payoutsEnabled === true
-    );
-
-    if (!alreadyReady) {
-      const startOnboarding = await client.post('/api/stripe/connect/start', {});
-      harness.assert(startOnboarding.ok, 'Stripe connect start failed. status=' + startOnboarding.status + ' body=' + startOnboarding.bodyText);
-
-      const onboardingUrl = String(startOnboarding.bodyJson && startOnboarding.bodyJson.onboardingUrl || '').trim();
-      harness.assert(onboardingUrl, 'Stripe onboarding URL missing from connect/start response.');
-
-      await completeStripeConnectOnboarding({
-        onboardingUrl,
-        returnUrlPrefix: baseUrl + '/dashboard.html?stripeConnect=return',
-        appBaseUrl: baseUrl,
-        sessionCookieHeader: toCookieHeader(client.cookieJar),
-        timeoutMs: Math.max(options.timeoutMs, 12 * 60 * 1000),
-        manualCaptchaTimeoutMs: 10 * 60 * 1000
-      });
-    }
-
-    let stripeConnectAfter = null;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const statusAfter = await client.get('/api/stripe/connect/status');
-      harness.assert(statusAfter.ok, 'Stripe connect status refresh failed. status=' + statusAfter.status + ' body=' + statusAfter.bodyText);
-      stripeConnectAfter = statusAfter.bodyJson && statusAfter.bodyJson.stripeConnect ? statusAfter.bodyJson.stripeConnect : null;
-      if (
-        stripeConnectAfter
-        && stripeConnectAfter.onboardingComplete === true
-        && stripeConnectAfter.chargesEnabled === true
-        && stripeConnectAfter.payoutsEnabled === true
-      ) {
-        break;
-      }
-      await sleep(5000);
-    }
+    const statusAfter = await client.get('/api/stripe/connect/status');
+    harness.assert(statusAfter.ok, 'Stripe connect status failed. status=' + statusAfter.status + ' body=' + statusAfter.bodyText);
+    const stripeConnectAfter = statusAfter.bodyJson && statusAfter.bodyJson.stripeConnect ? statusAfter.bodyJson.stripeConnect : null;
 
     harness.assert(
       Boolean(
@@ -367,10 +296,10 @@ async function run(argv) {
         && stripeConnectAfter.chargesEnabled === true
         && stripeConnectAfter.payoutsEnabled === true
       ),
-      'Stripe Connect onboarding did not become fully enabled for the host account.'
+      'Stripe Connect is not fully enabled for the host account. Complete Stripe onboarding manually before running this flow.'
     );
 
-    step4.pass('Host Stripe Connect account is ready.', stripeConnectAfter);
+    step4.pass('Host Stripe Connect account is already ready.', stripeConnectAfter);
   }
 
   const step5 = harness.step('5. Enter host bank account details from host account details page');
