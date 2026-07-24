@@ -457,17 +457,34 @@ async function run(argv) {
     checkoutSessionId = String(payNow.bodyJson && payNow.bodyJson.checkoutSessionId || '').trim();
     harness.assert(checkoutSessionId, 'Checkout session id missing from pay-now response.');
 
-    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
-      expand: ['payment_intent']
-    });
+    let observedSessionStatus = '';
+    let observedPaymentStatus = '';
+    // Stripe can hydrate payment_intent shortly after session creation in some configurations.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
+        expand: ['payment_intent']
+      });
+      observedSessionStatus = String(session && session.status || '').trim().toLowerCase();
+      observedPaymentStatus = String(session && session.payment_status || '').trim().toLowerCase();
 
-    if (session && typeof session.payment_intent === 'string') {
-      paymentIntentId = String(session.payment_intent || '').trim();
-    } else if (session && session.payment_intent && session.payment_intent.id) {
-      paymentIntentId = String(session.payment_intent.id || '').trim();
+      if (session && typeof session.payment_intent === 'string') {
+        paymentIntentId = String(session.payment_intent || '').trim();
+      } else if (session && session.payment_intent && session.payment_intent.id) {
+        paymentIntentId = String(session.payment_intent.id || '').trim();
+      }
+
+      if (paymentIntentId) {
+        break;
+      }
+      await sleep(1200);
     }
 
-    harness.assert(paymentIntentId, 'Stripe checkout session did not contain a payment intent id.');
+    harness.assert(
+      paymentIntentId,
+      'Stripe checkout session did not expose a payment_intent id after polling. ' +
+      'sessionStatus=' + observedSessionStatus + ' paymentStatus=' + observedPaymentStatus +
+      ' sessionId=' + checkoutSessionId
+    );
 
     const confirmed = await stripe.paymentIntents.confirm(paymentIntentId, {
       payment_method: 'pm_card_visa'
