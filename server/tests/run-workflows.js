@@ -34,6 +34,16 @@ const TESTS = [
     id: 'workflow-05-live-facility-online-payment',
     title: 'Workflow 05 - Live facility reservation (online payment)',
     modulePath: './workflows/workflow-05-live-facility-online-payment.test.js'
+  },
+  {
+    id: 'workflow-06-live-listing-bank-transfer',
+    title: 'Workflow 06 - Live listing reservation (bank transfer)',
+    modulePath: './workflows/workflow-06-live-listing-bank-transfer.test.js'
+  },
+  {
+    id: 'workflow-07-live-listing-online-payment',
+    title: 'Workflow 07 - Live listing reservation (online payment)',
+    modulePath: './workflows/workflow-07-live-listing-online-payment.test.js'
   }
 ];
 

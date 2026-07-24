@@ -17,6 +17,9 @@
     "test:workflow:facility-bank-transfer": "node tests/run-workflows.js --only workflow-04-live-facility-bank-transfer",
     "test:workflow:facility-online-payment": "node tests/run-workflows.js --only workflow-05-live-facility-online-payment",
     "test:workflow:facility-set": "node tests/run-workflows.js --only workflow-04-live-facility-bank-transfer && node tests/run-workflows.js --only workflow-05-live-facility-online-payment",
+    "test:workflow:listing-bank-transfer": "node tests/run-workflows.js --only workflow-06-live-listing-bank-transfer",
+    "test:workflow:listing-online-payment": "node tests/run-workflows.js --only workflow-07-live-listing-online-payment",
+    "test:workflow:listing-set": "node tests/run-workflows.js --only workflow-06-live-listing-bank-transfer && node tests/run-workflows.js --only workflow-07-live-listing-online-payment",
     "test:workflow:list": "node tests/run-workflows.js --list"
   },
   "dependencies": {
