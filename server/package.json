@@ -20,6 +20,7 @@
     "test:workflow:listing-bank-transfer": "node tests/run-workflows.js --only workflow-06-live-listing-bank-transfer",
     "test:workflow:listing-online-payment": "node tests/run-workflows.js --only workflow-07-live-listing-online-payment",
     "test:workflow:listing-set": "node tests/run-workflows.js --only workflow-06-live-listing-bank-transfer && node tests/run-workflows.js --only workflow-07-live-listing-online-payment",
+    "test:workflow:listing-set:live": "node tests/run-listing-set-live.js",
     "test:workflow:list": "node tests/run-workflows.js --list"
   },
   "dependencies": {
