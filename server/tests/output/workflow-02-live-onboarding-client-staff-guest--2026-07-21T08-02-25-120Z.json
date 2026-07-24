@@ -1,0 +1,123 @@
+{
+  "meta": {
+    "id": "workflow-02-live-onboarding-client-staff-guest",
+    "title": "Workflow 02 - Live onboarding: client, staff, guest",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-21T07:59:55.372Z",
+  "finishedAt": "2026-07-21T08:02:25.120Z",
+  "summary": {
+    "success": false,
+    "passCount": 7,
+    "failCount": 2,
+    "skipCount": 0,
+    "pendingCount": 0,
+    "totalSteps": 9
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-21T07:59:55.897Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-21T07:59:59.474Z"
+    },
+    {
+      "name": "2. Prepare email listeners for client/staff/guest addresses",
+      "status": "pass",
+      "startedAt": "2026-07-21T07:59:59.474Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "staff1@alphainbound.automaticpeople.com",
+          "guest1@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners prepared by clearing log and validating config.",
+      "finishedAt": "2026-07-21T07:59:59.936Z"
+    },
+    {
+      "name": "3. Sign up client1 account",
+      "status": "pass",
+      "startedAt": "2026-07-21T07:59:59.936Z",
+      "details": {
+        "message": "Account created. Please check your email and click the validation link before logging in.",
+        "validationEmailSent": true
+      },
+      "message": "Client1 signup succeeded.",
+      "finishedAt": "2026-07-21T08:00:02.040Z"
+    },
+    {
+      "name": "4. Verify client validation email received",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:00:02.040Z",
+      "details": {
+        "to": "client1@alphainbound.automaticpeople.com",
+        "subject": "Validate your site user account"
+      },
+      "message": "Client validation email captured with URL.",
+      "finishedAt": "2026-07-21T08:00:07.843Z"
+    },
+    {
+      "name": "5. Validate client account and login",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:00:07.843Z",
+      "details": {
+        "email": "client1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Client account validated and login confirmed.",
+      "finishedAt": "2026-07-21T08:00:10.685Z"
+    },
+    {
+      "name": "6. Add staff1 and verify password setup email",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:00:10.685Z",
+      "details": {
+        "to": "staff1@alphainbound.automaticpeople.com",
+        "subject": "Enter or reset your AutomaticPeople password"
+      },
+      "message": "Staff invite and setup email verified.",
+      "finishedAt": "2026-07-21T08:00:16.739Z"
+    },
+    {
+      "name": "7. Set staff password, login as staff, verify validated",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:00:16.739Z",
+      "details": {
+        "email": "staff1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Staff account setup/login/validation confirmed.",
+      "finishedAt": "2026-07-21T08:00:20.319Z"
+    },
+    {
+      "name": "8. Add guest1 from config and verify invite/setup email",
+      "status": "fail",
+      "startedAt": "2026-07-21T08:00:20.319Z",
+      "details": {
+        "note": "Current implementation may not send password setup on guest create from config."
+      },
+      "message": "No guest invite/setup email found in inbound log within timeout.",
+      "finishedAt": "2026-07-21T08:02:25.117Z"
+    },
+    {
+      "name": "9. Login as guest and verify guest-only behavior and empty reservations",
+      "status": "fail",
+      "startedAt": "2026-07-21T08:02:25.117Z",
+      "details": null,
+      "message": "Skipped by failure: no guest password setup URL available from step 8.",
+      "finishedAt": "2026-07-21T08:02:25.118Z"
+    }
+  ]
+}

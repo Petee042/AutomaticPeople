@@ -1,0 +1,125 @@
+{
+  "meta": {
+    "id": "workflow-02-live-onboarding-client-staff-guest",
+    "title": "Workflow 02 - Live onboarding: client, staff, guest",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-22T08:35:06.919Z",
+  "finishedAt": "2026-07-22T08:39:38.955Z",
+  "summary": {
+    "success": true,
+    "passCount": 8,
+    "failCount": 0,
+    "skipCount": 1,
+    "pendingCount": 0,
+    "totalSteps": 9
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:07.443Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-22T08:35:11.341Z"
+    },
+    {
+      "name": "2. Prepare email listeners for client/staff/guest addresses",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:11.341Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "staff1@alphainbound.automaticpeople.com",
+          "guest1@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners prepared by clearing log and validating config.",
+      "finishedAt": "2026-07-22T08:35:11.789Z"
+    },
+    {
+      "name": "3. Sign up client1 account",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:11.789Z",
+      "details": {
+        "message": "Account created. Please check your email and click the validation link before logging in.",
+        "validationEmailSent": true
+      },
+      "message": "Client1 signup succeeded.",
+      "finishedAt": "2026-07-22T08:35:13.965Z"
+    },
+    {
+      "name": "4. Verify client validation email received",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:13.965Z",
+      "details": {
+        "to": "client1@alphainbound.automaticpeople.com",
+        "subject": "Validate your site user account"
+      },
+      "message": "Client validation email captured with URL.",
+      "finishedAt": "2026-07-22T08:35:20.933Z"
+    },
+    {
+      "name": "5. Validate client account and login",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:20.934Z",
+      "details": {
+        "email": "client1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Client account validated and login confirmed.",
+      "finishedAt": "2026-07-22T08:35:23.818Z"
+    },
+    {
+      "name": "6. Add staff1 and verify password setup email",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:23.818Z",
+      "details": {
+        "to": "staff1@alphainbound.automaticpeople.com",
+        "subject": "Enter or reset your AutomaticPeople password"
+      },
+      "message": "Staff invite and setup email verified.",
+      "finishedAt": "2026-07-22T08:35:31.362Z"
+    },
+    {
+      "name": "7. Set staff password, login as staff, verify validated",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:31.362Z",
+      "details": {
+        "email": "staff1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Staff account setup/login/validation confirmed.",
+      "finishedAt": "2026-07-22T08:35:34.822Z"
+    },
+    {
+      "name": "8. Add guest1 from config and verify relationship (invite email optional)",
+      "status": "pass",
+      "startedAt": "2026-07-22T08:35:34.822Z",
+      "details": {
+        "guestId": 1,
+        "email": "guest1@alphainbound.automaticpeople.com",
+        "fallbackUsed": true
+      },
+      "message": "Guest relationship created; no setup email was emitted for this flow.",
+      "finishedAt": "2026-07-22T08:39:38.951Z"
+    },
+    {
+      "name": "9. Login as guest and verify guest-only behavior and empty reservations",
+      "status": "skip",
+      "startedAt": "2026-07-22T08:39:38.951Z",
+      "details": null,
+      "message": "Guest login path not available for this flow (no guest setup/reset URL emitted).",
+      "finishedAt": "2026-07-22T08:39:38.952Z"
+    }
+  ]
+}

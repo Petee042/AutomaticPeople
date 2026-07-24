@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "id": "workflow-02-live-onboarding-client-staff-guest",
+    "title": "Workflow 02 - Live onboarding: client, staff, guest",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-22T09:07:20.171Z",
+  "finishedAt": "2026-07-22T09:07:59.659Z",
+  "summary": {
+    "success": true,
+    "passCount": 10,
+    "failCount": 0,
+    "skipCount": 0,
+    "pendingCount": 0,
+    "totalSteps": 10
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:21.691Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-22T09:07:25.954Z"
+    },
+    {
+      "name": "2. Prepare email listeners for client/staff/guest addresses",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:25.954Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "staff1@alphainbound.automaticpeople.com",
+          "guest1@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners prepared by clearing log and validating config.",
+      "finishedAt": "2026-07-22T09:07:26.462Z"
+    },
+    {
+      "name": "3. Sign up client1 account",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:26.462Z",
+      "details": {
+        "message": "Account created. Please check your email and click the validation link before logging in.",
+        "validationEmailSent": true
+      },
+      "message": "Client1 signup succeeded.",
+      "finishedAt": "2026-07-22T09:07:28.400Z"
+    },
+    {
+      "name": "4. Verify client validation email received",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:28.400Z",
+      "details": {
+        "to": "client1@alphainbound.automaticpeople.com",
+        "subject": "Validate your site user account"
+      },
+      "message": "Client validation email captured with URL.",
+      "finishedAt": "2026-07-22T09:07:34.136Z"
+    },
+    {
+      "name": "5. Validate client account and login",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:34.136Z",
+      "details": {
+        "email": "client1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Client account validated and login confirmed.",
+      "finishedAt": "2026-07-22T09:07:37.628Z"
+    },
+    {
+      "name": "6. Enter host account bank details for client1",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:37.628Z",
+      "details": {
+        "accountName": "Andy Butler",
+        "sortCode": "20-20-21",
+        "accountNumber": "12345678",
+        "iban": "GB33BUKB20201555555555"
+      },
+      "message": "Client bank details saved.",
+      "finishedAt": "2026-07-22T09:07:38.032Z"
+    },
+    {
+      "name": "7. Add staff1 and verify password setup email",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:38.032Z",
+      "details": {
+        "to": "staff1@alphainbound.automaticpeople.com",
+        "subject": "Enter or reset your AutomaticPeople password"
+      },
+      "message": "Staff invite and setup email verified.",
+      "finishedAt": "2026-07-22T09:07:44.576Z"
+    },
+    {
+      "name": "8. Set staff password, login as staff, verify validated",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:44.576Z",
+      "details": {
+        "email": "staff1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Staff account setup/login/validation confirmed.",
+      "finishedAt": "2026-07-22T09:07:48.034Z"
+    },
+    {
+      "name": "9. Add guest1 from config and verify relationship + setup email",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:48.034Z",
+      "details": {
+        "guestId": 1,
+        "to": "guest1@alphainbound.automaticpeople.com",
+        "subject": "Enter or reset your AutomaticPeople password",
+        "setupEmailSent": true,
+        "setupEmailError": ""
+      },
+      "message": "Guest relationship created and setup/reset email verified.",
+      "finishedAt": "2026-07-22T09:07:55.955Z"
+    },
+    {
+      "name": "10. Login as guest and verify guest-only behavior and empty reservations",
+      "status": "pass",
+      "startedAt": "2026-07-22T09:07:55.955Z",
+      "details": {
+        "activeRole": "Guest",
+        "reservations": 0,
+        "facilityReservations": 0
+      },
+      "message": "Guest role and empty reservation visibility confirmed.",
+      "finishedAt": "2026-07-22T09:07:59.654Z"
+    }
+  ]
+}
