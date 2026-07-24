@@ -321,6 +321,12 @@ async function run(argv) {
   if (options.dryRun) {
     step2.skip('Dry run enabled.');
   } else {
+    const login = await adminClient.post('/api/admin/login', {
+      username: adminUsername,
+      password: adminPassword
+    });
+    harness.assert(login.ok, 'Admin login failed with status ' + login.status);
+
     const clearInbound = await adminClient.delete('/api/admin/inbound-mail');
     harness.assert(clearInbound.ok, 'Failed to clear inbound mail log. status=' + clearInbound.status);
 

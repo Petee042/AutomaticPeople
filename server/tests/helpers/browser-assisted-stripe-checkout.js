@@ -240,8 +240,49 @@ async function waitForResultUrl(page, successNeedle, timeoutMs) {
   return {
     completed: false,
     finalUrl: String(page.url() || ''),
-    status: 'timeout'
+    status: 'timeout',
+    diagnostics: await collectCheckoutDiagnostics(page)
   };
+}
+
+async function collectCheckoutDiagnostics(page) {
+  try {
+    const frameDetails = [];
+    for (const frame of page.frames()) {
+      try {
+        const detail = await frame.evaluate(() => {
+          const text = String(document.body && (document.body.innerText || document.body.textContent) || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 1200);
+          const invalidFields = Array.from(document.querySelectorAll('input, select, textarea'))
+            .filter((element) => {
+              const ariaInvalid = String(element.getAttribute('aria-invalid') || '').trim().toLowerCase();
+              return ariaInvalid === 'true';
+            })
+            .map((element) => ({
+              name: String(element.getAttribute('name') || element.getAttribute('autocomplete') || element.id || element.type || '').trim(),
+              placeholder: String(element.getAttribute('placeholder') || '').trim(),
+              ariaLabel: String(element.getAttribute('aria-label') || '').trim()
+            }))
+            .slice(0, 10);
+
+          return {
+            url: String(location.href || ''),
+            title: String(document.title || ''),
+            text,
+            invalidFields
+          };
+        });
+        frameDetails.push(detail);
+      } catch {
+        // Ignore inaccessible frame diagnostics.
+      }
+    }
+    return frameDetails;
+  } catch {
+    return [];
+  }
 }
 
 async function completeStripeCheckout(optionsInput) {
@@ -251,6 +292,9 @@ async function completeStripeCheckout(optionsInput) {
     timeoutMs: 180000,
     headless: true,
     email: '',
+    phone: '07812582241',
+    addressLine1: '4 Spicer Road',
+    city: 'Exeter',
     country: 'United Kingdom',
     postcode: 'EX11SX',
     cardNumber: '4242424242424242',
@@ -287,6 +331,44 @@ async function completeStripeCheckout(optionsInput) {
         12000
       );
     }
+
+    await typeIntoFirstMatch(
+      page,
+      [
+        'input[type="tel"]',
+        'input[name="phoneNumber"]',
+        'input[name="phone"]',
+        'input[autocomplete="tel"]'
+      ],
+      options.phone,
+      8000
+    );
+
+    await typeIntoFirstMatch(
+      page,
+      [
+        'input[name="billingAddressLine1"]',
+        'input[name="addressLine1"]',
+        'input[autocomplete="address-line1"]',
+        'input[placeholder*="Address line 1"]',
+        'input[placeholder*="Street address"]'
+      ],
+      options.addressLine1,
+      8000
+    );
+
+    await typeIntoFirstMatch(
+      page,
+      [
+        'input[name="billingAddressCity"]',
+        'input[name="city"]',
+        'input[autocomplete="address-level2"]',
+        'input[placeholder*="City"]',
+        'input[placeholder*="Town"]'
+      ],
+      options.city,
+      8000
+    );
 
     await fillControl(
       page,

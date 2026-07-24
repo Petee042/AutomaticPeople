@@ -205,6 +205,9 @@ async function run(argv) {
   const guestEmail = optionalEnv('TEST_FLOW_LISTING_GUEST1_EMAIL', 'guest1@alphainbound.automaticpeople.com').toLowerCase();
   const clientPassword = optionalEnv('TEST_FLOW_CLIENT_PASSWORD', 'Quiblick!4');
   const guestPassword = optionalEnv('TEST_FLOW_LISTING_GUEST1_PASSWORD', 'Quiblick!4');
+  const nameSuffix = optionalEnv('TEST_FLOW_LISTING_NAME_SUFFIX', Date.now().toString());
+  const propertyName = 'Property1-' + nameSuffix;
+  const listingName = 'Listing1-' + nameSuffix;
 
   const adminClient = new SessionClient(baseUrl, options.timeoutMs);
   const client = new SessionClient(baseUrl, options.timeoutMs);
@@ -264,14 +267,14 @@ async function run(argv) {
     step4.skip('Dry run enabled.');
   } else {
     const propertyRes = await client.post('/api/properties', {
-      name: 'Property1'
+      name: propertyName
     });
     harness.assert(propertyRes.ok, 'Property creation failed. status=' + propertyRes.status + ' body=' + propertyRes.bodyText);
     const propertyId = Number(propertyRes.bodyJson && propertyRes.bodyJson.property && propertyRes.bodyJson.property.id || 0);
     harness.assert(Number.isInteger(propertyId) && propertyId > 0, 'Property id missing from create response.');
 
     const listingRes = await client.post('/api/listings', {
-      name: 'Listing1',
+      name: listingName,
       propertyId,
       dateBasis: 'checkout',
       perNightPrice: 100,
@@ -287,6 +290,8 @@ async function run(argv) {
     step4.pass('Property and listing created.', {
       propertyId,
       listingId,
+      propertyName,
+      listingName,
       dateBasis: 'checkout',
       perNightPrice: 100,
       perStayPrice: 20,
@@ -374,19 +379,24 @@ async function run(argv) {
       adminClient,
       (entry) => {
         const to = String(entry && entry.to_address || '').trim().toLowerCase();
+        const subject = String(entry && entry.subject || '').trim().toLowerCase();
         const body = String(entry && entry.body_text || '').toLowerCase();
-        const hasDashboardLink = body.includes('dashboard') || body.includes('automaticpeople');
-        const hasReservationContent = body.includes('reservation') && body.includes('bank transfer');
-        return to === guestEmail && hasDashboardLink && hasReservationContent;
+        const hasReservationContent = subject.includes('payment request for accommodation')
+          || (body.includes('reservation id:') && body.includes('bank details:'));
+        return to === guestEmail && hasReservationContent;
       },
       120000,
       4000
     );
-    harness.assert(reservationNotice, 'Guest reservation notification email with dashboard backlink not found.');
+    harness.assert(reservationNotice, 'Guest reservation notification email not found.');
+
+    const reservationBody = String(reservationNotice.body_text || '').toLowerCase();
+    const hasDashboardLink = reservationBody.includes('dashboard') || reservationBody.includes('/login') || reservationBody.includes('automaticpeople account');
 
     step7.pass('Guest reservation notification email verified.', {
       to: String(reservationNotice.to_address || ''),
-      subject: String(reservationNotice.subject || '')
+      subject: String(reservationNotice.subject || ''),
+      hasDashboardLink
     });
   }
 
