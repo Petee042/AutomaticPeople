@@ -2,6 +2,7 @@
 
 const Stripe = require('stripe');
 const { createWorkflowHarness, parseOptions } = require('../helpers/workflow-test-harness');
+const { completeStripeCheckout } = require('../helpers/browser-assisted-stripe-checkout');
 
 const TEST_META = {
   id: 'workflow-05-live-facility-online-payment',
@@ -236,6 +237,7 @@ async function run(argv) {
   let reservationId = 0;
   let checkoutSessionId = '';
   let paymentIntentId = '';
+  let paymentAutomationRan = false;
   const step1 = harness.step('1. Login as existing client1 account');
   if (options.dryRun) {
     step1.skip('Dry run enabled.');
@@ -455,44 +457,26 @@ async function run(argv) {
     harness.assert(payNow.ok, 'Guest pay-now failed. status=' + payNow.status + ' body=' + payNow.bodyText);
 
     checkoutSessionId = String(payNow.bodyJson && payNow.bodyJson.checkoutSessionId || '').trim();
+    const checkoutUrl = String(payNow.bodyJson && payNow.bodyJson.checkoutUrl || '').trim();
     harness.assert(checkoutSessionId, 'Checkout session id missing from pay-now response.');
+    harness.assert(checkoutUrl, 'Checkout URL missing from pay-now response.');
 
-    let observedSessionStatus = '';
-    let observedPaymentStatus = '';
-    // Stripe can hydrate payment_intent shortly after session creation in some configurations.
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
-        expand: ['payment_intent']
-      });
-      observedSessionStatus = String(session && session.status || '').trim().toLowerCase();
-      observedPaymentStatus = String(session && session.payment_status || '').trim().toLowerCase();
-
-      if (session && typeof session.payment_intent === 'string') {
-        paymentIntentId = String(session.payment_intent || '').trim();
-      } else if (session && session.payment_intent && session.payment_intent.id) {
-        paymentIntentId = String(session.payment_intent.id || '').trim();
-      }
-
-      if (paymentIntentId) {
-        break;
-      }
-      await sleep(1200);
-    }
-
-    harness.assert(
-      paymentIntentId,
-      'Stripe checkout session did not expose a payment_intent id after polling. ' +
-      'sessionStatus=' + observedSessionStatus + ' paymentStatus=' + observedPaymentStatus +
-      ' sessionId=' + checkoutSessionId
-    );
-
-    const confirmed = await stripe.paymentIntents.confirm(paymentIntentId, {
-      payment_method: 'pm_card_visa'
+    const checkoutResult = await completeStripeCheckout({
+      checkoutUrl,
+      successUrlNeedle: 'payment=success',
+      timeoutMs: 180000,
+      headless: false,
+      email: guestEmail,
+      cardNumber: optionalEnv('TEST_STRIPE_CARD_NUMBER', '4242424242424242'),
+      cardExpiry: optionalEnv('TEST_STRIPE_CARD_EXPIRY', '1234'),
+      cardCvc: optionalEnv('TEST_STRIPE_CARD_CVC', '123'),
+      cardName: optionalEnv('TEST_STRIPE_CARDHOLDER_NAME', 'AutomaticPeople Test')
     });
-    const confirmStatus = String(confirmed && confirmed.status || '').trim().toLowerCase();
     harness.assert(
-      confirmStatus === 'succeeded' || confirmStatus === 'processing' || confirmStatus === 'requires_capture',
-      'Unexpected payment intent status after confirm: ' + confirmStatus
+      checkoutResult && checkoutResult.completed === true,
+      'Stripe hosted checkout did not complete successfully. status=' +
+      String(checkoutResult && checkoutResult.status || '') + ' finalUrl=' +
+      String(checkoutResult && checkoutResult.finalUrl || '')
     );
 
     let reconciledStatus = '';
@@ -512,18 +496,29 @@ async function run(argv) {
 
     harness.assert(reconciledStatus === 'confirmed', 'Facility reservation did not reconcile to confirmed after payment. status=' + reconciledStatus);
 
+    const confirmedSession = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
+      expand: ['payment_intent']
+    });
+    if (confirmedSession && typeof confirmedSession.payment_intent === 'string') {
+      paymentIntentId = String(confirmedSession.payment_intent || '').trim();
+    } else if (confirmedSession && confirmedSession.payment_intent && confirmedSession.payment_intent.id) {
+      paymentIntentId = String(confirmedSession.payment_intent.id || '').trim();
+    }
+    paymentAutomationRan = true;
+
     step10.pass('Stripe payment confirmed and reservation reconciled.', {
       checkoutSessionId,
       paymentIntentId,
-      reconciledStatus
+      reconciledStatus,
+      checkoutFinalUrl: String(checkoutResult && checkoutResult.finalUrl || '')
     });
   }
 
   const step11 = harness.step('11. Verify client receives online-payment notification email');
   if (options.dryRun) {
     step11.skip('Dry run enabled.');
-  } else if (!stripe) {
-    step11.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
+  } else if (!paymentAutomationRan) {
+    step11.skip('Skipped because Stripe payment automation did not complete.');
   } else {
     const hostNotifyEmail = await waitForInboundEntry(
       adminClient,
@@ -545,8 +540,8 @@ async function run(argv) {
   const step12 = harness.step('12. Verify client and guest both see confirmed status');
   if (options.dryRun) {
     step12.skip('Dry run enabled.');
-  } else if (!stripe) {
-    step12.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
+  } else if (!paymentAutomationRan) {
+    step12.skip('Skipped because Stripe payment automation did not complete.');
   } else {
     const hostReservations = await client.get('/api/shared-resources/' + resourceId + '/reservations');
     harness.assert(hostReservations.ok, 'Host facility reservations failed. status=' + hostReservations.status + ' body=' + hostReservations.bodyText);
@@ -579,8 +574,8 @@ async function run(argv) {
   const step13 = harness.step('13. Verify guest receives payment-confirmed email');
   if (options.dryRun) {
     step13.skip('Dry run enabled.');
-  } else if (!stripe) {
-    step13.skip('Skipped because Stripe payment automation did not run without STRIPE_SECRET_KEY.');
+  } else if (!paymentAutomationRan) {
+    step13.skip('Skipped because Stripe payment automation did not complete.');
   } else {
     const guestReceiptEmail = await waitForInboundEntry(
       adminClient,
