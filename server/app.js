@@ -2800,6 +2800,46 @@ async function sendReservationActivityConfirmationEmail(reservationRows, payment
   };
 }
 
+async function sendFacilityReservationConfirmationEmail(reservation, paymentIntent) {
+  const reservationRow = reservation && typeof reservation === 'object' ? reservation : null;
+  if (!reservationRow) {
+    return { sent: false, error: 'No reservation row available.' };
+  }
+
+  const confirmationEmailAddress = normaliseOptionalEmail(reservationRow.email_address)
+    || normaliseOptionalEmail(paymentIntent && paymentIntent.receipt_email);
+  if (!confirmationEmailAddress) {
+    return { sent: false, error: 'No recipient email found for facility reservation confirmation.' };
+  }
+
+  const confirmEmailLines = [
+    'Reservation Payment Confirmed',
+    '',
+    'Guest: ' + String(reservationRow.first_name || '') + ' ' + String(reservationRow.family_name || ''),
+    'Reference: ' + String(reservationRow.reservation_identifier || ''),
+    'Starts: ' + String(reservationRow.requested_start_at || ''),
+    'Ends: ' + String(reservationRow.requested_end_at || ''),
+    'Amount paid: ' + String(Number(reservationRow.reservation_amount || 0).toFixed(2)),
+    '',
+    'Your reservation is now confirmed. Please keep your reference number for your records.'
+  ];
+
+  const confirmEmailResult = await sendAppEmail({
+    to: confirmationEmailAddress,
+    subject: 'Reservation Payment Confirmed',
+    textBody: confirmEmailLines.join('\n')
+  });
+  if (!confirmEmailResult.ok) {
+    return { sent: false, error: String(confirmEmailResult.error || 'Failed to send confirmation email.') };
+  }
+
+  return {
+    sent: true,
+    messageId: confirmEmailResult.messageId ? String(confirmEmailResult.messageId) : '',
+    recipient: confirmationEmailAddress
+  };
+}
+
 async function finalizeReservationActivityPaymentIntent(paymentIntent, options) {
   const intent = paymentIntent && typeof paymentIntent === 'object' ? paymentIntent : null;
   const paymentIntentId = String(intent && intent.id || '').trim();
@@ -13570,12 +13610,21 @@ app.post('/api/guest/dashboard/facility-reservations/:reservationId/sync-payment
     };
 
     const paymentStatus = String(commonUpdate.paymentStatus || '').trim();
+    let guestReceiptResult = { sent: false, error: '', recipient: '', messageId: '' };
     if (paymentStatus === 'succeeded') {
+      const alreadyConfirmed = String(reservation.status || '').trim().toLowerCase() === 'confirmed';
       await updateSharedResourceReservationPaymentById(reservation.id, {
         ...commonUpdate,
         paidAt: new Date().toISOString(),
         status: 'Confirmed'
       });
+
+      if (!alreadyConfirmed) {
+        guestReceiptResult = await sendFacilityReservationConfirmationEmail(reservation, paymentIntent);
+        if (!guestReceiptResult.ok) {
+          console.warn('Failed to send guest online-payment confirmation email.', guestReceiptResult.error || 'unknown email error');
+        }
+      }
 
       const ownerUser = await getUserById(Number(reservation.host_user_id || 0));
       const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
@@ -13621,10 +13670,30 @@ app.post('/api/guest/dashboard/facility-reservations/:reservationId/sync-payment
       normalizedEmail
     );
 
+    const confirmedReservationEmail = normaliseOptionalEmail(reservation && reservation.email_address)
+      || normaliseOptionalEmail(paymentIntent && paymentIntent.receipt_email)
+      || normalizedEmail;
+    if (String(reservation && reservation.status || '').trim().toLowerCase() === 'confirmed' && guestReceiptResult.sent !== true) {
+      guestReceiptResult = {
+        sent: true,
+        recipient: confirmedReservationEmail,
+        messageId: guestReceiptResult.messageId || '',
+        error: guestReceiptResult.error || '',
+        source: 'confirmed_reservation'
+      };
+    }
+
     return res.json({
       reconciled: true,
       paymentIntentStatus: String(paymentIntent && paymentIntent.status || '').toLowerCase(),
-      reservation: reservation || null
+      reservation: reservation || null,
+      guestReceipt: {
+        sent: Boolean(guestReceiptResult && guestReceiptResult.sent === true),
+        recipient: String(guestReceiptResult && guestReceiptResult.recipient || confirmedReservationEmail || ''),
+        messageId: String(guestReceiptResult && guestReceiptResult.messageId || ''),
+        error: String(guestReceiptResult && guestReceiptResult.error || ''),
+        source: String(guestReceiptResult && guestReceiptResult.source || '')
+      }
     });
   } catch (err) {
     console.error(err);
@@ -14155,6 +14224,7 @@ app.post('/api/stripe/webhook', async (req, res) => {
           };
 
           if (event.type === 'payment_intent.succeeded') {
+            const alreadyConfirmed = String(reservation.status || '').trim().toLowerCase() === 'confirmed';
             await updateSharedResourceReservationPaymentById(reservation.id, {
               ...commonUpdate,
               paidAt: new Date().toISOString(),
@@ -14187,27 +14257,12 @@ app.post('/api/stripe/webhook', async (req, res) => {
               sourceId: String(reservation.id)
             });
 
-            if (reservation.email_address) {
-              const confirmEmailLines = [
-                'Reservation Payment Confirmed',
-                '',
-                'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
-                'Reference: ' + String(reservation.reservation_identifier || ''),
-                'Starts: ' + String(reservation.requested_start_at || ''),
-                'Ends: ' + String(reservation.requested_end_at || ''),
-                'Amount paid: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
-                '',
-                'Your reservation is now confirmed. Please keep your reference number for your records.'
-              ];
-              const confirmEmailResult = await sendAppEmail({
-                to: reservation.email_address,
-                subject: 'Reservation Payment Confirmed',
-                textBody: confirmEmailLines.join('\n')
-              });
-              if (!confirmEmailResult.ok) {
-                console.warn('[Webhook] Shared-resource confirmation email failed:', confirmEmailResult.error);
+            if (!alreadyConfirmed) {
+              const guestReceiptResult = await sendFacilityReservationConfirmationEmail(reservation, paymentIntent);
+              if (!guestReceiptResult.ok) {
+                console.warn('[Webhook] Shared-resource confirmation email failed:', guestReceiptResult.error);
               } else {
-                console.log('[Webhook] Shared-resource confirmation email sent:', confirmEmailResult.messageId);
+                console.log('[Webhook] Shared-resource confirmation email sent:', guestReceiptResult.messageId);
               }
             }
           } else if (event.type === 'payment_intent.payment_failed') {

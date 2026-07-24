@@ -76,8 +76,15 @@ Validate full client to guest online-payment facility reservation flow through S
   - sort code: `20-20-21`
   - account number: `12345678`
   - IBAN: `GB33BUKB20201555555555`
-8. Follow Pay Now link to Stripe payment flow and pay using Stripe sandbox credentials.
+8. Follow Pay Now link to Stripe payment flow and complete the browser-assisted Stripe sandbox checkout. If prompted, choose to save credit card details, set country to `UK` or `United Kingdom`, and use postcode `EX11SX`.
 9. Verify Client1 email includes payment-made notification.
 10. Return to Client1 account; verify facility reservation status is paid/confirmed.
 11. Return to parker2 account; verify facility reservation shows payment confirmed.
 12. Verify parker2 email contains message confirming payment has been received for the facility reservation.
+
+### Default Execution
+
+The default facility online-payment workflow now runs the Puppeteer-assisted Stripe checkout path.
+
+- `npm run test:workflow:facility-online-payment -- --live --base-url https://automaticpeople-alpha.onrender.com`
+- `npm run test:workflow:facility-set -- --live --base-url https://automaticpeople-alpha.onrender.com`

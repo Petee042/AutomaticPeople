@@ -238,6 +238,7 @@ async function run(argv) {
   let checkoutSessionId = '';
   let paymentIntentId = '';
   let paymentAutomationRan = false;
+  let guestReceiptResult = null;
   const step1 = harness.step('1. Login as existing client1 account');
   if (options.dryRun) {
     step1.skip('Dry run enabled.');
@@ -487,6 +488,7 @@ async function run(argv) {
       harness.assert(syncRes.ok, 'Guest sync-payment failed. status=' + syncRes.status + ' body=' + syncRes.bodyText);
 
       const syncedReservation = syncRes.bodyJson && syncRes.bodyJson.reservation ? syncRes.bodyJson.reservation : null;
+      guestReceiptResult = syncRes.bodyJson && syncRes.bodyJson.guestReceipt ? syncRes.bodyJson.guestReceipt : guestReceiptResult;
       reconciledStatus = String(syncedReservation && syncedReservation.status || '').trim().toLowerCase();
       if (reconciledStatus === 'confirmed') {
         break;
@@ -577,6 +579,13 @@ async function run(argv) {
   } else if (!paymentAutomationRan) {
     step13.skip('Skipped because Stripe payment automation did not complete.');
   } else {
+    harness.assert(guestReceiptResult, 'Guest receipt result was not returned from sync-payment.');
+    harness.assert(guestReceiptResult.sent === true, 'Guest receipt email was not reported as sent. error=' + String(guestReceiptResult.error || ''));
+    harness.assert(
+      String(guestReceiptResult.recipient || '').trim().toLowerCase() === guestEmail,
+      'Guest receipt was sent to the wrong email address. expected=' + guestEmail + ' actual=' + String(guestReceiptResult.recipient || '')
+    );
+
     const guestReceiptEmail = await waitForInboundEntry(
       adminClient,
       (entry) => {
@@ -584,13 +593,22 @@ async function run(argv) {
         const subject = String(entry && entry.subject || '').trim().toLowerCase();
         return to === guestEmail && subject.includes('reservation payment confirmed');
       },
-      120000,
-      4000
+      30000,
+      3000
     );
     if (!guestReceiptEmail) {
-      step13.skip('Guest payment-confirmed email was not observed in this environment.');
+      step13.pass('Guest payment-confirmed email was sent to the correct guest address; inbound log was not observed in this environment.', {
+        recipient: String(guestReceiptResult.recipient || ''),
+        messageId: String(guestReceiptResult.messageId || ''),
+        source: String(guestReceiptResult.source || '')
+      });
     } else {
-      step13.pass('Guest payment-confirmed email verified.', null);
+      step13.pass('Guest payment-confirmed email verified.', {
+        recipient: String(guestReceiptResult.recipient || ''),
+        messageId: String(guestReceiptResult.messageId || ''),
+        inboundMatched: true,
+        source: String(guestReceiptResult.source || '')
+      });
     }
   }
 

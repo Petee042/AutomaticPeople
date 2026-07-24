@@ -80,6 +80,13 @@ Stripe Connect onboarding helper for workflow-05:
 - The helper uses Stripe test data when available and fills required defaults including date of birth `01/01/1901` and address `4 Spicer Road`, `Exeter`, `EX11SX`, `United Kingdom`.
 - `STRIPE_SECRET_KEY` is still only needed for the later automated payment-confirmation stage.
 
+Browser-assisted Stripe Checkout helper for workflow-05:
+
+- `workflow-05` now completes the hosted Stripe checkout page with Puppeteer by default.
+- If Stripe asks to save card details, the helper answers yes.
+- If Stripe asks for billing country or postcode, the helper uses `UK` / `United Kingdom` and `EX11SX`.
+- The default facility scripts inherit this behavior through `npm run test:workflow:facility-online-payment` and `npm run test:workflow:facility-set`.
+
 Browser-assisted Turnstile helper:
 
 - If you do not have a fresh `TEST_TURNSTILE_TOKEN`, use `npm run test:workflow:live-onboarding:assist -- --live --base-url https://automaticpeople-alpha.onrender.com`

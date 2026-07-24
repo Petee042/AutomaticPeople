@@ -6,6 +6,128 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function clickFirstMatchingText(page, textOptions) {
+  const options = Array.isArray(textOptions) ? textOptions : [textOptions];
+
+  try {
+    const frames = page.frames();
+    for (const frame of frames) {
+      const clicked = await frame.evaluate((texts) => {
+        const normalizedTexts = texts.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+        const elements = Array.from(document.querySelectorAll(
+          'button, a, label, [role="button"], [role="option"], input[type="button"], input[type="submit"]'
+        ));
+
+        const target = elements.find((element) => {
+          const text = String(element.innerText || element.value || element.textContent || '').trim().toLowerCase();
+          if (!text) {
+            return false;
+          }
+          return normalizedTexts.some((needle) => text.includes(needle));
+        });
+
+        if (!target) {
+          return '';
+        }
+
+        target.click();
+        return String(target.innerText || target.value || target.textContent || '').trim();
+      }, options);
+
+      if (clicked) {
+        return clicked;
+      }
+    }
+  } catch {
+    return '';
+  }
+}
+
+async function fillControl(page, matchers, value) {
+  try {
+    const frames = page.frames();
+    for (const frame of frames) {
+      const filled = await frame.evaluate(({ candidates, nextValue }) => {
+        const normalized = candidates.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
+        const controls = Array.from(document.querySelectorAll('input, textarea, select'));
+
+        function attributesFor(element) {
+          const attrs = [
+            element.id,
+            element.name,
+            element.getAttribute('placeholder'),
+            element.getAttribute('aria-label'),
+            element.getAttribute('autocomplete'),
+            element.getAttribute('data-testid')
+          ].filter(Boolean).map((item) => String(item).trim().toLowerCase());
+
+          if (element.id) {
+            const label = document.querySelector('label[for="' + CSS.escape(element.id) + '"]');
+            if (label) {
+              attrs.push(String(label.innerText || label.textContent || '').trim().toLowerCase());
+            }
+          }
+
+          let parent = element.parentElement;
+          while (parent) {
+            if (parent.tagName === 'LABEL') {
+              attrs.push(String(parent.innerText || parent.textContent || '').trim().toLowerCase());
+              break;
+            }
+            parent = parent.parentElement;
+          }
+
+          return attrs;
+        }
+
+        const target = controls.find((element) => {
+          const tag = String(element.tagName || '').toLowerCase();
+          const type = String(element.getAttribute('type') || '').toLowerCase();
+          if (tag === 'input' && ['hidden', 'checkbox', 'radio'].includes(type)) {
+            return false;
+          }
+          const attrs = attributesFor(element);
+          return normalized.some((needle) => attrs.some((attr) => attr.includes(needle)));
+        });
+
+        if (!target) {
+          return false;
+        }
+
+        target.focus();
+        if (String(target.tagName || '').toLowerCase() === 'select') {
+          const normalizedValue = String(nextValue).trim().toLowerCase();
+          const option = Array.from(target.options || []).find((item) => {
+            const text = String(item.text || '').trim().toLowerCase();
+            const optionValue = String(item.value || '').trim().toLowerCase();
+            return text === normalizedValue
+              || optionValue === normalizedValue
+              || text.includes(normalizedValue)
+              || normalizedValue.includes(text)
+              || optionValue.includes(normalizedValue)
+              || normalizedValue.includes(optionValue);
+          });
+          if (option) {
+            target.value = option.value;
+          }
+        } else {
+          target.value = String(nextValue);
+        }
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        target.blur();
+        return true;
+      }, { candidates: matchers, nextValue: value });
+
+      if (filled) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+}
+
 async function typeIntoFirstMatch(page, selectors, value, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const options = Array.isArray(selectors) ? selectors : [selectors];
@@ -129,6 +251,8 @@ async function completeStripeCheckout(optionsInput) {
     timeoutMs: 180000,
     headless: true,
     email: '',
+    country: 'United Kingdom',
+    postcode: 'EX11SX',
     cardNumber: '4242424242424242',
     cardExpiry: '1234',
     cardCvc: '123',
@@ -163,6 +287,32 @@ async function completeStripeCheckout(optionsInput) {
         12000
       );
     }
+
+    await fillControl(
+      page,
+      [
+        'select[name="country"]',
+        'select[autocomplete="country"]',
+        'input[name="country"]',
+        'input[autocomplete="country"]',
+        'input[placeholder*="country"]',
+        'select[aria-label*="country"]'
+      ],
+      options.country
+    );
+
+    await fillControl(
+      page,
+      [
+        'input[name="postalCode"]',
+        'input[name="postcode"]',
+        'input[autocomplete="postal-code"]',
+        'input[autocomplete="zip-code"]',
+        'input[placeholder*="postcode"]',
+        'input[placeholder*="postal"]'
+      ],
+      options.postcode
+    );
 
     const numberOk = await typeIntoFirstMatch(
       page,
@@ -220,6 +370,21 @@ async function completeStripeCheckout(optionsInput) {
       options.cardName,
       8000
     );
+
+    await clickFirstMatchingText(page, [
+      'yes',
+      'yes please',
+      'save',
+      'save card',
+      'save payment details',
+      'save card details',
+      'save and continue',
+      'yes, save',
+      'allow',
+      'continue',
+      'agree',
+      'confirm'
+    ]);
 
     const clickedPay = await clickPayButton(page, 30000);
     if (!clickedPay) {
