@@ -1,0 +1,125 @@
+{
+  "meta": {
+    "id": "workflow-05-live-facility-online-payment",
+    "title": "Workflow 05 - Live facility reservation (online payment)",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-21T11:28:21.288Z",
+  "finishedAt": "2026-07-21T11:28:36.020Z",
+  "summary": {
+    "success": true,
+    "passCount": 4,
+    "failCount": 0,
+    "skipCount": 7,
+    "pendingCount": 0,
+    "totalSteps": 11
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:28:21.290Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-21T11:28:25.645Z"
+    },
+    {
+      "name": "2. Prepare inbound mail listeners",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:28:25.645Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "parker2@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners ready.",
+      "finishedAt": "2026-07-21T11:28:26.062Z"
+    },
+    {
+      "name": "3. Create and validate client account",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:28:26.062Z",
+      "details": {
+        "email": "client1@alphainbound.automaticpeople.com"
+      },
+      "message": "Client account created, validated, and logged in.",
+      "finishedAt": "2026-07-21T11:28:35.333Z"
+    },
+    {
+      "name": "4. Create Parking2 facility with online+bank payment options",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:28:35.333Z",
+      "details": {
+        "resourceId": 1
+      },
+      "message": "Parking2 created.",
+      "finishedAt": "2026-07-21T11:28:35.787Z"
+    },
+    {
+      "name": "5. Create future facility reservation using online payment",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:35.787Z",
+      "details": null,
+      "message": "Online payment is not available for this host in the target environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    },
+    {
+      "name": "6. Set parker2 password from invite email and log in",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:36.018Z",
+      "details": null,
+      "message": "Skipped because online-payment reservation could not be created in this environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    },
+    {
+      "name": "7. Confirm parker2 sees facility reservation awaiting online payment",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:36.018Z",
+      "details": null,
+      "message": "Skipped because online-payment reservation could not be created in this environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    },
+    {
+      "name": "8. Complete Stripe sandbox payment via Pay Now + sync",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:36.018Z",
+      "details": null,
+      "message": "Skipped because online-payment reservation could not be created in this environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    },
+    {
+      "name": "9. Verify client receives online-payment notification email",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:36.018Z",
+      "details": null,
+      "message": "Skipped because online-payment reservation could not be created in this environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    },
+    {
+      "name": "10. Verify client and guest both see confirmed status",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:36.018Z",
+      "details": null,
+      "message": "Skipped because online-payment reservation could not be created in this environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    },
+    {
+      "name": "11. Verify guest receives payment-confirmed email",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:28:36.018Z",
+      "details": null,
+      "message": "Skipped because online-payment reservation could not be created in this environment.",
+      "finishedAt": "2026-07-21T11:28:36.018Z"
+    }
+  ]
+}

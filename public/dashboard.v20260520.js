@@ -963,16 +963,19 @@ function closeTeamMemberEditor() {
 function renderGuests(guests) {
   currentGuests = Array.isArray(guests) ? guests : [];
   const tbody = document.getElementById('guestsTableBody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
+  if (tbody) {
+    tbody.innerHTML = '';
+  }
 
   if (!currentGuests.length) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = 4;
-    cell.textContent = 'No guest contacts found.';
-    row.appendChild(cell);
-    tbody.appendChild(row);
+    if (tbody) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 4;
+      cell.textContent = 'No guest contacts found.';
+      row.appendChild(cell);
+      tbody.appendChild(row);
+    }
     renderConfigRows('configGuestsList', [], 'No guests yet.');
     return;
   }
@@ -989,28 +992,30 @@ function renderGuests(guests) {
     'No guests yet.'
   );
 
-  currentGuests.forEach((guest) => {
-    const row = document.createElement('tr');
+  if (tbody) {
+    currentGuests.forEach((guest) => {
+      const row = document.createElement('tr');
 
-    const nameCell = document.createElement('td');
-    const guestName = [guest.guest_first_name, guest.guest_family_name].filter(Boolean).join(' ').trim();
-    nameCell.textContent = guestName || 'Guest';
+      const nameCell = document.createElement('td');
+      const guestName = [guest.guest_first_name, guest.guest_family_name].filter(Boolean).join(' ').trim();
+      nameCell.textContent = guestName || 'Guest';
 
-    const emailCell = document.createElement('td');
-    emailCell.textContent = guest.guest_email || '';
+      const emailCell = document.createElement('td');
+      emailCell.textContent = guest.guest_email || '';
 
-    const phoneCell = document.createElement('td');
-    phoneCell.textContent = guest.guest_phone || '';
+      const phoneCell = document.createElement('td');
+      phoneCell.textContent = guest.guest_phone || '';
 
-    const sourceCell = document.createElement('td');
-    sourceCell.textContent = guest.source_type || '';
+      const sourceCell = document.createElement('td');
+      sourceCell.textContent = guest.source_type || '';
 
-    row.appendChild(nameCell);
-    row.appendChild(emailCell);
-    row.appendChild(phoneCell);
-    row.appendChild(sourceCell);
-    tbody.appendChild(row);
-  });
+      row.appendChild(nameCell);
+      row.appendChild(emailCell);
+      row.appendChild(phoneCell);
+      row.appendChild(sourceCell);
+      tbody.appendChild(row);
+    });
+  }
 }
 
 function renderManagerAssignmentSelectors(snapshot) {
@@ -4606,6 +4611,7 @@ async function sendScheduleEmailToRecipient(toEmail) {
     setConsolidatedIcsUrl(meData.consolidated_ics_token || '');
     currentUserEmail = String(meData.email || '').toLowerCase();
     loadDashboardState();
+    renderSiteUserId(meData);
     renderStripeConnectStatus(meData.stripeConnect || null);
 
     await fetchAccessContext();
@@ -5045,6 +5051,30 @@ function setBankDetailsMessage(text, isError) {
   if (!el) return;
   el.textContent = text || '';
   el.className = text ? ('message ' + (isError ? 'error' : 'success')) : 'message';
+}
+
+function setSiteUserIdMessage(text, isError) {
+  const el = document.getElementById('siteUserIdMessage');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'hint' + (isError ? ' error' : '');
+}
+
+function renderSiteUserId(profile) {
+  const input = document.getElementById('siteUserIdDisplay');
+  const copyBtn = document.getElementById('copySiteUserIdBtn');
+  const siteUserId = String(profile && profile.siteUserId || '').trim();
+  if (input) {
+    input.value = siteUserId;
+  }
+  if (copyBtn) {
+    copyBtn.disabled = !siteUserId;
+  }
+  if (siteUserId) {
+    setSiteUserIdMessage('This ID helps support and routing identify your account.', false);
+  } else {
+    setSiteUserIdMessage('Site User ID is not available yet.', true);
+  }
 }
 
 function setDashboardSettingsMessage(text, isError) {
@@ -5898,14 +5928,12 @@ async function fetchBankDetails() {
     const bankSortCodeEl = document.getElementById('bankSortCode');
     const bankAccountNumberEl = document.getElementById('bankAccountNumber');
     const bankIbanEl = document.getElementById('bankIban');
-    const bankBicEl = document.getElementById('bankBic');
     const bankIsBusinessEl = document.getElementById('bankIsBusiness');
 
     if (bankAccountNameEl) bankAccountNameEl.value = data.accountName || '';
     if (bankSortCodeEl) bankSortCodeEl.value = data.sortCode || '';
     if (bankAccountNumberEl) bankAccountNumberEl.value = data.accountNumber || '';
     if (bankIbanEl) bankIbanEl.value = data.iban || '';
-    if (bankBicEl) bankBicEl.value = data.bic || '';
     if (bankIsBusinessEl) bankIsBusinessEl.checked = data.isBusiness === true;
 
     console.log('[BankDetails] Loaded bank details successfully');
@@ -5960,7 +5988,6 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
   const sortCode = String((document.getElementById('bankSortCode') || {}).value || '').trim();
   const accountNumber = String((document.getElementById('bankAccountNumber') || {}).value || '').trim();
   const iban = String((document.getElementById('bankIban') || {}).value || '').trim();
-  const bic = String((document.getElementById('bankBic') || {}).value || '').trim();
 
   if (!accountName || !sortCode || !accountNumber) {
     setBankDetailsMessage('Account name, sort code, and account number are required.', true);
@@ -5970,14 +5997,10 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
     setBankDetailsMessage('IBAN is required.', true);
     return;
   }
-  if (!bic) {
-    setBankDetailsMessage('BIC is required.', true);
-    return;
-  }
 
   if (btn) btn.disabled = true;
   try {
-    console.log('[BankDetails] Saving bank details:', { accountName, sortCode, iban, bic });
+    console.log('[BankDetails] Saving bank details:', { accountName, sortCode, iban });
     const res = await fetch('/api/account/bank-details', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -5986,7 +6009,6 @@ if (_bankDetailsForm) _bankDetailsForm.addEventListener('submit', async (e) => {
         sortCode,
         accountNumber,
         iban,
-        bic,
         isBusiness: !!(document.getElementById('bankIsBusiness') || {}).checked
       })
     });
@@ -6352,6 +6374,29 @@ if (_copyConsolidatedIcsUrlBtn) _copyConsolidatedIcsUrlBtn.addEventListener('cli
     }, 1800);
   } catch {
     setMessage('Could not copy consolidated calendar URL.', true);
+  }
+});
+
+const _copySiteUserIdBtn = document.getElementById('copySiteUserIdBtn');
+if (_copySiteUserIdBtn) _copySiteUserIdBtn.addEventListener('click', async () => {
+  const input = document.getElementById('siteUserIdDisplay');
+  const value = String(input && input.value || '').trim();
+  if (!value) {
+    setSiteUserIdMessage('No Site User ID available to copy.', true);
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(value);
+    const btn = document.getElementById('copySiteUserIdBtn');
+    const originalText = btn.textContent;
+    btn.textContent = 'Copied!';
+    setSiteUserIdMessage('Site User ID copied.', false);
+    setTimeout(() => {
+      btn.textContent = originalText;
+    }, 1800);
+  } catch {
+    setSiteUserIdMessage('Could not copy Site User ID.', true);
   }
 });
 

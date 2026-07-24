@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "id": "workflow-01-auth-smoke",
+    "title": "Workflow 01 - Auth smoke checks",
+    "owner": "AutomaticPeople",
+    "destructive": false
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-21T11:07:16.206Z",
+  "finishedAt": "2026-07-21T11:07:17.042Z",
+  "summary": {
+    "success": true,
+    "passCount": 2,
+    "failCount": 0,
+    "skipCount": 0,
+    "pendingCount": 0,
+    "totalSteps": 2
+  },
+  "steps": [
+    {
+      "name": "Smoke endpoint responds",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:07:16.206Z",
+      "details": {
+        "status": 200,
+        "url": "https://alpha.automaticpeople.com/api/health"
+      },
+      "message": "Server responded to probe endpoint.",
+      "finishedAt": "2026-07-21T11:07:16.743Z"
+    },
+    {
+      "name": "Protected endpoint behavior is controlled",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:07:16.743Z",
+      "details": {
+        "status": 401
+      },
+      "message": "Protected endpoint returned expected status.",
+      "finishedAt": "2026-07-21T11:07:17.039Z"
+    }
+  ]
+}

@@ -119,7 +119,6 @@ function setCompletionMessage(text, isError) {
       document.getElementById('completionSortCode').textContent = String(data.bankAccount.sortCode || '');
       document.getElementById('completionAccountNumber').textContent = String(data.bankAccount.accountNumber || '');
       document.getElementById('completionIban').textContent = String(data.bankAccount.iban || '');
-      document.getElementById('completionBic').textContent = String(data.bankAccount.bic || '');
     }
   }
 

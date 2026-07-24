@@ -1,0 +1,134 @@
+{
+  "meta": {
+    "id": "workflow-03-live-guest-login-from-private-reservation",
+    "title": "Workflow 03 - Live guest login from private reservation provisioning",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://automaticpeople-alpha.onrender.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-22T10:44:02.598Z",
+  "finishedAt": "2026-07-22T10:44:39.205Z",
+  "summary": {
+    "success": true,
+    "passCount": 10,
+    "failCount": 0,
+    "skipCount": 0,
+    "pendingCount": 0,
+    "totalSteps": 10
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:02.602Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-22T10:44:06.906Z"
+    },
+    {
+      "name": "2. Prepare inbound mail listeners",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:06.906Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "guest1@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners prepared.",
+      "finishedAt": "2026-07-22T10:44:07.296Z"
+    },
+    {
+      "name": "3. Create and validate client account",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:07.296Z",
+      "details": null,
+      "message": "Client account created, validated, and logged in.",
+      "finishedAt": "2026-07-22T10:44:16.504Z"
+    },
+    {
+      "name": "4. Enter host account bank details for client1",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:16.504Z",
+      "details": {
+        "accountName": "Andy Butler",
+        "sortCode": "20-20-21",
+        "accountNumber": "12345678",
+        "iban": "GB33BUKB20201555555555"
+      },
+      "message": "Client bank details saved.",
+      "finishedAt": "2026-07-22T10:44:17.435Z"
+    },
+    {
+      "name": "5. Invite staff1, set password, and verify staff login",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:17.435Z",
+      "details": {
+        "email": "staff1@alphainbound.automaticpeople.com",
+        "isValidated": true
+      },
+      "message": "Staff invited, password set, and login confirmed.",
+      "finishedAt": "2026-07-22T10:44:27.259Z"
+    },
+    {
+      "name": "6. Create property and listing for private reservation",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:27.259Z",
+      "details": {
+        "propertyId": 2,
+        "listingId": 1
+      },
+      "message": "Property and listing created.",
+      "finishedAt": "2026-07-22T10:44:27.672Z"
+    },
+    {
+      "name": "7. Create private reservation to provision guest site user",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:27.672Z",
+      "details": {
+        "reservationId": 1
+      },
+      "message": "Private reservation created and guest site user provisioning path executed.",
+      "finishedAt": "2026-07-22T10:44:29.823Z"
+    },
+    {
+      "name": "8. Request guest password setup email and capture reset link",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:29.823Z",
+      "details": {
+        "to": "guest1@alphainbound.automaticpeople.com",
+        "subject": "Enter or reset your AutomaticPeople password"
+      },
+      "message": "Guest reset email captured.",
+      "finishedAt": "2026-07-22T10:44:35.584Z"
+    },
+    {
+      "name": "9. Set guest password and verify guest login",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:35.584Z",
+      "details": {
+        "activeRole": "Guest"
+      },
+      "message": "Guest login successful with guest-scoped role.",
+      "finishedAt": "2026-07-22T10:44:38.994Z"
+    },
+    {
+      "name": "10. Verify guest dashboard reservations endpoint",
+      "status": "pass",
+      "startedAt": "2026-07-22T10:44:38.994Z",
+      "details": {
+        "reservations": 0,
+        "facilityReservations": 0
+      },
+      "message": "Guest dashboard data is accessible and populated.",
+      "finishedAt": "2026-07-22T10:44:39.200Z"
+    }
+  ]
+}

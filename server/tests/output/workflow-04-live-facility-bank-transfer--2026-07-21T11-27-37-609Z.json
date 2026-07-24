@@ -1,0 +1,128 @@
+{
+  "meta": {
+    "id": "workflow-04-live-facility-bank-transfer",
+    "title": "Workflow 04 - Live facility reservation (bank transfer)",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-21T11:25:02.120Z",
+  "finishedAt": "2026-07-21T11:27:37.610Z",
+  "summary": {
+    "success": true,
+    "passCount": 9,
+    "failCount": 0,
+    "skipCount": 1,
+    "pendingCount": 0,
+    "totalSteps": 10
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:02.122Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-21T11:25:06.593Z"
+    },
+    {
+      "name": "2. Prepare inbound mail listeners",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:06.593Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "parker1@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners ready.",
+      "finishedAt": "2026-07-21T11:25:07.191Z"
+    },
+    {
+      "name": "3. Create and validate client account",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:07.191Z",
+      "details": {
+        "email": "client1@alphainbound.automaticpeople.com"
+      },
+      "message": "Client account created, validated, and logged in.",
+      "finishedAt": "2026-07-21T11:25:15.962Z"
+    },
+    {
+      "name": "4. Create Parking1 facility with bank+online payment options",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:15.963Z",
+      "details": {
+        "resourceId": 1
+      },
+      "message": "Parking1 created.",
+      "finishedAt": "2026-07-21T11:25:16.410Z"
+    },
+    {
+      "name": "5. Create future facility reservation using bank transfer",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:16.410Z",
+      "details": {
+        "reservationId": 1,
+        "status": "awaiting bank transfer"
+      },
+      "message": "Bank-transfer reservation created.",
+      "finishedAt": "2026-07-21T11:25:18.675Z"
+    },
+    {
+      "name": "6. Set parker1 password from invite email and log in",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:18.675Z",
+      "details": {
+        "email": "parker1@alphainbound.automaticpeople.com"
+      },
+      "message": "Guest setup and login succeeded.",
+      "finishedAt": "2026-07-21T11:25:27.133Z"
+    },
+    {
+      "name": "7. Confirm parker1 sees facility reservation awaiting payment",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:27.133Z",
+      "details": {
+        "reservationId": 1,
+        "status": "awaiting bank transfer"
+      },
+      "message": "Guest facility reservation visible and awaiting payment.",
+      "finishedAt": "2026-07-21T11:25:27.338Z"
+    },
+    {
+      "name": "8. Confirm client sees reservation awaiting payment",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:27.339Z",
+      "details": {
+        "reservationId": 1,
+        "status": "awaiting bank transfer"
+      },
+      "message": "Client reservation visible and awaiting payment.",
+      "finishedAt": "2026-07-21T11:25:27.616Z"
+    },
+    {
+      "name": "9. Guest confirms transfer and client notification email is sent",
+      "status": "pass",
+      "startedAt": "2026-07-21T11:25:27.616Z",
+      "details": null,
+      "message": "Guest transfer notification sent and host email verified.",
+      "finishedAt": "2026-07-21T11:25:32.792Z"
+    },
+    {
+      "name": "10. Client confirms payment, guest sees confirmed, and receipt email is sent",
+      "status": "skip",
+      "startedAt": "2026-07-21T11:25:32.792Z",
+      "details": null,
+      "message": "Guest payment receipt email was not observed in this environment after host confirmation.",
+      "finishedAt": "2026-07-21T11:27:37.607Z"
+    }
+  ]
+}

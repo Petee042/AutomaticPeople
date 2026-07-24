@@ -11,7 +11,7 @@ const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
 const { AsyncLocalStorage } = require('async_hooks');
-const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
+const { randomUUID, randomBytes, createHmac, timingSafeEqual } = require('crypto');
 const { Pool } = require('pg');
 const { registerWorkflow2PrivateReservationRoutes } = require('./routes/workflow2.private.routes');
 const { registerWorkflow3FacilityBookingRoutes } = require('./routes/workflow3.facility-booking.routes');
@@ -35,6 +35,8 @@ const POSTMARK_SERVER_TOKEN = String(process.env.POSTMARK_SERVER_TOKEN || '').tr
 const POSTMARK_FROM = String(process.env.POSTMARK_FROM || 'noreply@automaticpeople.com').trim();
 const POSTMARK_MESSAGE_STREAM = String(process.env.POSTMARK_MESSAGE_STREAM || 'outbound').trim();
 const INBOUND_MAIL = String(process.env.INBOUND_MAIL || '').trim().toLowerCase();
+const NODE_ENV_NAME = String(process.env.NODE_ENV || '').trim().toLowerCase();
+const IS_ALPHA = NODE_ENV_NAME === 'development';
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_BANK_DETAILS || '').trim().toLowerCase());
 const DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE = ['1', 'true', 'yes', 'on'].includes(String(process.env.DEBUG_SUPPRESS_PAYMENT_EMAIL_TITLE || '').trim().toLowerCase());
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || '').trim();
@@ -42,15 +44,14 @@ const STRIPE_PUBLISHABLE_KEY = String(process.env.STRIPE_PUBLISHABLE_KEY || '').
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
 const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
-const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY);
+const TURNSTILE_ENABLED = Boolean(TURNSTILE_SITE_KEY && TURNSTILE_SECRET_KEY) && !IS_ALPHA;
 const STRIPE_CONNECT_DEFAULT_COUNTRY = String(process.env.STRIPE_CONNECT_DEFAULT_COUNTRY || 'GB').trim().toUpperCase();
 const TRUST_PROXY_ENABLED = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase())
   || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_SERVICE_ID)
-  || String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+  || NODE_ENV_NAME === 'production';
 const ENABLE_LEGACY_FEED_CRON = ['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_LEGACY_FEED_CRON || '').trim().toLowerCase());
 const CALENDAR_CRON_DB_LOCK_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CALENDAR_CRON_DB_LOCK_ENABLED || 'true').trim().toLowerCase());
 const DATA_RESET_FLAG_KEY = 'minimal-profile-reset-v1';
-const IS_ALPHA = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'development';
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim();
 const ACCOUNT_VALIDATION_TOKEN_VERSION = 'v1';
 const ACCOUNT_VALIDATION_TOKEN_TTL_MS = Number(process.env.ACCOUNT_VALIDATION_TOKEN_TTL_MS || (1000 * 60 * 60 * 24 * 7));
@@ -62,6 +63,9 @@ const LANDING_PAGE_WORKFLOW_4 = 'workflow4_reservation_enquiry_public';
 const LANDING_PAGE_WORKFLOW_5 = 'workflow5_facility_enquiry_public';
 const stripeClient = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 const requestContextStore = new AsyncLocalStorage();
+const SITE_USER_ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+const SITE_USER_ID_CORE_LENGTH = 12;
+const SITE_USER_ID_CHECK_LENGTH = 2;
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is required. Legacy local JSON storage mode has been removed.');
@@ -494,6 +498,18 @@ async function initializeUserStore() {
   await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS dashboard_highlight_empty_nights_days INTEGER NOT NULL DEFAULT 7
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS site_user_code TEXT
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_site_user_code_unique
+    ON users (site_user_code)
+    WHERE site_user_code IS NOT NULL
+      AND site_user_code <> ''
   `);
 
   await pool.query(`
@@ -1462,11 +1478,6 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
-    ALTER TABLE client_accounts
-    ADD COLUMN IF NOT EXISTS bank_bic TEXT NOT NULL DEFAULT ''
-  `);
-
-  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_cleaners_cleaner_user_id
     ON cleaners (cleaner_user_id)
   `);
@@ -1831,6 +1842,8 @@ async function initializeUserStore() {
         updated_at = CURRENT_TIMESTAMP
   `);
 
+  await ensureAllUsersHaveSiteUserCodes();
+
   if (IS_ALPHA) {
     await runOneTimeSiteDataResetIfNeeded();
   }
@@ -1855,20 +1868,22 @@ async function createUser(username, email, passwordHash, profile = {}) {
   const familyName = String(profile.familyName || '').trim();
   const countryOfResidence = normaliseCountryOfResidence(profile.country) || '';
   const isValidated = profile.isValidated === true;
+  const siteUserCode = await generateUniqueSiteUserCode();
 
   
 
   const result = await pool.query(
     `
-      INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated, site_user_code)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id, username, email, password_hash,
                 first_name, family_name, country_of_residence, is_validated,
+                site_user_code,
                 stripe_account_id, stripe_onboarding_complete,
                 stripe_charges_enabled, stripe_payouts_enabled,
                 created_at
     `,
-    [username, email, passwordHash, firstName, familyName, countryOfResidence, isValidated]
+    [username, email, passwordHash, firstName, familyName, countryOfResidence, isValidated, siteUserCode]
   );
 
   await ensureDefaultPropertyForUser(result.rows[0].id);
@@ -1882,6 +1897,146 @@ function normaliseCountryOfResidence(value) {
     return null;
   }
   return country.slice(0, 120);
+}
+
+function normaliseSiteUserCode(value) {
+  const text = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return text || null;
+}
+
+function computeSiteUserCodeCheck(corePart) {
+  const core = normaliseSiteUserCode(corePart) || '';
+  const digest = createHmac('sha256', SESSION_SECRET)
+    .update('site-user-code:' + core)
+    .digest();
+  let out = '';
+  for (let idx = 0; idx < SITE_USER_ID_CHECK_LENGTH; idx += 1) {
+    out += SITE_USER_ID_ALPHABET[digest[idx] & 31];
+  }
+  return out;
+}
+
+function formatSiteUserCode(rawValue) {
+  const normalized = normaliseSiteUserCode(rawValue) || '';
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.length <= 4) {
+    return normalized;
+  }
+  if (normalized.length <= 8) {
+    return normalized.slice(0, 4) + '-' + normalized.slice(4);
+  }
+  if (normalized.length <= 12) {
+    return normalized.slice(0, 4) + '-' + normalized.slice(4, 8) + '-' + normalized.slice(8);
+  }
+  return normalized.slice(0, 4)
+    + '-' + normalized.slice(4, 8)
+    + '-' + normalized.slice(8, 12)
+    + '-' + normalized.slice(12);
+}
+
+function generateSiteUserCodeCandidate() {
+  let core = '';
+  while (core.length < SITE_USER_ID_CORE_LENGTH) {
+    const chunk = randomBytes(16);
+    for (const byte of chunk) {
+      core += SITE_USER_ID_ALPHABET[byte & 31];
+      if (core.length >= SITE_USER_ID_CORE_LENGTH) {
+        break;
+      }
+    }
+  }
+  const check = computeSiteUserCodeCheck(core);
+  return formatSiteUserCode(core + check);
+}
+
+async function generateUniqueSiteUserCode() {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = generateSiteUserCodeCandidate();
+    const exists = await pool.query(
+      'SELECT id FROM users WHERE site_user_code = $1 LIMIT 1',
+      [candidate]
+    );
+    if (!exists.rows[0]) {
+      return candidate;
+    }
+  }
+  throw new Error('Failed to generate unique site user code.');
+}
+
+async function assignSiteUserCodeToUser(userId) {
+  const id = Number(userId || 0);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+
+  const existing = await pool.query(
+    'SELECT site_user_code FROM users WHERE id = $1 LIMIT 1',
+    [id]
+  );
+  const currentCode = existing.rows[0] ? String(existing.rows[0].site_user_code || '').trim() : '';
+  if (currentCode) {
+    return currentCode;
+  }
+
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = await generateUniqueSiteUserCode();
+    try {
+      const updated = await pool.query(
+        `
+          UPDATE users
+          SET site_user_code = $1
+          WHERE id = $2
+            AND COALESCE(TRIM(site_user_code), '') = ''
+          RETURNING site_user_code
+        `,
+        [candidate, id]
+      );
+
+      if (updated.rows[0] && updated.rows[0].site_user_code) {
+        return String(updated.rows[0].site_user_code);
+      }
+
+      const verify = await pool.query(
+        'SELECT site_user_code FROM users WHERE id = $1 LIMIT 1',
+        [id]
+      );
+      const value = verify.rows[0] ? String(verify.rows[0].site_user_code || '').trim() : '';
+      if (value) {
+        return value;
+      }
+    } catch (err) {
+      if (String(err && err.code || '') !== '23505') {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error('Failed to assign site user code.');
+}
+
+async function ensureAllUsersHaveSiteUserCodes() {
+  while (true) {
+    const result = await pool.query(
+      `
+        SELECT id
+        FROM users
+        WHERE COALESCE(TRIM(site_user_code), '') = ''
+        ORDER BY id ASC
+        LIMIT 200
+      `
+    );
+
+    const pendingRows = Array.isArray(result.rows) ? result.rows : [];
+    if (!pendingRows.length) {
+      break;
+    }
+
+    for (const row of pendingRows) {
+      await assignSiteUserCodeToUser(row.id);
+    }
+  }
 }
 
 function validateStrongPassword(password) {
@@ -2926,10 +3081,6 @@ function toMinorUnits(amount) {
 
 function normaliseBankIban(value) {
   return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 34);
-}
-
-function normaliseBankBic(value) {
-  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').slice(0, 11);
 }
 
 function isOnlinePaymentAvailableForHostUser(hostUser) {
@@ -4313,6 +4464,7 @@ async function getUserById(userId) {
         SELECT id, username, email, password_hash,
           first_name, family_name, country_of_residence, telephone, is_validated,
              postal_address,
+             site_user_code,
              stripe_account_id, stripe_onboarding_complete,
              stripe_charges_enabled, stripe_payouts_enabled,
              dashboard_activity_outlook_days,
@@ -4646,12 +4798,18 @@ async function createUnvalidatedSiteUserForInvite(input) {
     `
       INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
-      RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, created_at
+      RETURNING id, username, email, first_name, family_name, country_of_residence, is_validated, site_user_code, created_at
     `,
     [username, email, '', firstName, familyName, country]
   );
 
-  const createdUser = result.rows[0] || null;
+  let createdUser = result.rows[0] || null;
+  const createdId = Number(createdUser && createdUser.id || 0);
+  if (Number.isInteger(createdId) && createdId > 0) {
+    await assignSiteUserCodeToUser(createdId);
+    createdUser = await getUserById(createdId);
+  }
+
   if (createdUser && Number.isInteger(Number(createdUser.id)) && Number(createdUser.id) > 0) {
     await writeUserEventLog({
       actorUserId: Number(input && input.invitedByUserId || 0),
@@ -5105,7 +5263,7 @@ async function replaceManagerAssignments(clientAccountId, managerMembershipId, p
 }
 
 async function getGuestsForClientAccount(clientAccountId) {
-  
+  await syncGuestRelationshipsForClientAccount(clientAccountId);
 
   const result = await pool.query(
     `
@@ -5130,6 +5288,126 @@ async function getGuestsForClientAccount(clientAccountId) {
   );
 
   return result.rows;
+}
+
+async function syncGuestRelationshipsForClientAccount(clientAccountIdInput) {
+  const clientAccountId = Number(clientAccountIdInput || 0);
+  if (!Number.isInteger(clientAccountId) || clientAccountId <= 0) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO guest_relationships (
+        client_account_id,
+        guest_email,
+        guest_phone,
+        guest_first_name,
+        guest_family_name,
+        source_type,
+        source_id,
+        first_seen_at,
+        last_seen_at
+      )
+      SELECT
+        ra.client_account_id,
+        LOWER(TRIM(ra.email_address)) AS guest_email,
+        '' AS guest_phone,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(ra.first_name, '')), '')), '') AS guest_first_name,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(ra.family_name, '')), '')), '') AS guest_family_name,
+        'private_reservation' AS source_type,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(ra.reservation_identifier, '')), '')), MAX(ra.id)::text) AS source_id,
+        MIN(ra.created_at) AS first_seen_at,
+        MAX(COALESCE(ra.updated_at, ra.created_at)) AS last_seen_at
+      FROM reservation_activity ra
+      WHERE ra.client_account_id = $1
+        AND NULLIF(TRIM(ra.email_address), '') IS NOT NULL
+      GROUP BY ra.client_account_id, LOWER(TRIM(ra.email_address))
+      ON CONFLICT (client_account_id, guest_email, guest_phone)
+      DO UPDATE
+      SET guest_first_name = COALESCE(NULLIF(EXCLUDED.guest_first_name, ''), guest_relationships.guest_first_name),
+          guest_family_name = COALESCE(NULLIF(EXCLUDED.guest_family_name, ''), guest_relationships.guest_family_name),
+          source_type = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_type, '')), '') IS NULL
+              THEN EXCLUDED.source_type
+            ELSE guest_relationships.source_type
+          END,
+          source_id = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_id, '')), '') IS NULL
+              THEN EXCLUDED.source_id
+            ELSE guest_relationships.source_id
+          END,
+          first_seen_at = LEAST(guest_relationships.first_seen_at, EXCLUDED.first_seen_at),
+          last_seen_at = GREATEST(guest_relationships.last_seen_at, EXCLUDED.last_seen_at),
+          updated_at = CURRENT_TIMESTAMP
+    `,
+    [clientAccountId]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO guest_relationships (
+        client_account_id,
+        guest_email,
+        guest_phone,
+        guest_first_name,
+        guest_family_name,
+        source_type,
+        source_id,
+        first_seen_at,
+        last_seen_at
+      )
+      SELECT
+        rr.client_account_id,
+        LOWER(TRIM(rr.email_address)) AS guest_email,
+        TRIM(COALESCE(rr.telephone, '')) AS guest_phone,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(rr.first_name, '')), '')), '') AS guest_first_name,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(rr.family_name, '')), '')), '') AS guest_family_name,
+        'shared_resource_reservation' AS source_type,
+        COALESCE(MAX(NULLIF(TRIM(COALESCE(rr.reservation_identifier, '')), '')), MAX(rr.id)::text) AS source_id,
+        MIN(rr.created_at) AS first_seen_at,
+        MAX(COALESCE(rr.updated_at, rr.created_at)) AS last_seen_at
+      FROM shared_resource_reservations rr
+      WHERE rr.client_account_id = $1
+        AND NULLIF(TRIM(rr.email_address), '') IS NOT NULL
+      GROUP BY rr.client_account_id, LOWER(TRIM(rr.email_address)), TRIM(COALESCE(rr.telephone, ''))
+      ON CONFLICT (client_account_id, guest_email, guest_phone)
+      DO UPDATE
+      SET guest_first_name = COALESCE(NULLIF(EXCLUDED.guest_first_name, ''), guest_relationships.guest_first_name),
+          guest_family_name = COALESCE(NULLIF(EXCLUDED.guest_family_name, ''), guest_relationships.guest_family_name),
+          source_type = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_type, '')), '') IS NULL
+              THEN EXCLUDED.source_type
+            ELSE guest_relationships.source_type
+          END,
+          source_id = CASE
+            WHEN NULLIF(TRIM(COALESCE(guest_relationships.source_id, '')), '') IS NULL
+              THEN EXCLUDED.source_id
+            ELSE guest_relationships.source_id
+          END,
+          first_seen_at = LEAST(guest_relationships.first_seen_at, EXCLUDED.first_seen_at),
+          last_seen_at = GREATEST(guest_relationships.last_seen_at, EXCLUDED.last_seen_at),
+          updated_at = CURRENT_TIMESTAMP
+    `,
+    [clientAccountId]
+  );
+
+  await pool.query(
+    `
+      UPDATE guest_relationships gr
+      SET guest_user_id = u.id,
+          updated_at = CURRENT_TIMESTAMP
+      FROM users u
+      JOIN client_memberships cm
+        ON cm.user_id = u.id
+       AND cm.role = 'Guest'
+      WHERE gr.client_account_id = $1
+        AND cm.client_account_id = gr.client_account_id
+        AND gr.guest_user_id IS NULL
+        AND LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(COALESCE(gr.guest_email, '')))
+    `,
+    [clientAccountId]
+  );
 }
 
 async function ensureGuestSiteUserForClientAccount(input) {
@@ -5157,12 +5435,17 @@ async function ensureGuestSiteUserForClientAccount(input) {
       `
         INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
         VALUES ($1, $2, $3, $4, $5, '', FALSE)
-        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, site_user_code, created_at
       `,
       [username, email, temporaryPasswordHash, firstName, familyName]
     );
     user = created.rows[0] || null;
     spawnedNewUser = true;
+
+    if (user && Number.isInteger(Number(user.id)) && Number(user.id) > 0) {
+      await assignSiteUserCodeToUser(Number(user.id));
+      user = await getUserById(Number(user.id));
+    }
   }
 
   if (!user || !Number.isInteger(Number(user.id)) || Number(user.id) <= 0) {
@@ -7633,6 +7916,7 @@ async function getAllSiteUsersWithMemberships() {
     `
       SELECT u.id,
              u.email,
+              u.site_user_code,
              u.first_name,
              u.family_name,
              u.country_of_residence,
@@ -7656,7 +7940,7 @@ async function getAllSiteUsersWithMemberships() {
        AND cm.status IN ('active', 'invited')
       LEFT JOIN client_accounts ca
         ON ca.id = cm.client_account_id
-      GROUP BY u.id, u.email, u.first_name, u.family_name, u.country_of_residence, u.is_validated, u.created_at
+      GROUP BY u.id, u.email, u.site_user_code, u.first_name, u.family_name, u.country_of_residence, u.is_validated, u.created_at
       ORDER BY u.email ASC
     `
   );
@@ -8019,11 +8303,16 @@ async function ensureDeletedSiteUserForClientAccount(clientAccountId) {
       `
         INSERT INTO users (username, email, password_hash, first_name, family_name, country_of_residence, is_validated)
         VALUES ($1, $2, $3, 'Deleted', $4, '', TRUE)
-        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, created_at
+        RETURNING id, username, email, password_hash, first_name, family_name, country_of_residence, is_validated, site_user_code, created_at
       `,
       [username, email, passwordHash, familyName]
     );
     deletedUser = created.rows[0] || null;
+
+    if (deletedUser && Number.isInteger(Number(deletedUser.id)) && Number(deletedUser.id) > 0) {
+      await assignSiteUserCodeToUser(Number(deletedUser.id));
+      deletedUser = await getUserById(Number(deletedUser.id));
+    }
   } else {
     await pool.query(
       `
@@ -9636,6 +9925,11 @@ function isAirbnbNotAvailableSummary(summary) {
   return /\bnot\s+available\b/i.test(text);
 }
 
+function isCancelledIcsImportEvent(rawEvent) {
+  const status = String(rawEvent && rawEvent.raw && rawEvent.raw.STATUS || '').trim().toLowerCase();
+  return status === 'cancelled' || status === 'canceled';
+}
+
 // ── Persistent event cache ───────────────────────────────────────────────────
 
 async function getAllListingsWithFeeds() {
@@ -9739,6 +10033,7 @@ async function refreshEventsForListing(listingId) {
         // Drop Airbnb "Not Available" feed entries from legacy cache path as well.
         // Remove when/if Airbnb feed semantics change and these should be retained.
         .filter((event) => !shouldDiscardAirbnbNotAvailableImportEvent(event, { label: feed.label }))
+        .filter((event) => !isCancelledIcsImportEvent(event))
         .map((event) => {
         const metadata = parseIcsMetadataFromDescription(event.description);
         const metadataType = String(metadata.type || '').trim().toLowerCase();
@@ -10281,10 +10576,12 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
   await logIcsTransaction({ listingId, channelId, importingChannelLabel: channel.label, exportingChannelLabel: exportingLabel, importUrl, status: 'success', eventCount: fetched.events.length, rawPayload: fetched.rawText || '', errorText: null });
 
   const now = new Date().toISOString();
+  const touchedRemoteEventIds = new Set();
 
   for (const rawEvent of fetched.events) {
     const processedEvent = applyImportRulesForEvent(rawEvent, channel, listing);
     if (!processedEvent) continue;
+    if (isCancelledIcsImportEvent(rawEvent)) continue;
 
     const importStart = getDateKeyFromEventDateTime(processedEvent.start);
     const importEnd = getDateKeyFromEventDateTime(processedEvent.end);
@@ -10334,6 +10631,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         'UPDATE listing_calendar_events SET last_synced_at = $1, is_in_conflict = $2 WHERE id = $3',
         [now, exactIsConflict, exactMatch.id]
       );
+      touchedRemoteEventIds.add(Number(exactMatch.id));
 
       await logCalendarSyncImportEvent({
         listing,
@@ -10402,6 +10700,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         'UPDATE listing_calendar_events SET is_in_conflict = $1 WHERE id = $2',
         [reconciledIsConflict, existing.id]
       );
+      touchedRemoteEventIds.add(Number(existing.id));
 
       // Remove stale changeover record — dates have changed, revert to unallocated
       await pool.query(
@@ -10482,6 +10781,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
        String(processedEvent.title || '').trim(), now, isConflict]
     );
     const newEventId = Number(newEventResult.rows[0].id);
+    touchedRemoteEventIds.add(newEventId);
 
     if (isConflict) {
       const conflictEventIds = [
@@ -10556,6 +10856,51 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         }
       });
     }
+  }
+
+  // Successful fetch means this channel snapshot is authoritative.
+  // Remove stale remote rows for this listing/channel that were not touched this cycle.
+  const existingRemoteRows = await pool.query(
+    `SELECT id, start_date::text AS start_date, end_date::text AS end_date,
+            COALESCE(NULLIF(TRIM(ics_summary), ''), 'Reservation') AS summary
+     FROM listing_calendar_events
+     WHERE listing_id = $1 AND channel_id = $2 AND event_type = 'remote'`,
+    [listingId, channelId]
+  );
+
+  const staleRemoteIds = (existingRemoteRows.rows || [])
+    .map((row) => Number(row && row.id || 0))
+    .filter((id) => Number.isInteger(id) && id > 0 && !touchedRemoteEventIds.has(id));
+
+  if (staleRemoteIds.length) {
+    const stalePreview = (existingRemoteRows.rows || [])
+      .filter((row) => staleRemoteIds.includes(Number(row && row.id || 0)))
+      .slice(0, 20)
+      .map((row) => ({
+        id: Number(row.id),
+        start: String(row.start_date || '').slice(0, 10),
+        end: String(row.end_date || '').slice(0, 10),
+        summary: String(row.summary || '')
+      }));
+
+    await pool.query(
+      'DELETE FROM listing_calendar_events WHERE id = ANY($1::bigint[])',
+      [staleRemoteIds]
+    );
+
+    await logCalendarSyncImportEvent({
+      listing,
+      clientAccountId,
+      importingChannelLabel: channel.label,
+      exportingChannelLabel: exportingLabel,
+      importUrl,
+      status: 'success',
+      processingOutcome: 'stale_remote_events_pruned',
+      importedEvent: {
+        staleDeletedCount: staleRemoteIds.length,
+        staleDeletedPreview: stalePreview
+      }
+    });
   }
 }
 
@@ -12628,6 +12973,7 @@ app.get('/api/me', requireAuth, async (req, res) => {
       firstName: user.first_name || '',
       familyName: user.family_name || '',
       email: user.email || req.session.email,
+      siteUserId: user.site_user_code || '',
       telephone: user.telephone || '',
       postalAddress: user.postal_address || '',
       dashboardActivityOutlookDays: Number(user.dashboard_activity_outlook_days || 7) || 7,
@@ -13230,6 +13576,31 @@ app.post('/api/guest/dashboard/facility-reservations/:reservationId/sync-payment
         paidAt: new Date().toISOString(),
         status: 'Confirmed'
       });
+
+      const ownerUser = await getUserById(Number(reservation.host_user_id || 0));
+      const ownerEmail = normaliseOptionalEmail(ownerUser && ownerUser.email);
+      if (ownerEmail) {
+        const notifyOwnerResult = await sendAppEmail({
+          to: ownerEmail,
+          subject: 'Guest Online Payment Notification',
+          textBody: [
+            'A guest online payment has been completed for a facility reservation.',
+            '',
+            'Reservation ID: ' + String(reservation.reservation_identifier || ''),
+            'Guest: ' + String(reservation.first_name || '') + ' ' + String(reservation.family_name || ''),
+            'Guest email: ' + String(reservation.email_address || ''),
+            'Facility: ' + String(reservation.resource_name || ''),
+            'Start: ' + formatDateTimeForMessage(reservation.requested_start_at),
+            'End: ' + formatDateTimeForMessage(reservation.requested_end_at),
+            'Reservation amount: ' + String(Number(reservation.reservation_amount || 0).toFixed(2)),
+            'Confirmed at: ' + formatDateTimeForMessage(new Date().toISOString())
+          ].join('\n')
+        });
+
+        if (!notifyOwnerResult.ok) {
+          console.warn('Failed to send host online-payment notification email.', notifyOwnerResult.error || 'unknown email error');
+        }
+      }
     } else if (paymentStatus === 'requires_payment_method' || paymentStatus === 'requires_action' || paymentStatus === 'processing') {
       await updateSharedResourceReservationPaymentById(reservation.id, {
         ...commonUpdate,
@@ -13395,7 +13766,7 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
     }
 
     const result = await pool.query(
-      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+      'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban FROM client_accounts WHERE id = $1 LIMIT 1',
       [clientAccountId]
     );
     if (!result.rows[0]) {
@@ -13408,8 +13779,7 @@ app.get('/api/account/bank-details', requireScopedRole('Client'), async (req, re
       sortCode: row.bank_sort_code || '',
       accountNumber: row.bank_account_number || '',
       isBusiness: row.bank_is_business === true,
-      iban: row.bank_iban || '',
-      bic: row.bank_bic || ''
+      iban: row.bank_iban || ''
     });
   } catch (err) {
     console.error('[BankDetails] Error loading bank details:', err);
@@ -13461,7 +13831,6 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   const sortCode = sanitizeHtml(String(req.body.sortCode || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
   const accountNumber = sanitizeHtml(String(req.body.accountNumber || '').trim(), { allowedTags: [], allowedAttributes: {} }).slice(0, 20);
   const iban = normaliseBankIban(sanitizeHtml(String(req.body.iban || '').trim(), { allowedTags: [], allowedAttributes: {} }));
-  const bic = normaliseBankBic(sanitizeHtml(String(req.body.bic || '').trim(), { allowedTags: [], allowedAttributes: {} }));
   const isBusiness = req.body.isBusiness === true || req.body.isBusiness === 'true';
 
   if (!accountName || !sortCode || !accountNumber) {
@@ -13469,9 +13838,6 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
   }
   if (!iban) {
     return res.status(400).json({ error: 'IBAN is required.' });
-  }
-  if (!bic) {
-    return res.status(400).json({ error: 'BIC is required.' });
   }
 
   try {
@@ -13488,10 +13854,9 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
            bank_account_number = $3,
            bank_is_business = $4,
            bank_iban = $5,
-           bank_bic = $6,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7`,
-      [accountName, sortCode, accountNumber, isBusiness, iban, bic, clientAccountId]
+       WHERE id = $6`,
+      [accountName, sortCode, accountNumber, isBusiness, iban, clientAccountId]
     );
 
     if (result.rowCount === 0) {
@@ -13500,7 +13865,7 @@ app.put('/api/account/bank-details', requireScopedRole('Client'), async (req, re
     }
 
     console.log('[BankDetails] Bank details updated successfully for clientAccountId:', clientAccountId);
-    return res.json({ accountName, sortCode, accountNumber, isBusiness, iban, bic });
+    return res.json({ accountName, sortCode, accountNumber, isBusiness, iban });
   } catch (err) {
     console.error('[BankDetails] Error saving bank details:', err);
     return res.status(500).json({ error: 'Failed to save bank details.' });
@@ -14331,7 +14696,9 @@ registerWorkflow3FacilityBookingRoutes(app, {
   deleteSharedResourceReservationForUser,
   deleteSharedResourceForUser,
   getReservationGuestOptionsForClientAccount,
-  writeUserEventLog
+  writeUserEventLog,
+  sendAppEmail,
+  formatDateTimeForMessage
 });
 
 
@@ -14849,7 +15216,7 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
 
       if (paymentOption === 'bank_transfer') {
         const bankResult = await pool.query(
-          'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+          'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban FROM client_accounts WHERE id = $1 LIMIT 1',
           [Number(resource.client_account_id || 0)]
         );
         const bankRow = bankResult.rows[0] || {};
@@ -14857,10 +15224,9 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         const bankSortCode = String(bankRow.bank_sort_code || '').trim();
         const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
         const bankIban = String(bankRow.bank_iban || '').trim();
-        const bankBic = String(bankRow.bank_bic || '').trim();
         const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
 
-        if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban || !bankBic) {
+        if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban) {
           return res.status(400).json({ error: 'Host bank transfer details are incomplete. Please contact the host.' });
         }
 
@@ -14870,7 +15236,6 @@ app.post('/api/public/shared-resources/:resourceId/reservations', async (req, re
         lines.push('Sort code: ' + bankSortCode);
         lines.push('Account number: ' + bankAccountNumber);
         lines.push('IBAN: ' + bankIban);
-        lines.push('BIC: ' + bankBic);
         lines.push('Account type: ' + bankType);
 
         if (guestLoginUrl) {
@@ -15291,7 +15656,53 @@ app.post('/api/access/guests', requireScopedRole('Manager'), async (req, res) =>
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
-    return res.status(201).json(result);
+
+    const guest = result && result.guest ? result.guest : null;
+    const guestEmail = normaliseOptionalEmail(guest && guest.guest_email);
+    let guestSiteUser = null;
+    let setupEmailSent = false;
+    let setupEmailError = '';
+    let setupResetUrl = '';
+    let setupResetToken = '';
+
+    if (guestEmail) {
+      guestSiteUser = await ensureGuestSiteUserForClientAccount({
+        clientAccountId: req.accessContext.activeClientAccountId,
+        ownerUserId: req.accessContext.effectiveOwnerUserId,
+        firstName: String(guest && guest.guest_first_name || '').trim(),
+        familyName: String(guest && guest.guest_family_name || '').trim(),
+        email: guestEmail,
+        sourceType: 'manual',
+        sourceId: String(guest && guest.id || '')
+      });
+
+      let passwordSetupUser = null;
+      if (guestSiteUser && guestSiteUser.email) {
+        passwordSetupUser = guestSiteUser;
+      }
+      if (!passwordSetupUser || !passwordSetupUser.email) {
+        passwordSetupUser = await findUserByEmail(guestEmail);
+      }
+
+      if (passwordSetupUser) {
+        setupResetToken = buildPasswordResetToken(passwordSetupUser) || '';
+        setupResetUrl = buildPasswordResetUrl(req, passwordSetupUser);
+        const setupResult = await sendPasswordResetEmail(req, passwordSetupUser);
+        setupEmailSent = setupResult.ok === true;
+        if (!setupResult.ok) {
+          setupEmailError = String(setupResult.error || '').trim();
+        }
+      }
+    }
+
+    return res.status(201).json({
+      guest,
+      guestSiteUserId: Number(guestSiteUser && guestSiteUser.id || 0) || null,
+      setupEmailSent,
+      setupEmailError,
+      setupResetUrl,
+      setupResetToken
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to create guest relationship.' });
@@ -16501,6 +16912,7 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
     }
 
     await refreshEventsForListing(listingId);
+    await refreshListingCalendar(listing, req.accessContext.activeClientAccountId);
 
     const cached = await getCachedEventsForListing(listingId);
 

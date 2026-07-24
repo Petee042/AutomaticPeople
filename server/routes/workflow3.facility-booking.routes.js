@@ -28,7 +28,9 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
     deleteSharedResourceReservationForUser,
     deleteSharedResourceForUser,
     getReservationGuestOptionsForClientAccount,
-    writeUserEventLog
+    writeUserEventLog,
+    sendAppEmail,
+    formatDateTimeForMessage
   } = deps;
 
   app.get('/api/shared-resources/all-reservations', requireScopedRole('Staff'), async (req, res) => {
@@ -283,6 +285,40 @@ function registerWorkflow3FacilityBookingRoutes(app, deps) {
             nextStatus: String(result && result.reservation && result.reservation.status || '')
           }
         });
+
+        const paidReservation = await getSharedResourceReservationByIdForUser(
+          reservationId,
+          resourceId,
+          req.accessContext.effectiveOwnerUserId
+        );
+        const guestEmail = String(paidReservation && paidReservation.email_address || '').trim().toLowerCase();
+        if (guestEmail) {
+          const guestName = [
+            String(paidReservation && paidReservation.first_name || '').trim(),
+            String(paidReservation && paidReservation.family_name || '').trim()
+          ].filter(Boolean).join(' ').trim() || 'Guest';
+
+          const receiptEmailResult = await sendAppEmail({
+            to: guestEmail,
+            subject: 'Facility Reservation Payment Received',
+            textBody: [
+              'Facility Reservation Payment Received',
+              '',
+              'Reservation ID: ' + String(paidReservation && paidReservation.reservation_identifier || ''),
+              'Guest: ' + guestName,
+              'Facility: ' + String(resource && resource.short_description || ''),
+              'Start: ' + formatDateTimeForMessage(String(paidReservation && paidReservation.requested_start_at || '')),
+              'End: ' + formatDateTimeForMessage(String(paidReservation && paidReservation.requested_end_at || '')),
+              'Status: ' + String(paidReservation && paidReservation.status || ''),
+              '',
+              'Your facility reservation payment has been received and confirmed.'
+            ].join('\n')
+          });
+
+          if (!receiptEmailResult.ok) {
+            console.warn('Failed to send facility payment receipt email to guest.', receiptEmailResult.error || 'unknown email error');
+          }
+        }
       }
 
       return res.json({ reservation: result.reservation });

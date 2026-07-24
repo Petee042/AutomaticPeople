@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "id": "workflow-03-live-guest-login-from-private-reservation",
+    "title": "Workflow 03 - Live guest login from private reservation provisioning",
+    "owner": "AutomaticPeople",
+    "destructive": true
+  },
+  "options": {
+    "dryRun": false,
+    "baseUrl": "https://alpha.automaticpeople.com",
+    "timeoutMs": 20000,
+    "keepArtifacts": true
+  },
+  "startedAt": "2026-07-21T08:18:37.289Z",
+  "finishedAt": "2026-07-21T08:19:03.793Z",
+  "summary": {
+    "success": true,
+    "passCount": 8,
+    "failCount": 0,
+    "skipCount": 0,
+    "pendingCount": 0,
+    "totalSteps": 8
+  },
+  "steps": [
+    {
+      "name": "1. Clean site user data via admin schema reset",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:18:37.292Z",
+      "details": {
+        "mode": "schema"
+      },
+      "message": "Schema reset completed.",
+      "finishedAt": "2026-07-21T08:18:41.345Z"
+    },
+    {
+      "name": "2. Prepare inbound mail listeners",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:18:41.345Z",
+      "details": {
+        "watch": [
+          "client1@alphainbound.automaticpeople.com",
+          "guest1@alphainbound.automaticpeople.com"
+        ]
+      },
+      "message": "Inbound listeners prepared.",
+      "finishedAt": "2026-07-21T08:18:41.724Z"
+    },
+    {
+      "name": "3. Create and validate client account",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:18:41.725Z",
+      "details": null,
+      "message": "Client account created, validated, and logged in.",
+      "finishedAt": "2026-07-21T08:18:51.497Z"
+    },
+    {
+      "name": "4. Create property and listing for private reservation",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:18:51.497Z",
+      "details": {
+        "propertyId": 2,
+        "listingId": 1
+      },
+      "message": "Property and listing created.",
+      "finishedAt": "2026-07-21T08:18:51.921Z"
+    },
+    {
+      "name": "5. Create private reservation to provision guest site user",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:18:51.921Z",
+      "details": {
+        "reservationId": 1
+      },
+      "message": "Private reservation created and guest site user provisioning path executed.",
+      "finishedAt": "2026-07-21T08:18:54.112Z"
+    },
+    {
+      "name": "6. Request guest password setup email and capture reset link",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:18:54.112Z",
+      "details": {
+        "to": "guest1@alphainbound.automaticpeople.com",
+        "subject": "Enter or reset your AutomaticPeople password"
+      },
+      "message": "Guest reset email captured.",
+      "finishedAt": "2026-07-21T08:19:00.287Z"
+    },
+    {
+      "name": "7. Set guest password and verify guest login",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:19:00.287Z",
+      "details": {
+        "activeRole": "Guest"
+      },
+      "message": "Guest login successful with guest-scoped role.",
+      "finishedAt": "2026-07-21T08:19:03.584Z"
+    },
+    {
+      "name": "8. Verify guest dashboard reservations endpoint",
+      "status": "pass",
+      "startedAt": "2026-07-21T08:19:03.584Z",
+      "details": {
+        "reservations": 0,
+        "facilityReservations": 0
+      },
+      "message": "Guest dashboard data is accessible and populated.",
+      "finishedAt": "2026-07-21T08:19:03.790Z"
+    }
+  ]
+}

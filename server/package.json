@@ -5,7 +5,19 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "test:auth-validation": "node auth-validation-regression-test.js"
+    "test:auth-validation": "node auth-validation-regression-test.js",
+    "test:workflow": "node tests/run-workflows.js",
+    "test:workflow:all": "node tests/run-workflows.js --all",
+    "test:workflow:precheck-existing-client": "node tests/run-workflows.js --only workflow-00-live-existing-client-precheck",
+    "test:workflow:auth": "node tests/run-workflows.js --only workflow-01-auth-smoke",
+    "test:workflow:live-onboarding": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest",
+    "test:workflow:live-onboarding:assist": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest --browser-assisted-turnstile",
+    "test:workflow:guest-login": "node tests/run-workflows.js --only workflow-03-live-guest-login-from-private-reservation",
+    "test:workflow:initial-set": "node tests/run-workflows.js --only workflow-02-live-onboarding-client-staff-guest && node tests/run-workflows.js --only workflow-03-live-guest-login-from-private-reservation",
+    "test:workflow:facility-bank-transfer": "node tests/run-workflows.js --only workflow-04-live-facility-bank-transfer",
+    "test:workflow:facility-online-payment": "node tests/run-workflows.js --only workflow-05-live-facility-online-payment",
+    "test:workflow:facility-set": "node tests/run-workflows.js --only workflow-04-live-facility-bank-transfer && node tests/run-workflows.js --only workflow-05-live-facility-online-payment",
+    "test:workflow:list": "node tests/run-workflows.js --list"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

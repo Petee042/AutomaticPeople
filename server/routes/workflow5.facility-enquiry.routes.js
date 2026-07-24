@@ -393,7 +393,7 @@ function registerWorkflow5FacilityEnquiryRoutes(app, deps) {
       });
 
       const bankResult = await pool.query(
-        'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban, bank_bic FROM client_accounts WHERE id = $1 LIMIT 1',
+        'SELECT bank_account_name, bank_sort_code, bank_account_number, bank_is_business, bank_iban FROM client_accounts WHERE id = $1 LIMIT 1',
         [Number(resource.client_account_id || 0)]
       );
       const bankRow = bankResult.rows[0] || {};
@@ -401,10 +401,9 @@ function registerWorkflow5FacilityEnquiryRoutes(app, deps) {
       const bankSortCode = String(bankRow.bank_sort_code || '').trim();
       const bankAccountNumber = String(bankRow.bank_account_number || '').trim();
       const bankIban = String(bankRow.bank_iban || '').trim();
-      const bankBic = String(bankRow.bank_bic || '').trim();
       const bankType = bankRow.bank_is_business === true ? 'Business' : 'Personal';
 
-      if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban || !bankBic) {
+      if (!bankAccountName || !bankSortCode || !bankAccountNumber || !bankIban) {
         return res.status(400).json({ error: 'Host bank transfer details are incomplete. Please contact the host.' });
       }
 
@@ -423,7 +422,6 @@ function registerWorkflow5FacilityEnquiryRoutes(app, deps) {
         'Sort code: ' + bankSortCode,
         'Account number: ' + bankAccountNumber,
         'IBAN: ' + bankIban,
-        'BIC: ' + bankBic,
         'Account type: ' + bankType
       ];
 

@@ -244,6 +244,15 @@
       <div id="panel-account" class="dashboard-tab-panel hidden" role="tabpanel">
 
         <section class="listing-form-section">
+          <h3>Site User ID</h3>
+          <div class="ics-export-row">
+            <input id="siteUserIdDisplay" type="text" class="ics-export-url" readonly aria-label="Site User ID" />
+            <button type="button" id="copySiteUserIdBtn" class="btn secondary ics-copy-btn">Copy</button>
+          </div>
+          <p id="siteUserIdMessage" class="hint">This ID helps support and routing identify your account.</p>
+        </section>
+
+        <section class="listing-form-section">
           <h3>Stripe Connect</h3>
           <p id="stripeConnectStatus" class="hint">Checking Stripe connection status...</p>
           <div class="feed-actions">
@@ -271,10 +280,6 @@
             <div class="calendar-source-row">
               <label for="bankIban">IBAN</label>
               <input id="bankIban" type="text" maxlength="34" required />
-            </div>
-            <div class="calendar-source-row">
-              <label for="bankBic">BIC</label>
-              <input id="bankBic" type="text" maxlength="11" required />
             </div>
             <div class="calendar-source-row checkbox-row">
               <label for="bankIsBusiness">Business Account</label>
