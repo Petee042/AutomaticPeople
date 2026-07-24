@@ -9925,6 +9925,11 @@ function isAirbnbNotAvailableSummary(summary) {
   return /\bnot\s+available\b/i.test(text);
 }
 
+function isCancelledIcsImportEvent(rawEvent) {
+  const status = String(rawEvent && rawEvent.raw && rawEvent.raw.STATUS || '').trim().toLowerCase();
+  return status === 'cancelled' || status === 'canceled';
+}
+
 // ── Persistent event cache ───────────────────────────────────────────────────
 
 async function getAllListingsWithFeeds() {
@@ -10028,6 +10033,7 @@ async function refreshEventsForListing(listingId) {
         // Drop Airbnb "Not Available" feed entries from legacy cache path as well.
         // Remove when/if Airbnb feed semantics change and these should be retained.
         .filter((event) => !shouldDiscardAirbnbNotAvailableImportEvent(event, { label: feed.label }))
+        .filter((event) => !isCancelledIcsImportEvent(event))
         .map((event) => {
         const metadata = parseIcsMetadataFromDescription(event.description);
         const metadataType = String(metadata.type || '').trim().toLowerCase();
@@ -10570,10 +10576,12 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
   await logIcsTransaction({ listingId, channelId, importingChannelLabel: channel.label, exportingChannelLabel: exportingLabel, importUrl, status: 'success', eventCount: fetched.events.length, rawPayload: fetched.rawText || '', errorText: null });
 
   const now = new Date().toISOString();
+  const touchedRemoteEventIds = new Set();
 
   for (const rawEvent of fetched.events) {
     const processedEvent = applyImportRulesForEvent(rawEvent, channel, listing);
     if (!processedEvent) continue;
+    if (isCancelledIcsImportEvent(rawEvent)) continue;
 
     const importStart = getDateKeyFromEventDateTime(processedEvent.start);
     const importEnd = getDateKeyFromEventDateTime(processedEvent.end);
@@ -10623,6 +10631,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         'UPDATE listing_calendar_events SET last_synced_at = $1, is_in_conflict = $2 WHERE id = $3',
         [now, exactIsConflict, exactMatch.id]
       );
+      touchedRemoteEventIds.add(Number(exactMatch.id));
 
       await logCalendarSyncImportEvent({
         listing,
@@ -10691,6 +10700,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         'UPDATE listing_calendar_events SET is_in_conflict = $1 WHERE id = $2',
         [reconciledIsConflict, existing.id]
       );
+      touchedRemoteEventIds.add(Number(existing.id));
 
       // Remove stale changeover record — dates have changed, revert to unallocated
       await pool.query(
@@ -10771,6 +10781,7 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
        String(processedEvent.title || '').trim(), now, isConflict]
     );
     const newEventId = Number(newEventResult.rows[0].id);
+    touchedRemoteEventIds.add(newEventId);
 
     if (isConflict) {
       const conflictEventIds = [
@@ -10845,6 +10856,51 @@ async function syncChannelEvents(listing, channel, clientAccountId) {
         }
       });
     }
+  }
+
+  // Successful fetch means this channel snapshot is authoritative.
+  // Remove stale remote rows for this listing/channel that were not touched this cycle.
+  const existingRemoteRows = await pool.query(
+    `SELECT id, start_date::text AS start_date, end_date::text AS end_date,
+            COALESCE(NULLIF(TRIM(ics_summary), ''), 'Reservation') AS summary
+     FROM listing_calendar_events
+     WHERE listing_id = $1 AND channel_id = $2 AND event_type = 'remote'`,
+    [listingId, channelId]
+  );
+
+  const staleRemoteIds = (existingRemoteRows.rows || [])
+    .map((row) => Number(row && row.id || 0))
+    .filter((id) => Number.isInteger(id) && id > 0 && !touchedRemoteEventIds.has(id));
+
+  if (staleRemoteIds.length) {
+    const stalePreview = (existingRemoteRows.rows || [])
+      .filter((row) => staleRemoteIds.includes(Number(row && row.id || 0)))
+      .slice(0, 20)
+      .map((row) => ({
+        id: Number(row.id),
+        start: String(row.start_date || '').slice(0, 10),
+        end: String(row.end_date || '').slice(0, 10),
+        summary: String(row.summary || '')
+      }));
+
+    await pool.query(
+      'DELETE FROM listing_calendar_events WHERE id = ANY($1::bigint[])',
+      [staleRemoteIds]
+    );
+
+    await logCalendarSyncImportEvent({
+      listing,
+      clientAccountId,
+      importingChannelLabel: channel.label,
+      exportingChannelLabel: exportingLabel,
+      importUrl,
+      status: 'success',
+      processingOutcome: 'stale_remote_events_pruned',
+      importedEvent: {
+        staleDeletedCount: staleRemoteIds.length,
+        staleDeletedPreview: stalePreview
+      }
+    });
   }
 }
 
@@ -16856,6 +16912,7 @@ app.post('/api/listings/:listingId/events/refresh', requireScopedRole('Manager')
     }
 
     await refreshEventsForListing(listingId);
+    await refreshListingCalendar(listing, req.accessContext.activeClientAccountId);
 
     const cached = await getCachedEventsForListing(listingId);
 
