@@ -22,14 +22,23 @@ function isStrongPassword(password) {
 
 const gotoLogonLink = document.getElementById('gotoLogonLink');
 
+function hideGotoLogon() {
+  if (gotoLogonLink) {
+    gotoLogonLink.hidden = true;
+  }
+}
+
 function showGotoLogon() {
   if (gotoLogonLink) {
     gotoLogonLink.hidden = false;
   }
 }
 
+hideGotoLogon();
+
 document.getElementById('resetPasswordForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  hideGotoLogon();
 
   const params = new URLSearchParams(window.location.search);
   const token = String(params.get('token') || '').trim();

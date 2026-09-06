@@ -1337,6 +1337,10 @@ textarea:focus {
   margin-top: 1.25rem;
 }
 
+.goto-logon-link[hidden] {
+  display: none !important;
+}
+
 .goto-logon-link {
   display: inline-flex;
   align-items: center;
