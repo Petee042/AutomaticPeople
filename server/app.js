@@ -1256,6 +1256,10 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    DROP INDEX IF EXISTS idx_refund_ledger_payment_intent_id_unique
+  `);
+
+  await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_ledger_payment_intent_id_unique
     ON refund_ledger (payment_intent_id)
   `);
@@ -1310,7 +1314,6 @@ async function initializeUserStore() {
       AND NOT EXISTS (
         SELECT 1 FROM refund_ledger rl WHERE rl.payment_intent_id = ra.payment_intent_id
       )
-    ON CONFLICT (payment_intent_id) DO NOTHING
   `);
 
   await pool.query(`
@@ -1353,7 +1356,6 @@ async function initializeUserStore() {
       AND NOT EXISTS (
         SELECT 1 FROM refund_ledger rl WHERE rl.payment_intent_id = srr.payment_intent_id
       )
-    ON CONFLICT (payment_intent_id) DO NOTHING
   `);
 
   await pool.query(`
