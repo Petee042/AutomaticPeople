@@ -13058,6 +13058,7 @@ app.get('/api/guest/dashboard/reservations', requireAuth, async (req, res) => {
                ra.reservation_amount,
                ra.payment_method,
                ra.status,
+               ra.hold_until_at,
                ra.created_at,
                (ra.reservation_checkout_date - ra.reservation_checkin_date) AS stay_nights
         FROM reservation_activity ra
@@ -13110,6 +13111,7 @@ app.get('/api/guest/dashboard/reservations', requireAuth, async (req, res) => {
           : null,
         paymentMethod: String(row.payment_method || '').trim(),
         status: String(row.status || '').trim(),
+        holdUntilAt: row.hold_until_at ? String(row.hold_until_at) : '',
         paymentStatus: getPrivateReservationPaymentStatusLabel(row),
         createdAt: row.created_at ? String(row.created_at) : ''
       })),
