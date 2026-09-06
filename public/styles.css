@@ -1312,6 +1312,23 @@ textarea:focus {
   margin-top: 0;
 }
 
+.reset-password-page .reset-password-header {
+  margin-bottom: 1.5rem;
+}
+
+.reset-password-page .page-title {
+  margin-top: 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #133070;
+}
+
+.reset-password-page .reset-password-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
 .action-icon {
   width: 2rem !important;
   height: 2rem;
@@ -1371,6 +1388,12 @@ textarea:focus {
 
 .action-save::before {
   content: '\2713';
+}
+
+.action-next::before {
+  content: '\2192';
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .floating-action-bar .action-save.btn.primary {
