@@ -524,7 +524,9 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
             passwordSetupUser = await findUserByEmail(emailAddress);
           }
 
-          const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
+          const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser, {
+            reason: 'A client has created a private reservation request for you. Please set up your AutomaticPeople password to view the reservation and complete any required steps.'
+          });
           if (!setupEmailResult.ok) {
             emailDeliveryReason = String(setupEmailResult.error || '').trim();
             emailDeliveryWarning = true;

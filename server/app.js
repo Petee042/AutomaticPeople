@@ -4200,7 +4200,7 @@ async function sendSharedResourceOnlinePaymentReservationEmail(req, reservation,
   });
 }
 
-async function sendPasswordResetEmail(req, user) {
+async function sendPasswordResetEmail(req, user, options = {}) {
   if (!user || !user.email) {
     return { ok: false, error: 'Cannot send password reset email without a user email.' };
   }
@@ -4215,10 +4215,11 @@ async function sendPasswordResetEmail(req, user) {
     return { ok: false, error: 'Could not generate password reset token.' };
   }
 
+  const reasonText = String(options.reason || '').trim();
   const resetUrl = baseUrl + '/reset-password.html?token=' + encodeURIComponent(token);
   const subject = 'Enter or reset your AutomaticPeople password';
   const textBody = [
-    'A request was made to enter or reset your AutomaticPeople password.',
+    reasonText || 'A request was made to enter or reset your AutomaticPeople password.',
     '',
     'Enter or reset your password using this link:',
     resetUrl,
