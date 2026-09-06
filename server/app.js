@@ -1258,7 +1258,6 @@ async function initializeUserStore() {
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_ledger_payment_intent_id_unique
     ON refund_ledger (payment_intent_id)
-    WHERE payment_intent_id IS NOT NULL AND payment_intent_id <> ''
   `);
 
   await pool.query(`
