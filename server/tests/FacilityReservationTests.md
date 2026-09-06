@@ -86,5 +86,5 @@ Validate full client to guest online-payment facility reservation flow through S
 
 The default facility online-payment workflow now runs the Puppeteer-assisted Stripe checkout path.
 
-- `npm run test:workflow:facility-online-payment -- --live --base-url https://automaticpeople-alpha.onrender.com`
-- `npm run test:workflow:facility-set -- --live --base-url https://automaticpeople-alpha.onrender.com`
+- `npm run test:workflow:facility-online-payment -- --live --base-url https://alpha.automaticpeople.com`
+- `npm run test:workflow:facility-set -- --live --base-url https://alpha.automaticpeople.com`
