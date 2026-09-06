@@ -1232,6 +1232,132 @@ async function initializeUserStore() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS refund_ledger (
+      id BIGSERIAL PRIMARY KEY,
+      reservation_type TEXT NOT NULL DEFAULT 'unknown',
+      reservation_id BIGINT,
+      reservation_identifier TEXT,
+      payment_intent_id TEXT,
+      payment_provider TEXT NOT NULL DEFAULT 'stripe',
+      user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      client_account_id BIGINT REFERENCES client_accounts(id) ON DELETE SET NULL,
+      listing_id BIGINT REFERENCES listings(id) ON DELETE SET NULL,
+      currency TEXT NOT NULL DEFAULT 'gbp',
+      amount_minor INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      stripe_refund_id TEXT,
+      reason TEXT,
+      notes TEXT,
+      initiated_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      processed_at TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_ledger_payment_intent_id_unique
+    ON refund_ledger (payment_intent_id)
+    WHERE payment_intent_id IS NOT NULL AND payment_intent_id <> ''
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_refund_ledger_reservation_lookup
+    ON refund_ledger (reservation_type, reservation_id)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_refund_ledger_status_created
+    ON refund_ledger (status, created_at DESC)
+  `);
+
+  await pool.query(`
+    INSERT INTO refund_ledger (
+      reservation_type,
+      reservation_id,
+      reservation_identifier,
+      payment_intent_id,
+      payment_provider,
+      user_id,
+      client_account_id,
+      listing_id,
+      currency,
+      amount_minor,
+      status,
+      created_at,
+      updated_at
+    )
+    SELECT
+      'private_reservation',
+      ra.id,
+      ra.reservation_identifier,
+      ra.payment_intent_id,
+      COALESCE(NULLIF(TRIM(ra.payment_provider), ''), 'stripe'),
+      ra.user_id,
+      ra.client_account_id,
+      ra.listing_id,
+      COALESCE(NULLIF(LOWER(TRIM(ra.payment_currency)), ''), 'gbp'),
+      COALESCE(ra.payment_amount_minor, 0),
+      CASE
+        WHEN LOWER(TRIM(COALESCE(ra.payment_status, ''))) = 'succeeded' THEN 'paid'
+        WHEN LOWER(TRIM(COALESCE(ra.payment_status, ''))) IN ('pending', 'processing', 'requires_action') THEN 'pending'
+        ELSE COALESCE(NULLIF(LOWER(TRIM(ra.payment_status)), ''), 'pending')
+      END,
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    FROM reservation_activity ra
+    WHERE ra.payment_intent_id IS NOT NULL
+      AND TRIM(ra.payment_intent_id) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM refund_ledger rl WHERE rl.payment_intent_id = ra.payment_intent_id
+      )
+    ON CONFLICT (payment_intent_id) DO NOTHING
+  `);
+
+  await pool.query(`
+    INSERT INTO refund_ledger (
+      reservation_type,
+      reservation_id,
+      reservation_identifier,
+      payment_intent_id,
+      payment_provider,
+      user_id,
+      client_account_id,
+      listing_id,
+      currency,
+      amount_minor,
+      status,
+      created_at,
+      updated_at
+    )
+    SELECT
+      'shared_resource_reservation',
+      srr.id,
+      srr.reservation_identifier,
+      srr.payment_intent_id,
+      COALESCE(NULLIF(TRIM(srr.payment_provider), ''), 'stripe'),
+      srr.user_id,
+      NULL,
+      srr.listing_id,
+      COALESCE(NULLIF(LOWER(TRIM(srr.payment_currency)), ''), 'gbp'),
+      COALESCE(srr.payment_amount_minor, 0),
+      CASE
+        WHEN LOWER(TRIM(COALESCE(srr.payment_status, ''))) = 'succeeded' THEN 'paid'
+        WHEN LOWER(TRIM(COALESCE(srr.payment_status, ''))) IN ('pending', 'processing', 'requires_action') THEN 'pending'
+        ELSE COALESCE(NULLIF(LOWER(TRIM(srr.payment_status)), ''), 'pending')
+      END,
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    FROM shared_resource_reservations srr
+    WHERE srr.payment_intent_id IS NOT NULL
+      AND TRIM(srr.payment_intent_id) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM refund_ledger rl WHERE rl.payment_intent_id = srr.payment_intent_id
+      )
+    ON CONFLICT (payment_intent_id) DO NOTHING
+  `);
+
+  await pool.query(`
     ALTER TABLE listing_calendar_events
     DROP CONSTRAINT IF EXISTS listing_calendar_events_reservation_activity_id_fkey
   `);
@@ -2696,6 +2822,188 @@ async function getReservationActivityRowsByPaymentIntentId(paymentIntentId) {
   return result.rows;
 }
 
+async function getRefundLedgerByPaymentIntentId(paymentIntentId) {
+  const cleanedIntentId = String(paymentIntentId || '').trim();
+  if (!cleanedIntentId) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, reservation_type, reservation_id, reservation_identifier, payment_intent_id,
+             payment_provider, user_id, client_account_id, listing_id, currency, amount_minor,
+             status, stripe_refund_id, reason, notes, initiated_by_user_id, created_at,
+             updated_at, processed_at
+      FROM refund_ledger
+      WHERE payment_intent_id = $1
+      ORDER BY created_at ASC
+      LIMIT 1
+    `,
+    [cleanedIntentId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getRefundLedgerByReservation(reservationType, reservationId) {
+  const cleanType = String(reservationType || '').trim();
+  const cleanId = Number(reservationId);
+  if (!cleanType || !Number.isInteger(cleanId) || cleanId <= 0) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, reservation_type, reservation_id, reservation_identifier, payment_intent_id,
+             payment_provider, user_id, client_account_id, listing_id, currency, amount_minor,
+             status, stripe_refund_id, reason, notes, initiated_by_user_id, created_at,
+             updated_at, processed_at
+      FROM refund_ledger
+      WHERE reservation_type = $1 AND reservation_id = $2
+      ORDER BY created_at ASC
+    `,
+    [cleanType, cleanId]
+  );
+
+  return result.rows;
+}
+
+async function upsertRefundLedgerEntry(input = {}) {
+  const paymentIntentId = String((input && input.paymentIntentId) || '').trim();
+  if (!paymentIntentId) {
+    return null;
+  }
+
+  const reservationType = String((input && input.reservationType) || 'unknown').trim() || 'unknown';
+  const reservationId = Number((input && input.reservationId) || 0);
+  const reservationIdentifier = String((input && input.reservationIdentifier) || '').trim() || null;
+  const paymentProvider = String((input && input.paymentProvider) || '').trim() || 'stripe';
+  const userId = Number((input && input.userId) || 0);
+  const clientAccountId = Number((input && input.clientAccountId) || 0);
+  const listingId = Number((input && input.listingId) || 0);
+  const currency = String((input && input.currency) || 'gbp').trim().toLowerCase() || 'gbp';
+  const amountMinor = Number.isInteger(Number((input && input.amountMinor) || 0)) ? Number((input && input.amountMinor) || 0) : 0;
+  const statusRaw = String((input && input.status) || 'pending').trim().toLowerCase();
+  const status = ['pending', 'paid', 'refunded', 'partial_refund', 'cancelled', 'failed', 'requires_manual_review'].includes(statusRaw)
+    ? statusRaw
+    : 'pending';
+  const stripeRefundId = String((input && input.stripeRefundId) || '').trim() || null;
+  const reason = String((input && input.reason) || '').trim() || null;
+  const notes = String((input && input.notes) || '').trim() || null;
+  const initiatedByUserId = Number((input && input.initiatedByUserId) || 0);
+  const processedAt = input && input.processedAt ? String(input.processedAt).trim() : null;
+
+  const result = await pool.query(
+    `
+      INSERT INTO refund_ledger (
+        reservation_type,
+        reservation_id,
+        reservation_identifier,
+        payment_intent_id,
+        payment_provider,
+        user_id,
+        client_account_id,
+        listing_id,
+        currency,
+        amount_minor,
+        status,
+        stripe_refund_id,
+        reason,
+        notes,
+        initiated_by_user_id,
+        processed_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (payment_intent_id)
+      DO UPDATE SET
+        reservation_type = EXCLUDED.reservation_type,
+        reservation_id = EXCLUDED.reservation_id,
+        reservation_identifier = EXCLUDED.reservation_identifier,
+        payment_provider = EXCLUDED.payment_provider,
+        user_id = EXCLUDED.user_id,
+        client_account_id = EXCLUDED.client_account_id,
+        listing_id = EXCLUDED.listing_id,
+        currency = EXCLUDED.currency,
+        amount_minor = EXCLUDED.amount_minor,
+        status = EXCLUDED.status,
+        stripe_refund_id = EXCLUDED.stripe_refund_id,
+        reason = EXCLUDED.reason,
+        notes = EXCLUDED.notes,
+        initiated_by_user_id = EXCLUDED.initiated_by_user_id,
+        processed_at = COALESCE(EXCLUDED.processed_at, refund_ledger.processed_at),
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id, reservation_type, reservation_id, reservation_identifier, payment_intent_id,
+                payment_provider, user_id, client_account_id, listing_id, currency, amount_minor,
+                status, stripe_refund_id, reason, notes, initiated_by_user_id, created_at,
+                updated_at, processed_at
+    `,
+    [
+      reservationType,
+      Number.isInteger(reservationId) && reservationId > 0 ? reservationId : null,
+      reservationIdentifier,
+      paymentIntentId,
+      paymentProvider,
+      Number.isInteger(userId) && userId > 0 ? userId : null,
+      Number.isInteger(clientAccountId) && clientAccountId > 0 ? clientAccountId : null,
+      Number.isInteger(listingId) && listingId > 0 ? listingId : null,
+      currency,
+      amountMinor,
+      status,
+      stripeRefundId,
+      reason,
+      notes,
+      Number.isInteger(initiatedByUserId) && initiatedByUserId > 0 ? initiatedByUserId : null,
+      processedAt
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function ensureRefundLedgerForPaymentIntent(paymentIntent, reservationRef = {}) {
+  const intent = paymentIntent && typeof paymentIntent === 'object' ? paymentIntent : {};
+  const paymentIntentId = String(intent.id || reservationRef.paymentIntentId || '').trim();
+  if (!paymentIntentId) {
+    return null;
+  }
+
+  const paymentStatus = String(intent.status || reservationRef.paymentStatus || '').trim().toLowerCase();
+  const amountMinor = Number.isInteger(intent.amount_received)
+    ? Number(intent.amount_received)
+    : (Number.isInteger(intent.amount) ? Number(intent.amount) : Number(reservationRef.amountMinor || 0));
+  const currency = String(intent.currency || reservationRef.currency || 'gbp').trim().toLowerCase() || 'gbp';
+  const provider = String(reservationRef.paymentProvider || 'stripe').trim() || 'stripe';
+  const reservationType = String(reservationRef.reservationType || 'unknown').trim() || 'unknown';
+  const reservationId = Number(reservationRef.reservationId || 0);
+  const reservationIdentifier = String(reservationRef.reservationIdentifier || '').trim() || null;
+  const userId = Number(reservationRef.userId || 0);
+  const clientAccountId = Number(reservationRef.clientAccountId || 0);
+  const listingId = Number(reservationRef.listingId || 0);
+
+  let status = 'pending';
+  if (paymentStatus === 'succeeded') {
+    status = 'paid';
+  } else if (paymentStatus === 'failed') {
+    status = 'failed';
+  }
+
+  return upsertRefundLedgerEntry({
+    paymentIntentId,
+    reservationType,
+    reservationId,
+    reservationIdentifier,
+    paymentProvider: provider,
+    userId,
+    clientAccountId,
+    listingId,
+    currency,
+    amountMinor,
+    status
+  });
+}
+
 async function updateReservationActivityPaymentById(id, nextState) {
   const reservationId = Number(id || 0);
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
@@ -2908,6 +3216,22 @@ async function finalizeReservationActivityPaymentIntent(paymentIntent, options) 
         email: firstReservation.email_address,
         sourceType: 'private_reservation',
         sourceId: String(firstReservation.id)
+      });
+
+      await ensureRefundLedgerForPaymentIntent(intent, {
+        reservationType: 'private_reservation',
+        reservationId: firstReservation.id,
+        reservationIdentifier: firstReservation.reservation_identifier,
+        paymentIntentId: paymentIntentId,
+        paymentProvider: 'stripe',
+        userId: firstReservation.user_id,
+        clientAccountId: firstReservation.client_account_id,
+        listingId: firstReservation.listing_id,
+        currency: String(firstReservation.payment_currency || intent.currency || 'gbp').trim().toLowerCase() || 'gbp',
+        amountMinor: Number.isInteger(firstReservation.payment_amount_minor)
+          ? Number(firstReservation.payment_amount_minor)
+          : (Number.isInteger(intent.amount_received) ? Number(intent.amount_received) : Number(intent.amount || 0)),
+        paymentStatus: String(intent.status || '').trim().toLowerCase()
       });
     }
 
