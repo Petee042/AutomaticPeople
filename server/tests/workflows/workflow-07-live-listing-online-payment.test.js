@@ -1,12 +1,11 @@
 'use strict';
 
-const Stripe = require('stripe');
 const { createWorkflowHarness, parseOptions } = require('../helpers/workflow-test-harness');
 const { completeStripeCheckout } = require('../helpers/browser-assisted-stripe-checkout');
 
 const TEST_META = {
-  id: 'workflow-05-live-facility-online-payment',
-  title: 'Workflow 05 - Live facility reservation (online payment)',
+  id: 'workflow-07-live-listing-online-payment',
+  title: 'Workflow 07 - Live listing reservation (online payment)',
   owner: 'AutomaticPeople',
   destructive: true
 };
@@ -132,16 +131,6 @@ class SessionClient {
     });
   }
 
-  put(pathName, payload) {
-    return this.request(pathName, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload || {})
-    });
-  }
-
   delete(pathName, payload) {
     const options = {
       method: 'DELETE'
@@ -190,25 +179,19 @@ async function waitForInboundEntry(adminClient, matcher, timeoutMs, pollMs) {
   return null;
 }
 
-function formatDateKey(date) {
-  const d = new Date(date.getTime());
-  const y = String(d.getUTCFullYear());
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return y + '-' + m + '-' + day;
-}
-
-function buildUtcIsoAtHour(daysFromNow, hour) {
+function formatDateKey(daysFromNow) {
   const dt = new Date();
   dt.setUTCHours(0, 0, 0, 0);
   dt.setUTCDate(dt.getUTCDate() + Number(daysFromNow || 0));
-  dt.setUTCHours(Number(hour || 0), 0, 0, 0);
-  return dt.toISOString();
+  const y = String(dt.getUTCFullYear());
+  const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(dt.getUTCDate()).padStart(2, '0');
+  return y + '-' + m + '-' + d;
 }
 
-function getFacilityRowByReservationId(payload, reservationId) {
-  const facilities = Array.isArray(payload && payload.facilities) ? payload.facilities : [];
-  return facilities.find((item) => Number(item && item.id || 0) === Number(reservationId || 0)) || null;
+function getAccommodationRowByReservationId(payload, reservationId) {
+  const rows = Array.isArray(payload && payload.accommodation) ? payload.accommodation : [];
+  return rows.find((item) => Number(item && item.id || 0) === Number(reservationId || 0)) || null;
 }
 
 async function run(argv) {
@@ -218,27 +201,25 @@ async function run(argv) {
   const baseUrl = normalizeUrl(options.baseUrl || process.env.TEST_BASE_URL || 'https://alpha.automaticpeople.com');
   const adminUsername = requiredEnv('TEST_ADMIN_USERNAME');
   const adminPassword = requiredEnv('TEST_ADMIN_PASSWORD');
-  const stripeSecretKey = String(process.env.STRIPE_SECRET_KEY || '').trim();
 
   const clientEmail = optionalEnv('TEST_FLOW_CLIENT_EMAIL', 'client1@alphainbound.automaticpeople.com').toLowerCase();
-  const guestEmail = optionalEnv('TEST_FLOW_FACILITY_GUEST2_EMAIL', 'parker2@alphainbound.automaticpeople.com').toLowerCase();
+  const guestEmail = optionalEnv('TEST_FLOW_LISTING_GUEST2_EMAIL', 'guest2@alphainbound.automaticpeople.com').toLowerCase();
   const clientPassword = optionalEnv('TEST_FLOW_CLIENT_PASSWORD', 'Quiblick!4');
-  const guestPassword = optionalEnv('TEST_FLOW_FACILITY_GUEST2_PASSWORD', 'Quiblick!4');
-
-  const stripe = stripeSecretKey
-    ? new Stripe(stripeSecretKey, { apiVersion: '2024-06-20' })
-    : null;
+  const guestPassword = optionalEnv('TEST_FLOW_LISTING_GUEST2_PASSWORD', 'Quiblick!4');
+  const nameSuffix = optionalEnv('TEST_FLOW_LISTING_NAME_SUFFIX', Date.now().toString());
+  const propertyName = 'Property1-' + nameSuffix;
+  const listingName = 'Listing1-' + nameSuffix;
 
   const adminClient = new SessionClient(baseUrl, options.timeoutMs);
   const client = new SessionClient(baseUrl, options.timeoutMs);
   const guest = new SessionClient(baseUrl, options.timeoutMs);
 
-  let resourceId = 0;
+  let listingId = 0;
   let reservationId = 0;
   let checkoutSessionId = '';
-  let paymentIntentId = '';
   let paymentAutomationRan = false;
-  let guestReceiptResult = null;
+  let finalizedPayload = null;
+
   const step1 = harness.step('1. Login as existing client1 account');
   if (options.dryRun) {
     step1.skip('Dry run enabled.');
@@ -271,139 +252,100 @@ async function run(argv) {
     step2.pass('Inbound listeners ready.', { watch: [clientEmail, guestEmail] });
   }
 
-  const step3 = harness.step('3. Verify existing client account session');
+  const step3 = harness.step('3. Verify client Stripe Connect readiness');
   if (options.dryRun) {
     step3.skip('Dry run enabled.');
   } else {
     const meRes = await client.get('/api/me');
     harness.assert(meRes.ok, 'Client /api/me failed. status=' + meRes.status + ' body=' + meRes.bodyText);
-    harness.assert(meRes.bodyJson && meRes.bodyJson.isValidated === true, 'Existing client1 account is not validated.');
-    step3.pass('Existing client1 session verified.', {
-      email: String(meRes.bodyJson && meRes.bodyJson.email || '').trim().toLowerCase(),
-      isValidated: Boolean(meRes.bodyJson && meRes.bodyJson.isValidated)
+    const stripeConnect = meRes.bodyJson && meRes.bodyJson.stripeConnect ? meRes.bodyJson.stripeConnect : null;
+    harness.assert(stripeConnect, 'Client stripeConnect status missing from /api/me response.');
+    harness.assert(stripeConnect.onboardingComplete === true, 'Stripe onboarding is incomplete for client1.');
+    harness.assert(stripeConnect.chargesEnabled === true, 'Stripe charges are not enabled for client1.');
+    harness.assert(stripeConnect.payoutsEnabled === true, 'Stripe payouts are not enabled for client1.');
+
+    step3.pass('Host Stripe account is already ready.', {
+      stripeAccountId: String(stripeConnect.stripeAccountId || ''),
+      onboardingComplete: Boolean(stripeConnect.onboardingComplete),
+      chargesEnabled: Boolean(stripeConnect.chargesEnabled),
+      payoutsEnabled: Boolean(stripeConnect.payoutsEnabled)
     });
   }
 
-  const step4 = harness.step('4. Verify host Stripe Connect account is already ready for online payments');
+  const step4 = harness.step('4. Create Property1 and Listing1 with pricing config');
   if (options.dryRun) {
     step4.skip('Dry run enabled.');
   } else {
-    const statusAfter = await client.get('/api/stripe/connect/status');
-    harness.assert(statusAfter.ok, 'Stripe connect status failed. status=' + statusAfter.status + ' body=' + statusAfter.bodyText);
-    const stripeConnectAfter = statusAfter.bodyJson && statusAfter.bodyJson.stripeConnect ? statusAfter.bodyJson.stripeConnect : null;
+    const propertyRes = await client.post('/api/properties', {
+      name: propertyName
+    });
+    harness.assert(propertyRes.ok, 'Property creation failed. status=' + propertyRes.status + ' body=' + propertyRes.bodyText);
+    const propertyId = Number(propertyRes.bodyJson && propertyRes.bodyJson.property && propertyRes.bodyJson.property.id || 0);
+    harness.assert(Number.isInteger(propertyId) && propertyId > 0, 'Property id missing from create response.');
 
-    harness.assert(
-      Boolean(
-        stripeConnectAfter
-        && stripeConnectAfter.onboardingComplete === true
-        && stripeConnectAfter.chargesEnabled === true
-        && stripeConnectAfter.payoutsEnabled === true
-      ),
-      'Stripe Connect is not fully enabled for the host account. Complete Stripe onboarding manually before running this flow.'
-    );
+    const listingRes = await client.post('/api/listings', {
+      name: listingName,
+      propertyId,
+      dateBasis: 'checkout',
+      perNightPrice: 100,
+      perStayPrice: 20,
+      maxGuests: 2,
+      baseOccupancy: 2,
+      additionalGuestUpliftPct: 25
+    });
+    harness.assert(listingRes.ok, 'Listing creation failed. status=' + listingRes.status + ' body=' + listingRes.bodyText);
+    listingId = Number(listingRes.bodyJson && listingRes.bodyJson.listing && listingRes.bodyJson.listing.id || 0);
+    harness.assert(Number.isInteger(listingId) && listingId > 0, 'Listing id missing from create response.');
 
-    step4.pass('Host Stripe Connect account is already ready.', stripeConnectAfter);
+    step4.pass('Property and listing created.', {
+      propertyId,
+      listingId,
+      propertyName,
+      listingName
+    });
   }
 
-  const step5 = harness.step('5. Enter host bank account details from host account details page');
+  const step5 = harness.step('5. Create future direct reservation with online payment');
   if (options.dryRun) {
     step5.skip('Dry run enabled.');
   } else {
-    const meRes = await client.get('/api/me');
-    harness.assert(meRes.ok, 'Host profile lookup failed. status=' + meRes.status + ' body=' + meRes.bodyText);
-
-    const hostAccountName = [
-      String(meRes.bodyJson && meRes.bodyJson.firstName || '').trim(),
-      String(meRes.bodyJson && meRes.bodyJson.familyName || '').trim()
-    ].filter(Boolean).join(' ').trim() || clientEmail;
-
-    const bankSave = await client.put('/api/account/bank-details', {
-      accountName: hostAccountName,
-      sortCode: '20-20-21',
-      accountNumber: '12345678',
-      isBusiness: true,
-      iban: 'GB33BUKB20201555555555'
-    });
-    harness.assert(bankSave.ok, 'Saving bank details failed. status=' + bankSave.status + ' body=' + bankSave.bodyText);
-
-    step5.pass('Host bank details saved.', { accountName: hostAccountName, sortCode: '20-20-21' });
-  }
-
-  const step6 = harness.step('6. Create Parking2 facility with online+bank payment options');
-  if (options.dryRun) {
-    step6.skip('Dry run enabled.');
-  } else {
-    const createResource = await client.post('/api/shared-resources', {
-      shortDescription: 'Parking2',
-      fullDescriptionHtml: '<p>Parking2 test facility description.</p>',
-      maxUnits: 1,
-      maxDaysAdvanceBooking: 6,
-      resourceType: 'parking',
-      freeOfCharge: false,
-      cashOnSite: false,
-      bankTransfer: true,
-      onlinePayment: true,
-      freeOfChargeMessageHtml: '<p>No charge message.</p>',
-      cashOnSiteMessageHtml: '<p>Cash on site message.</p>',
-      bankTransferMessageHtml: '<p>Bank transfer payment page text for Parking2.</p>',
-      onlinePaymentMessageHtml: '<p>Online payment page text for Parking2.</p>',
-      chargeBasis: 'daily',
-      dailyChargeMode: 'per_24_hours',
-      dailyRate: 12
-    });
-    harness.assert(createResource.ok, 'Create facility failed. status=' + createResource.status + ' body=' + createResource.bodyText);
-
-    resourceId = Number(createResource.bodyJson && createResource.bodyJson.resource && createResource.bodyJson.resource.id || 0);
-    harness.assert(Number.isInteger(resourceId) && resourceId > 0, 'Facility resource id missing from create response.');
-
-    step6.pass('Parking2 created.', { resourceId });
-  }
-
-  const step7 = harness.step('7. Create future facility reservation using online payment');
-  if (options.dryRun) {
-    step7.skip('Dry run enabled.');
-  } else {
-    const requestedStartAt = buildUtcIsoAtHour(2, 11);
-    const requestedEndAt = buildUtcIsoAtHour(3, 11);
-
-    const startDate = new Date(requestedStartAt);
-    const endDate = new Date(requestedEndAt);
-
-    const reserve = await client.post('/api/public/shared-resources/' + resourceId + '/reservations', {
-      requestedStartAt,
-      requestedEndAt,
-      checkinDate: formatDateKey(startDate),
-      checkoutDate: formatDateKey(endDate),
-      spacesRequired: 1,
+    const arrivalDate = formatDateKey(20);
+    const departureDate = formatDateKey(23);
+    const reserve = await client.post('/api/private-reservations', {
+      arrivalDate,
+      departureDate,
+      listingId,
       firstName: 'Dave',
-      familyName: 'Parker',
-      emailAddress: guestEmail,
-      telephone: '07123456790',
-      vehicleRegistration: 'PARK-002',
-      reservationAmount: 12,
-      paymentOption: 'online_payment'
+      familyName: 'Guest',
+      email: guestEmail,
+      guestCount: 2,
+      cost: 320,
+      holdHours: 24,
+      paymentMethod: 'Online Payment'
     });
-
     harness.assert(reserve.ok, 'Online-payment reservation create failed. status=' + reserve.status + ' body=' + reserve.bodyText);
 
     reservationId = Number(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.id || 0);
     harness.assert(Number.isInteger(reservationId) && reservationId > 0, 'Reservation id missing from create response.');
 
     const status = String(reserve.bodyJson && reserve.bodyJson.reservation && reserve.bodyJson.reservation.status || '').trim().toLowerCase();
-    harness.assert(status === 'awaiting online confirmation', 'Expected reservation status Awaiting Online Confirmation, got: ' + status);
+    harness.assert(
+      status === 'awaiting_online_payment' || status === 'awaiting online payment',
+      'Expected reservation status Awaiting Online Payment, got: ' + status
+    );
 
-    step7.pass('Online-payment reservation created.', { reservationId, status });
+    step5.pass('Online-payment reservation created.', { reservationId, status });
   }
 
-  const step8 = harness.step('8. Set parker2 password from invite email and log in');
+  const step6 = harness.step('6. Verify guest setup email, set password, and login');
   if (options.dryRun) {
-    step8.skip('Dry run enabled.');
+    step6.skip('Dry run enabled.');
   } else {
     const setupEmail = await waitForInboundEntry(
       adminClient,
       (entry) => {
         const to = String(entry && entry.to_address || '').trim().toLowerCase();
-        const body = String(entry && entry.body_text || '');
+        const body = String(entry && entry.body_text || '').toLowerCase();
         return to === guestEmail && body.includes('reset-password');
       },
       120000,
@@ -429,32 +371,63 @@ async function run(argv) {
     });
     harness.assert(guestLogin.ok, 'Guest login failed. status=' + guestLogin.status + ' body=' + guestLogin.bodyText);
 
-    step8.pass('Guest setup and login succeeded.', { email: guestEmail });
+    step6.pass('Guest setup and login succeeded.', { email: guestEmail });
   }
 
-  const step9 = harness.step('9. Confirm parker2 sees facility reservation awaiting online payment');
+  const step7 = harness.step('7. Verify reservation notification email with dashboard backlink');
   if (options.dryRun) {
-    step9.skip('Dry run enabled.');
+    step7.skip('Dry run enabled.');
+  } else {
+    const reservationNotice = await waitForInboundEntry(
+      adminClient,
+      (entry) => {
+        const to = String(entry && entry.to_address || '').trim().toLowerCase();
+        const subject = String(entry && entry.subject || '').trim().toLowerCase();
+        const body = String(entry && entry.body_text || '').toLowerCase();
+        const hasLoginLink = body.includes('please log in to your automaticpeople account') || body.includes('https://alpha.automaticpeople.com/index.html');
+        const hasReservationContent = subject.includes('online payment required')
+          || (body.includes('reservation request submitted') && body.includes('amount due:'));
+        return to === guestEmail && hasLoginLink && hasReservationContent;
+      },
+      120000,
+      4000
+    );
+    harness.assert(reservationNotice, 'Guest reservation notification email with login link not found.');
+
+    step7.pass('Guest reservation notification email verified.', {
+      to: String(reservationNotice.to_address || ''),
+      subject: String(reservationNotice.subject || '')
+    });
+  }
+
+  const step8 = harness.step('8. Confirm guest sees reservation awaiting online payment');
+  if (options.dryRun) {
+    step8.skip('Dry run enabled.');
   } else {
     const guestReservations = await guest.get('/api/guest/dashboard/reservations');
     harness.assert(guestReservations.ok, 'Guest dashboard reservations failed. status=' + guestReservations.status + ' body=' + guestReservations.bodyText);
 
-    const row = getFacilityRowByReservationId(guestReservations.bodyJson, reservationId);
+    const row = getAccommodationRowByReservationId(guestReservations.bodyJson, reservationId);
     harness.assert(row, 'Guest reservation row not found for reservation id ' + reservationId + '.');
 
     const status = String(row && row.status || '').trim().toLowerCase();
-    harness.assert(status === 'awaiting online confirmation', 'Expected guest status Awaiting Online Confirmation, got: ' + status);
+    harness.assert(
+      status === 'awaiting_online_payment' || status === 'awaiting online payment',
+      'Expected guest status Awaiting Online Payment, got: ' + status
+    );
 
-    step9.pass('Guest facility reservation visible and awaiting online payment.', { reservationId, status });
+    step8.pass('Guest reservation visible and awaiting online payment.', {
+      reservationId,
+      status,
+      paymentMethod: String(row && row.paymentMethod || '')
+    });
   }
 
-  const step10 = harness.step('10. Complete Stripe sandbox payment via Pay Now + sync');
+  const step9 = harness.step('9. Complete Stripe sandbox payment via Pay Now + sync');
   if (options.dryRun) {
-    step10.skip('Dry run enabled.');
-  } else if (!stripe) {
-    step10.skip('STRIPE_SECRET_KEY is not set locally, so sandbox payment automation is skipped.');
+    step9.skip('Dry run enabled.');
   } else {
-    const payNow = await guest.post('/api/guest/dashboard/facility-reservations/' + reservationId + '/pay-now', {});
+    const payNow = await guest.post('/api/guest/dashboard/reservations/' + reservationId + '/pay-now', {});
     harness.assert(payNow.ok, 'Guest pay-now failed. status=' + payNow.status + ' body=' + payNow.bodyText);
 
     checkoutSessionId = String(payNow.bodyJson && payNow.bodyJson.checkoutSessionId || '').trim();
@@ -468,6 +441,9 @@ async function run(argv) {
       timeoutMs: 180000,
       headless: false,
       email: guestEmail,
+      country: optionalEnv('TEST_STRIPE_COUNTRY', 'United Kingdom'),
+      postcode: optionalEnv('TEST_STRIPE_POSTCODE', 'EX11SX'),
+      phone: optionalEnv('TEST_STRIPE_PHONE', '07812582241'),
       cardNumber: optionalEnv('TEST_STRIPE_CARD_NUMBER', '4242424242424242'),
       cardExpiry: optionalEnv('TEST_STRIPE_CARD_EXPIRY', '1234'),
       cardCvc: optionalEnv('TEST_STRIPE_CARD_CVC', '123'),
@@ -482,13 +458,13 @@ async function run(argv) {
 
     let reconciledStatus = '';
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const syncRes = await guest.post('/api/guest/dashboard/facility-reservations/' + reservationId + '/sync-payment', {
+      const syncRes = await guest.post('/api/guest/dashboard/reservations/' + reservationId + '/sync-payment', {
         sessionId: checkoutSessionId
       });
       harness.assert(syncRes.ok, 'Guest sync-payment failed. status=' + syncRes.status + ' body=' + syncRes.bodyText);
 
       const syncedReservation = syncRes.bodyJson && syncRes.bodyJson.reservation ? syncRes.bodyJson.reservation : null;
-      guestReceiptResult = syncRes.bodyJson && syncRes.bodyJson.guestReceipt ? syncRes.bodyJson.guestReceipt : guestReceiptResult;
+      finalizedPayload = syncRes.bodyJson && syncRes.bodyJson.finalized ? syncRes.bodyJson.finalized : finalizedPayload;
       reconciledStatus = String(syncedReservation && syncedReservation.status || '').trim().toLowerCase();
       if (reconciledStatus === 'confirmed') {
         break;
@@ -496,120 +472,101 @@ async function run(argv) {
       await sleep(2000);
     }
 
-    harness.assert(reconciledStatus === 'confirmed', 'Facility reservation did not reconcile to confirmed after payment. status=' + reconciledStatus);
-
-    const confirmedSession = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
-      expand: ['payment_intent']
-    });
-    if (confirmedSession && typeof confirmedSession.payment_intent === 'string') {
-      paymentIntentId = String(confirmedSession.payment_intent || '').trim();
-    } else if (confirmedSession && confirmedSession.payment_intent && confirmedSession.payment_intent.id) {
-      paymentIntentId = String(confirmedSession.payment_intent.id || '').trim();
-    }
+    harness.assert(reconciledStatus === 'confirmed', 'Reservation did not reconcile to confirmed after payment. status=' + reconciledStatus);
     paymentAutomationRan = true;
 
-    step10.pass('Stripe payment confirmed and reservation reconciled.', {
+    step9.pass('Stripe payment confirmed and reservation reconciled.', {
       checkoutSessionId,
-      paymentIntentId,
       reconciledStatus,
       checkoutFinalUrl: String(checkoutResult && checkoutResult.finalUrl || '')
     });
   }
 
-  const step11 = harness.step('11. Verify client receives online-payment notification email');
+  const step10 = harness.step('10. Verify client receives online-payment notification email');
   if (options.dryRun) {
-    step11.skip('Dry run enabled.');
+    step10.skip('Dry run enabled.');
   } else if (!paymentAutomationRan) {
-    step11.skip('Skipped because Stripe payment automation did not complete.');
+    step10.skip('Skipped because Stripe payment automation did not complete.');
   } else {
     const hostNotifyEmail = await waitForInboundEntry(
       adminClient,
       (entry) => {
         const to = String(entry && entry.to_address || '').trim().toLowerCase();
         const subject = String(entry && entry.subject || '').trim().toLowerCase();
-        return to === clientEmail && subject.includes('guest online payment notification');
+        return to === clientEmail && (
+          subject.includes('reservation payment received')
+          || subject.includes('guest online payment notification')
+        );
       },
-      120000,
+      60000,
       4000
     );
+
     if (!hostNotifyEmail) {
-      step11.skip('Client online-payment notification email was not observed in this environment.');
+      step10.skip('Client online-payment notification email was not observed in this environment.');
     } else {
-      step11.pass('Client online-payment notification email verified.', null);
+      step10.pass('Client online-payment notification email verified.', {
+        subject: String(hostNotifyEmail.subject || '')
+      });
     }
   }
 
-  const step12 = harness.step('12. Verify client and guest both see confirmed status');
+  const step11 = harness.step('11. Verify guest payment confirmation is sent to the correct email');
+  if (options.dryRun) {
+    step11.skip('Dry run enabled.');
+  } else if (!paymentAutomationRan) {
+    step11.skip('Skipped because Stripe payment automation did not complete.');
+  } else {
+    harness.assert(finalizedPayload, 'Finalize payload missing from sync-payment response.');
+    harness.assert(finalizedPayload.found === true, 'Finalize payload indicates reservation was not found.');
+    harness.assert(finalizedPayload.confirmed === true, 'Finalize payload did not confirm payment.');
+    harness.assert(finalizedPayload.emailSent === true, 'Finalize payload did not report a sent guest confirmation email. error=' + String(finalizedPayload.emailError || ''));
+    harness.assert(
+      String(finalizedPayload.emailRecipient || '').trim().toLowerCase() === guestEmail,
+      'Guest confirmation email recipient mismatch. expected=' + guestEmail + ' actual=' + String(finalizedPayload.emailRecipient || '')
+    );
+
+    step11.pass('Guest payment confirmation recipient verified.', {
+      emailRecipient: String(finalizedPayload.emailRecipient || ''),
+      emailSent: Boolean(finalizedPayload.emailSent)
+    });
+  }
+
+  const step12 = harness.step('12. Verify host and guest both see confirmed status');
   if (options.dryRun) {
     step12.skip('Dry run enabled.');
   } else if (!paymentAutomationRan) {
     step12.skip('Skipped because Stripe payment automation did not complete.');
   } else {
-    const hostReservations = await client.get('/api/shared-resources/' + resourceId + '/reservations');
-    harness.assert(hostReservations.ok, 'Host facility reservations failed. status=' + hostReservations.status + ' body=' + hostReservations.bodyText);
+    const hostReservations = await client.get('/api/private-reservations');
+    harness.assert(hostReservations.ok, 'Host private reservations failed. status=' + hostReservations.status + ' body=' + hostReservations.bodyText);
 
-    const hostRows = Array.isArray(hostReservations.bodyJson && hostReservations.bodyJson.reservations)
+    const reservations = Array.isArray(hostReservations.bodyJson && hostReservations.bodyJson.reservations)
       ? hostReservations.bodyJson.reservations
       : [];
-    const hostRow = hostRows.find((item) => Number(item && item.id || 0) === reservationId);
-    harness.assert(hostRow, 'Client reservation row not found for reservation id ' + reservationId + '.');
+    const hostRow = reservations.find((item) => Number(item && item.id || 0) === reservationId);
+    harness.assert(hostRow, 'Host reservation row not found for reservation id ' + reservationId + '.');
 
-    const hostStatus = String(hostRow && hostRow.status || '').trim().toLowerCase();
-    harness.assert(hostStatus === 'confirmed', 'Expected host status Confirmed, got: ' + hostStatus);
+    const hostPaymentStatus = String(hostRow && hostRow.paymentStatus || '').trim().toLowerCase();
+    harness.assert(
+      hostPaymentStatus.includes('paid') || hostPaymentStatus.includes('confirmed'),
+      'Expected host payment status paid/confirmed, got: ' + hostPaymentStatus
+    );
 
     const guestReservations = await guest.get('/api/guest/dashboard/reservations');
     harness.assert(guestReservations.ok, 'Guest dashboard reservations refresh failed. status=' + guestReservations.status + ' body=' + guestReservations.bodyText);
 
-    const guestRow = getFacilityRowByReservationId(guestReservations.bodyJson, reservationId);
+    const guestRow = getAccommodationRowByReservationId(guestReservations.bodyJson, reservationId);
     harness.assert(guestRow, 'Guest reservation row not found after payment confirmation.');
 
     const guestStatus = String(guestRow && guestRow.status || '').trim().toLowerCase();
     harness.assert(guestStatus === 'confirmed', 'Expected guest status Confirmed, got: ' + guestStatus);
 
-    step12.pass('Client and guest confirmed statuses verified.', {
+    step12.pass('Host and guest confirmed statuses verified.', {
       reservationId,
-      hostStatus,
+      hostPaymentStatus,
       guestStatus
     });
-  }
-
-  const step13 = harness.step('13. Verify guest receives payment-confirmed email');
-  if (options.dryRun) {
-    step13.skip('Dry run enabled.');
-  } else if (!paymentAutomationRan) {
-    step13.skip('Skipped because Stripe payment automation did not complete.');
-  } else {
-    harness.assert(guestReceiptResult, 'Guest receipt result was not returned from sync-payment.');
-    harness.assert(guestReceiptResult.sent === true, 'Guest receipt email was not reported as sent. error=' + String(guestReceiptResult.error || ''));
-    harness.assert(
-      String(guestReceiptResult.recipient || '').trim().toLowerCase() === guestEmail,
-      'Guest receipt was sent to the wrong email address. expected=' + guestEmail + ' actual=' + String(guestReceiptResult.recipient || '')
-    );
-
-    const guestReceiptEmail = await waitForInboundEntry(
-      adminClient,
-      (entry) => {
-        const to = String(entry && entry.to_address || '').trim().toLowerCase();
-        const subject = String(entry && entry.subject || '').trim().toLowerCase();
-        return to === guestEmail && subject.includes('reservation payment confirmed');
-      },
-      30000,
-      3000
-    );
-    if (!guestReceiptEmail) {
-      step13.pass('Guest payment-confirmed email was sent to the correct guest address; inbound log was not observed in this environment.', {
-        recipient: String(guestReceiptResult.recipient || ''),
-        messageId: String(guestReceiptResult.messageId || ''),
-        source: String(guestReceiptResult.source || '')
-      });
-    } else {
-      step13.pass('Guest payment-confirmed email verified.', {
-        recipient: String(guestReceiptResult.recipient || ''),
-        messageId: String(guestReceiptResult.messageId || ''),
-        inboundMatched: true,
-        source: String(guestReceiptResult.source || '')
-      });
-    }
   }
 
   const summary = harness.summarize();

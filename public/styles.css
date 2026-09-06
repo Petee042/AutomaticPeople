@@ -1,11 +1,21 @@
 /* ── Reset & base ──────────────────────────────────────────── */
+:root {
+  --ap-base-font-size: 14px;
+  --ap-icon-scale: 0.8;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  font-size: var(--ap-base-font-size);
+}
 
 body {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   background: #f0f2f5;
   color: #1a1a2e;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 .logged-page .sticky-page-chrome {
@@ -106,7 +116,7 @@ body {
 }
 
 .site-title {
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: #133070;
   text-align: center;
@@ -746,22 +756,22 @@ textarea:focus {
 }
 
 .config-icon-btn {
-  width: 2rem;
-  height: 2rem;
+  width: calc(2rem * var(--ap-icon-scale));
+  height: calc(2rem * var(--ap-icon-scale));
   border-radius: 999px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: calc(1.15rem * var(--ap-icon-scale));
   line-height: 1;
 }
 
 .circular-icon-btn {
-  width: 2rem;
-  height: 2rem;
-  min-width: 2rem;
-  min-height: 2rem;
+  width: calc(2rem * var(--ap-icon-scale));
+  height: calc(2rem * var(--ap-icon-scale));
+  min-width: calc(2rem * var(--ap-icon-scale));
+  min-height: calc(2rem * var(--ap-icon-scale));
   border-radius: 999px;
   padding: 0;
   display: inline-flex;
@@ -776,8 +786,8 @@ textarea:focus {
 }
 
 .circular-icon-btn svg {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: calc(1.1rem * var(--ap-icon-scale));
+  height: calc(1.1rem * var(--ap-icon-scale));
   display: block;
 }
 
@@ -803,10 +813,10 @@ textarea:focus {
 }
 
 .calendar-refresh-btn {
-  width: 2rem !important;
-  height: 2rem;
-  min-width: 2rem;
-  min-height: 2rem;
+  width: calc(2rem * var(--ap-icon-scale)) !important;
+  height: calc(2rem * var(--ap-icon-scale));
+  min-width: calc(2rem * var(--ap-icon-scale));
+  min-height: calc(2rem * var(--ap-icon-scale));
   border-radius: 999px;
   padding: 0;
   font-size: 0;
@@ -820,7 +830,7 @@ textarea:focus {
 
 .calendar-refresh-btn::before {
   content: '\21BB';
-  font-size: 1rem;
+  font-size: calc(1rem * var(--ap-icon-scale));
   font-weight: 700;
   line-height: 1;
 }
@@ -1002,10 +1012,10 @@ textarea:focus {
 }
 
 .schedule-action-icon {
-  width: 2rem !important;
-  height: 2rem;
-  min-width: 2rem;
-  min-height: 2rem;
+  width: calc(2rem * var(--ap-icon-scale)) !important;
+  height: calc(2rem * var(--ap-icon-scale));
+  min-width: calc(2rem * var(--ap-icon-scale));
+  min-height: calc(2rem * var(--ap-icon-scale));
   border-radius: 999px;
   padding: 0;
   font-size: 0;
@@ -1018,7 +1028,7 @@ textarea:focus {
 }
 
 .schedule-action-icon::before {
-  font-size: 1rem;
+  font-size: calc(1rem * var(--ap-icon-scale));
   font-weight: 700;
   line-height: 1;
 }
@@ -1043,40 +1053,40 @@ textarea:focus {
 .action-logout::before,
 .logout-icon::before {
   content: '\27A4';
-  font-size: 1.1rem;
+  font-size: calc(1.1rem * var(--ap-icon-scale));
 }
 
 .action-next::before,
 .next-icon::before {
   content: '\25B6';
-  font-size: 0.9rem;
+  font-size: calc(0.9rem * var(--ap-icon-scale));
 }
 
 .action-previous::before,
 .previous-icon::before,
 .prev-icon::before {
   content: '\25C0';
-  font-size: 0.9rem;
+  font-size: calc(0.9rem * var(--ap-icon-scale));
 }
 
 .action-bank-transfer::before,
 .bank-transfer-icon::before,
 .bank-icon::before {
   content: '\1F3E6';
-  font-size: 1rem;
+  font-size: calc(1rem * var(--ap-icon-scale));
 }
 
 .action-copy::before,
 .copy-icon::before {
   content: '\1F5D0';
-  font-size: 1rem;
+  font-size: calc(1rem * var(--ap-icon-scale));
 }
 
 .action-cash::before,
 .cash-payment-icon::before,
 .cash-icon::before {
   content: '\1F4B5';
-  font-size: 1rem;
+  font-size: calc(1rem * var(--ap-icon-scale));
 }
 
 .schedule-email-message {
@@ -1312,6 +1322,67 @@ textarea:focus {
   margin-top: 0;
 }
 
+.reset-password-page {
+  border: 1px solid rgba(19, 48, 112, 0.2);
+  border-radius: 16px;
+  padding: 2rem;
+  background: #fff;
+  box-shadow: 0 4px 18px rgba(19, 48, 112, 0.04);
+}
+
+.reset-password-page .reset-password-header {
+  margin-bottom: 1.5rem;
+}
+
+.reset-password-page .page-title {
+  margin-top: 0.5rem;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #133070;
+}
+
+.reset-password-page .reset-password-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+
+.goto-logon-link[hidden] {
+  display: none !important;
+}
+
+.goto-logon-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1.5px solid #133070;
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem 0.5rem 1rem;
+  background: transparent;
+  color: #133070;
+  text-decoration: none;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.goto-logon-link:hover {
+  background: rgba(19, 48, 112, 0.07);
+}
+
+.goto-logon-icon {
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  min-height: 2rem;
+  border-radius: 999px;
+  border: 1.5px solid #133070;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
 .action-icon {
   width: 2rem !important;
   height: 2rem;
@@ -1371,6 +1442,12 @@ textarea:focus {
 
 .action-save::before {
   content: '\2713';
+}
+
+.action-next::before {
+  content: '\2192';
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .floating-action-bar .action-save.btn.primary {

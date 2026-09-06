@@ -524,7 +524,14 @@ function registerWorkflow2PrivateReservationRoutes(app, deps) {
             passwordSetupUser = await findUserByEmail(emailAddress);
           }
 
-          const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser);
+          const propertyName = String(listing.property_name || '').trim();
+          const listingName = String(listing.name || '').trim();
+          const reservationLocation = [propertyName, listingName].filter(Boolean).join(' ').trim();
+          const setupEmailResult = await sendPasswordResetEmail(req, passwordSetupUser, {
+            reason: reservationLocation
+              ? 'An unconfirmed reservation has been created for you at ' + reservationLocation + '. Please set up your AutomaticPeople password to view the reservation and complete any required steps.'
+              : 'An unconfirmed reservation has been created for you. Please set up your AutomaticPeople password to view the reservation and complete any required steps.'
+          });
           if (!setupEmailResult.ok) {
             emailDeliveryReason = String(setupEmailResult.error || '').trim();
             emailDeliveryWarning = true;

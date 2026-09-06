@@ -20,8 +20,25 @@ function isStrongPassword(password) {
     && /[^A-Za-z0-9]/.test(value);
 }
 
+const gotoLogonLink = document.getElementById('gotoLogonLink');
+
+function hideGotoLogon() {
+  if (gotoLogonLink) {
+    gotoLogonLink.hidden = true;
+  }
+}
+
+function showGotoLogon() {
+  if (gotoLogonLink) {
+    gotoLogonLink.hidden = false;
+  }
+}
+
+hideGotoLogon();
+
 document.getElementById('resetPasswordForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  hideGotoLogon();
 
   const params = new URLSearchParams(window.location.search);
   const token = String(params.get('token') || '').trim();
@@ -65,6 +82,7 @@ document.getElementById('resetPasswordForm').addEventListener('submit', async (e
     setResetMessage('Password reset successful.', false);
     setResetDetail(String(payload.message || 'You can now log in with your new password.'), false);
     document.getElementById('resetPasswordForm').reset();
+    showGotoLogon();
   } catch {
     setResetMessage('Password reset failed.', true);
     setResetDetail('Network error while resetting password. Please try again.', true);

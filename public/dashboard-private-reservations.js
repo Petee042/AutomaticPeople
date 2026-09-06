@@ -45,6 +45,25 @@ function formatPrivateReservationAmount(amount) {
   return Number.isFinite(numeric) ? numeric.toFixed(2) : '-';
 }
 
+function formatPrivateReservationHoldRemaining(holdUntilAt) {
+  const raw = String(holdUntilAt || '').trim();
+  if (!raw) {
+    return '-';
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return '-';
+  }
+
+  const diffMinutes = Math.round((parsed.getTime() - Date.now()) / 60000);
+  const absMinutes = Math.abs(diffMinutes);
+  const hours = Math.floor(absMinutes / 60);
+  const minutes = absMinutes % 60;
+  const sign = diffMinutes < 0 ? '-' : '';
+  return sign + String(hours) + 'h ' + padDisplayNumber(minutes) + 'm';
+}
+
 function createPrivateReservationActionButton(symbol, title, className, onClick) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -144,7 +163,7 @@ async function loadPrivateReservations() {
     return;
   }
 
-  tbody.innerHTML = '<tr><td colspan="8">Loading private reservations...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9">Loading private reservations...</td></tr>';
   setPrivateReservationsMessage('', false);
 
   try {
@@ -154,7 +173,7 @@ async function loadPrivateReservations() {
       return;
     }
     if (res.status === 403) {
-      tbody.innerHTML = '<tr><td colspan="8">Access restricted.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9">Access restricted.</td></tr>';
       return;
     }
 
@@ -165,7 +184,7 @@ async function loadPrivateReservations() {
 
     const reservations = Array.isArray(data.reservations) ? data.reservations : [];
     if (!reservations.length) {
-      tbody.innerHTML = '<tr><td colspan="8">No private reservations found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9">No private reservations found.</td></tr>';
       return;
     }
 
@@ -194,6 +213,9 @@ async function loadPrivateReservations() {
       const amountCell = document.createElement('td');
       amountCell.textContent = formatPrivateReservationAmount(reservation.amount);
 
+      const holdRemainingCell = document.createElement('td');
+      holdRemainingCell.textContent = formatPrivateReservationHoldRemaining(reservation.holdUntilAt);
+
       const paymentStatusCell = document.createElement('td');
       paymentStatusCell.textContent = String(reservation.paymentStatus || '-');
 
@@ -221,12 +243,13 @@ async function loadPrivateReservations() {
       tr.appendChild(arrivalCell);
       tr.appendChild(nightsCell);
       tr.appendChild(amountCell);
+      tr.appendChild(holdRemainingCell);
       tr.appendChild(paymentStatusCell);
       tr.appendChild(actionCell);
       tbody.appendChild(tr);
     });
   } catch (err) {
-    tbody.innerHTML = '<tr><td colspan="8">Failed to load private reservations.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9">Failed to load private reservations.</td></tr>';
     setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
   }
 }

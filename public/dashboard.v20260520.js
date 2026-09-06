@@ -5104,6 +5104,25 @@ function formatPrivateReservationAmount(amount) {
   return Number.isFinite(numeric) ? numeric.toFixed(2) : '—';
 }
 
+function formatReservationHoldRemaining(holdUntilAt) {
+  const raw = String(holdUntilAt || '').trim();
+  if (!raw) {
+    return '—';
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return '—';
+  }
+
+  const diffMinutes = Math.round((parsed.getTime() - Date.now()) / 60000);
+  const absMinutes = Math.abs(diffMinutes);
+  const hours = Math.floor(absMinutes / 60);
+  const minutes = absMinutes % 60;
+  const sign = diffMinutes < 0 ? '-' : '';
+  return sign + String(hours) + 'h ' + String(minutes).padStart(2, '0') + 'm';
+}
+
 function createPrivateReservationActionButton(symbol, title, className, onClick) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -5309,7 +5328,7 @@ async function loadPrivateReservations() {
     return;
   }
 
-  tbody.innerHTML = '<tr><td colspan="8">Loading private reservations...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9">Loading private reservations...</td></tr>';
   setPrivateReservationsMessage('', false);
 
   try {
@@ -5319,7 +5338,7 @@ async function loadPrivateReservations() {
       return;
     }
     if (res.status === 403) {
-      tbody.innerHTML = '<tr><td colspan="8">Access restricted.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9">Access restricted.</td></tr>';
       return;
     }
 
@@ -5330,7 +5349,7 @@ async function loadPrivateReservations() {
 
     const reservations = Array.isArray(data.reservations) ? data.reservations : [];
     if (!reservations.length) {
-      tbody.innerHTML = '<tr><td colspan="8">No private reservations found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9">No private reservations found.</td></tr>';
       return;
     }
 
@@ -5359,6 +5378,9 @@ async function loadPrivateReservations() {
       const amountCell = document.createElement('td');
       amountCell.textContent = formatPrivateReservationAmount(reservation.amount);
 
+      const holdRemainingCell = document.createElement('td');
+      holdRemainingCell.textContent = formatReservationHoldRemaining(reservation.holdUntilAt);
+
       const paymentStatusCell = document.createElement('td');
       paymentStatusCell.textContent = String(reservation.paymentStatus || '—');
 
@@ -5385,12 +5407,13 @@ async function loadPrivateReservations() {
       tr.appendChild(arrivalCell);
       tr.appendChild(nightsCell);
       tr.appendChild(amountCell);
+      tr.appendChild(holdRemainingCell);
       tr.appendChild(paymentStatusCell);
       tr.appendChild(actionCell);
       tbody.appendChild(tr);
     });
   } catch (err) {
-    tbody.innerHTML = '<tr><td colspan="8">Failed to load private reservations.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9">Failed to load private reservations.</td></tr>';
     setPrivateReservationsMessage(err.message || 'Failed to load private reservations.', true);
   }
 }
@@ -5741,7 +5764,7 @@ async function loadGuestReservations() {
     const facilities = Array.isArray(data.facilities) ? data.facilities : [];
 
     if (!accommodation.length) {
-      accommodationBody.innerHTML = '<tr><td colspan="9">No accommodation reservations found.</td></tr>';
+      accommodationBody.innerHTML = '<tr><td colspan="10">No accommodation reservations found.</td></tr>';
     } else {
       accommodationBody.innerHTML = '';
       accommodation.forEach((reservation) => {
@@ -5787,6 +5810,9 @@ async function loadGuestReservations() {
         const amountCell = document.createElement('td');
         amountCell.textContent = formatGuestAmount(reservation.amount);
 
+        const holdRemainingCell = document.createElement('td');
+        holdRemainingCell.textContent = formatReservationHoldRemaining(reservation.holdUntilAt);
+
         const paymentCell = document.createElement('td');
         paymentCell.textContent = reservation.paymentStatus || '—';
 
@@ -5800,6 +5826,7 @@ async function loadGuestReservations() {
         tr.appendChild(departureCell);
         tr.appendChild(nightsCell);
         tr.appendChild(amountCell);
+        tr.appendChild(holdRemainingCell);
         tr.appendChild(paymentCell);
         tr.appendChild(statusCell);
         accommodationBody.appendChild(tr);
@@ -5864,7 +5891,7 @@ async function loadGuestReservations() {
       });
     }
   } catch (err) {
-    accommodationBody.innerHTML = '<tr><td colspan="9">Failed to load accommodation reservations.</td></tr>';
+    accommodationBody.innerHTML = '<tr><td colspan="10">Failed to load accommodation reservations.</td></tr>';
     facilityBody.innerHTML = '<tr><td colspan="7">Failed to load facility reservations.</td></tr>';
     setGuestReservationsMessage(err.message || 'Failed to load guest reservations.', true);
   }
