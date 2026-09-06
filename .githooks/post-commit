@@ -1,9 +1,13 @@
 #!/bin/sh
 
-branch_name="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+branch_name="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 
 if [ -z "$branch_name" ] || [ "$branch_name" = "HEAD" ]; then
   exit 0
 fi
 
-git push origin "$branch_name"
+if [ "$branch_name" = "develop" ]; then
+  git push origin develop
+else
+  git push origin "$branch_name"
+fi

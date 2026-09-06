@@ -4224,7 +4224,7 @@ async function sendPasswordResetEmail(req, user, options = {}) {
     'Enter or reset your password using this link:',
     resetUrl,
     '',
-    'This link expires in 1 hour.',
+    'This link expires in 24 hours.',
     '',
     'If you did not request this reset, you can ignore this email.'
   ].join('\n');
